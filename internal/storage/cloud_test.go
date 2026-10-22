@@ -1025,6 +1025,7 @@ func TestCloudStorageCountLogFiles_NormalizesPathOnlyCloudLogPath(t *testing.T) 
 			},
 		},
 	}
+	cs.hostname = "host" // the log in the listing is this host's
 	cs.execCommand = queue.exec
 
 	if got := cs.countLogFiles(context.Background()); got != 1 {
@@ -1737,5 +1738,86 @@ func TestCloudStorageCheckFallbackWithRemotePath(t *testing.T) {
 	// Should have: lsf (root) + mkdir + lsf (path, fails) + touch + deletefile
 	if len(queue.calls) != 5 {
 		t.Fatalf("expected 5 rclone calls, got %d", len(queue.calls))
+	}
+}
+
+// A cloud destination without a log folder it can count, CLOUD_LOG_PATH empty or
+// a local log folder outside the CLOUD_REMOTE directory, has no count of logs,
+// not a count of zero: the retention summary then carries no logs remaining.
+func TestCloudCountLogFilesWithoutALogFolderIsNoCount(t *testing.T) {
+	remoteDir := t.TempDir()
+	cases := []struct {
+		name string
+		cfg  *config.Config
+	}{
+		{"no CLOUD_LOG_PATH", &config.Config{CloudEnabled: true, CloudRemote: "remote", RcloneRetries: 1}},
+		{"log folder outside CLOUD_REMOTE", &config.Config{CloudEnabled: true, CloudRemote: remoteDir, CloudLogPath: "../logs", RcloneRetries: 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCloudStorageForTest(tc.cfg)
+			queue := &commandQueue{t: t}
+			cs.execCommand = queue.exec
+			if got := cs.countLogFiles(context.Background()); got != -1 {
+				t.Fatalf("countLogFiles() = %d; want -1 (no count)", got)
+			}
+			if len(queue.calls) != 0 {
+				t.Fatalf("no rclone call expected, got %v", queue.calls)
+			}
+		})
+	}
+}
+
+// The cloud log count counts this host's run logs only, like the orphan-log
+// pass: another host's log in a shared folder, or a file outside the
+// backup-<host>-<timestamp>.log form, is not one of this destination's logs.
+func TestCloudCountLogFilesCountsThisHostsRunLogsOnly(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", CloudLogPath: "remote:logs", RcloneRetries: 1}
+	cs := newCloudStorageForTest(cfg)
+	cs.hostname = "node"
+	queue := &commandQueue{
+		t: t,
+		queue: []queuedResponse{{
+			name: "rclone",
+			args: []string{"lsf", "remote:logs", "--files-only"},
+			out: "backup-node-20250101-010101.log\n" +
+				"backup-node-20250102-010101.log\n" +
+				"backup-other-20250101-010101.log\n" +
+				"backup-node-latest.log\n" +
+				"notes.txt\n",
+		}},
+	}
+	cs.execCommand = queue.exec
+	if got := cs.countLogFiles(context.Background()); got != 2 {
+		t.Fatalf("countLogFiles() = %d; want 2", got)
+	}
+}
+
+// A cancellation landing between the loop's context check and the one at the
+// start of deleteBackupInternal stops the pass like the loop's own check: the
+// backup it had not touched is not counted as not deleted, and nothing is run.
+func TestCloudDeleteBatchedStopsOnACancelBeforeTheDelete(t *testing.T) {
+	cfg := &config.Config{CloudEnabled: true, CloudRemote: "remote", RcloneRetries: 1}
+	cs := newCloudStorageForTest(cfg)
+	queue := &commandQueue{t: t}
+	cs.execCommand = queue.exec
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logger, sink := newCharLogger()
+	sink.arm("Deleting old backup:", 1, cancel)
+	cs.logger = logger
+	backups := []*types.BackupMetadata{
+		{BackupFile: "node-backup-20240101-000000.tar.zst", Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{BackupFile: "node-backup-20240102-000000.tar.zst", Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+	}
+	deleted, err := cs.deleteBatched(ctx, backups, 3)
+	if deleted != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("deleteBatched = %d, %v; want 0, context.Canceled", deleted, err)
+	}
+	if cs.retTally.notDeleted != 0 {
+		t.Fatalf("notDeleted = %d; the untouched backup must not be counted", cs.retTally.notDeleted)
+	}
+	if len(queue.calls) != 0 {
+		t.Fatalf("no rclone call expected, got %v", queue.calls)
 	}
 }

@@ -1,0 +1,18 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+INFO     Restoring PBS remotes...
+DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg
+DEBUG    PBS remote restore: backup remotes=1 names=obj1
+INFO       Remotes to restore: 1
+INFO       Names: obj1
+DEBUG    PBS remote restore: api apply failed error="forced API error"
+INFO     The remote configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS remote restore: fallback=file target=/etc/proxmox-backup/remote.cfg source=/stage/etc/proxmox-backup/remote.cfg
+DEBUG    PBS remote restore: fallback current file read failed error="read <fakefs>/etc/proxmox-backup/remote.cfg: is a directory"
+DEBUG    PBS remote restore: fallback current sync jobs=0 remotes_used=
+DEBUG    Start pbs staged apply remote.cfg: stage=/stage
+DEBUG    End pbs staged apply remote.cfg (error=write /etc/proxmox-backup/remote.cfg: rename <fakefs>/etc/proxmox-backup/remote.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/remote.cfg: file exists, duration=<d>)
+DEBUG    PBS remote restore: fallback write failed error="write /etc/proxmox-backup/remote.cfg: rename <fakefs>/etc/proxmox-backup/remote.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/remote.cfg: file exists"
+INFO     The remote configuration could not be written to this PBS: "write /etc/proxmox-backup/remote.cfg: rename <fakefs>/etc/proxmox-backup/remote.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/remote.cfg: file exists"
+WARNING  ⚠ PBS remote configuration: not applied
+DEBUG    End pbs staged apply (error=forced API error; file fallback: write /etc/proxmox-backup/remote.cfg: rename <fakefs>/etc/proxmox-backup/remote.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/remote.cfg: file exists, duration=<d>)
+returned: forced API error; file fallback: write /etc/proxmox-backup/remote.cfg: rename <fakefs>/etc/proxmox-backup/remote.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/remote.cfg: file exists

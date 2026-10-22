@@ -111,8 +111,8 @@ func TestApplyPBSDatastoreCfgFromStage_RecoversFromInventoryWhenFlattened(t *tes
 		t.Fatalf("write inventory: %v", err)
 	}
 
-	if err := applyPBSDatastoreCfgFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgFromStage error: %v", err)
+	if err := runPBSDatastoreCfgFileErr(stageRoot); err != nil {
+		t.Fatalf("runPBSDatastoreCfgFile error: %v", err)
 	}
 
 	out, err := fakeFS.ReadFile("/etc/proxmox-backup/datastore.cfg")

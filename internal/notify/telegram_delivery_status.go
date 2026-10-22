@@ -135,8 +135,8 @@ func fetchDeliveryStatusOnce(ctx context.Context, sb *serverbot.Client, serverID
 		return deliveryStatus{State: "unknown", Err: err}, true // transient -> retry
 	}
 
-	switch resp.Status {
-	case 200:
+	switch {
+	case resp.Status == 200:
 		var body notifyStatusResponse
 		if err := resp.JSON(&body); err != nil {
 			return deliveryStatus{State: "unknown", Err: err}, true
@@ -151,7 +151,7 @@ func fetchDeliveryStatusOnce(ctx context.Context, sb *serverbot.Client, serverID
 			Reason:    body.Reason,
 			Attempts:  body.Attempts,
 		}, false
-	case 404, 401, 403:
+	case resp.Status == 404 || serverbot.AuthRejected(resp.Status):
 		// Old server without the route, row not found, or stale secret: definitive,
 		// do not retry.
 		return deliveryStatus{State: "unknown", Err: fmt.Errorf("status HTTP %d", resp.Status)}, false

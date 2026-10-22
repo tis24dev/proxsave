@@ -140,7 +140,7 @@ on a command line (see **Generated rollback scripts** below).
   to be an exact key in a static, package-level allowlist (76 literal command names
   today). Each entry builds `exec.CommandContext(ctx, "<literal>")` with the binary name
   hard-coded and appends the caller's arguments as argv, with no metacharacter
-  interpretation. `CombinedOutput` and `Output` wrap the same gate.
+  interpretation.
 - **Name validation.** Before the allowlist lookup, a name that is empty, has leading or
   trailing whitespace, or contains a path separator (`/` or `\`) is rejected with
   `command not allowed` (`ErrCommandNotAllowed`). A name not in the allowlist is rejected
@@ -216,7 +216,7 @@ ever widening.
 
 **Permissions and ownership.** Sensitive files are enforced at `0600` (the config file,
 `identity/.server_identity`, the AGE recipient file, every `secure_account/*.json`, and
-the PBS token files read as credentials when they exist: `secure_account/pbs_token`,
+the PBS token files when they exist: `secure_account/pbs_token`,
 `secure_account/pbs_api_token` and `/root/.pbs-token`),
 directories at `0700`/`0755`, all owned `root:root`. The exception is `BACKUP_PATH`,
 `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH`: their owner **and** mode checks are
@@ -428,8 +428,8 @@ CI runs gosec (`.github/workflows/security-ultimate.yml`). Three rules deserve a
 - **G101** ("potential hardcoded credentials"): **kept enabled**. With one intentional
   exception (below), every current finding is a **name-only false positive**: a constant
   whose name matches `token`/`secret`/`salt` but whose value is a file path
-  (`/etc/pve/priv/token.cfg`), a KDF domain-separation salt (public by construction), a
-  token *name* (`backup@pbs!go-client`, not its secret), or an enum id
+  (`/etc/pve/priv/token.cfg`), a KDF domain-separation salt (public by construction),
+  or an enum id
   (`pbs_runtime_access_user_tokens`). These are dismissed as false positives rather than
   renamed, since the names are correct as written.
 

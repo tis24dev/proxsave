@@ -1,0 +1,16 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+DEBUG    PBS ACME accounts restore: staged=/stage/etc/proxmox-backup/acme/accounts not in the backup action=skip
+DEBUG    PBS ACME plugin restore: staged=/stage/etc/proxmox-backup/acme/plugins.cfg not in the backup action=skip
+DEBUG    PBS metric server restore: staged=/stage/etc/proxmox-backup/metricserver.cfg not in the backup action=skip
+DEBUG    PBS proxy restore: staged=/stage/etc/proxmox-backup/proxy.cfg not in the backup action=skip
+INFO     Restoring PBS traffic control rules...
+DEBUG    PBS traffic control rule restore: mode=merge staged=/stage/etc/proxmox-backup/traffic-control.cfg
+DEBUG    PBS traffic control rule restore: backup traffic-control-rules=1 names=obj1
+INFO       Traffic control rules to restore: 1
+INFO       Names: obj1
+DEBUG    PBS traffic control rule restore: api apply failed error="forced API error"
+INFO     The traffic control configuration could not be applied through the PBS API: "forced API error"
+WARNING  ⚠ PBS traffic control configuration: not applied
+DEBUG    PBS node restore: staged=/stage/etc/proxmox-backup/node.cfg not in the backup action=skip
+DEBUG    End pbs staged apply (error=forced API error, duration=<d>)
+returned: forced API error

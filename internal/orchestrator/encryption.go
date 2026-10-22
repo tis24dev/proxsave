@@ -90,27 +90,6 @@ func (o *Orchestrator) collectRecipientStrings() ([]string, string, error) {
 	return dedupeRecipientStrings(recipients), candidatePath, nil
 }
 
-// runAgeSetupWizard collects AGE recipients interactively.
-// Returns (fileRecipients, savedPath, error)
-func (o *Orchestrator) runAgeSetupWizard(ctx context.Context, candidatePath string) ([]string, string, error) {
-	if o == nil {
-		return nil, "", fmt.Errorf("orchestrator is required")
-	}
-
-	wizardCtx, wizardCancel := context.WithCancel(ctx)
-	defer wizardCancel()
-
-	recipients, result, err := o.runAgeSetupWorkflow(wizardCtx, candidatePath, newCLIAgeSetupUI(bufio.NewReader(os.Stdin), o.logger))
-	if err != nil {
-		return nil, "", err
-	}
-	savedPath := ""
-	if result != nil {
-		savedPath = result.RecipientPath
-	}
-	return recipients, savedPath, nil
-}
-
 func (o *Orchestrator) defaultAgeRecipientFile() string {
 	if o.cfg == nil || o.cfg.BaseDir == "" {
 		return ""
@@ -153,16 +132,6 @@ func promptPublicRecipientAge(ctx context.Context, reader *bufio.Reader) (string
 	return value, nil
 }
 
-func promptPrivateKeyRecipientAge(ctx context.Context) (string, error) {
-	secret, err := promptPrivateKeyValueAge(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer resetString(&secret)
-
-	return ParseAgePrivateKeyRecipient(secret)
-}
-
 func promptPrivateKeyValueAge(ctx context.Context) (string, error) {
 	fmt.Print("Paste your AGE private key (not stored; input is not echoed). Press Enter when done: ")
 	secretBytes, err := input.ReadPasswordWithIdle(ctx, readPassword, int(os.Stdin.Fd()), cliIdleTimeout)
@@ -181,21 +150,6 @@ func promptPrivateKeyValueAge(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return secret, nil
-}
-
-// promptPassphraseRecipient derives a deterministic AGE public key from a passphrase
-func promptPassphraseRecipientAge(ctx context.Context) (string, error) {
-	pass, err := promptAndConfirmPassphraseAge(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer resetString(&pass)
-
-	recipient, err := deriveDeterministicRecipientFromPassphrase(pass)
-	if err != nil {
-		return "", err
-	}
-	return recipient, nil
 }
 
 // promptAndConfirmPassphrase asks the user to enter a passphrase twice and checks strength.
@@ -336,10 +290,6 @@ func readRecipientFile(path string) (recipients []string, err error) {
 	return recipients, nil
 }
 
-func writeRecipientFile(path string, recipients []string) error {
-	return writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, recipients)
-}
-
 func writeRecipientFileWithDeps(fs FS, tp TimeProvider, path string, recipients []string) error {
 	if fs == nil {
 		fs = osFS{}
@@ -373,11 +323,6 @@ func mapInputAbortToAgeAbort(err error) error {
 	if errors.Is(err, input.ErrInputAborted) || errors.Is(err, context.Canceled) {
 		return ErrAgeRecipientSetupAborted
 	}
-	return err
-}
-
-func backupExistingRecipientFile(path string) error {
-	_, err := backupExistingRecipientFileWithDeps(osFS{}, realTimeProvider{}, path)
 	return err
 }
 
@@ -522,12 +467,6 @@ func recipientTime(tp TimeProvider) time.Time {
 	return time.Now()
 }
 
-// BackupAgeRecipientFile backs up an existing AGE recipient file (if present)
-// without removing the active file.
-func BackupAgeRecipientFile(path string) error {
-	return backupExistingRecipientFile(path)
-}
-
 // ValidatePassphraseStrength validates passphrase strength rules used by AGE setup.
 func ValidatePassphraseStrength(passphrase string) error {
 	return validatePassphraseStrength([]byte(passphrase))
@@ -562,25 +501,6 @@ func ParseAgePrivateKeyRecipient(value string) (string, error) {
 	return identity.Recipient().String(), nil
 }
 
-// DedupeRecipientStrings removes empty values and duplicates from recipient strings.
-func DedupeRecipientStrings(values []string) []string {
-	return dedupeRecipientStrings(values)
-}
-
-// WriteRecipientFile persists recipients to disk using the standard format.
-func WriteRecipientFile(path string, recipients []string) error {
-	return writeRecipientFile(path, dedupeRecipientStrings(recipients))
-}
-
-// DeriveDeterministicRecipientFromPassphrase derives an AGE recipient from a passphrase (exported for TUI wizard)
-func DeriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
-	return deriveDeterministicRecipientFromPassphrase(passphrase)
-}
-
-func deriveDeterministicRecipientFromPassphrase(passphrase string) (string, error) {
-	return deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, recipientSaltV1)
-}
-
 func deriveDeterministicRecipientFromPassphraseWithSalt(passphrase, salt string) (string, error) {
 	key, err := deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt)
 	if err != nil {
@@ -606,10 +526,6 @@ func clampCurve25519Scalar(k []byte) {
 	k[31] |= 64
 }
 
-func deriveCurve25519ScalarFromPassphrase(passphrase string) ([]byte, error) {
-	return deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, recipientSaltV1)
-}
-
 func deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt string) ([]byte, error) {
 	key, err := scrypt.Key([]byte(passphrase), []byte(salt), passphraseScryptN, passphraseScryptR, passphraseScryptP, curve25519.ScalarSize)
 	if err != nil {
@@ -617,10 +533,6 @@ func deriveCurve25519ScalarFromPassphraseWithSalt(passphrase, salt string) ([]by
 	}
 	clampCurve25519Scalar(key)
 	return key, nil
-}
-
-func deriveDeterministicIdentityFromPassphrase(passphrase string) (age.Identity, error) {
-	return deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, recipientSaltV1)
 }
 
 func deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt string) (age.Identity, error) {
@@ -634,10 +546,6 @@ func deriveDeterministicIdentityFromPassphraseWithSalt(passphrase, salt string) 
 	}
 	secret = strings.ToUpper(secret)
 	return age.ParseX25519Identity(secret)
-}
-
-func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Identity, error) {
-	return deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(passphrase, nil)
 }
 
 // deriveDeterministicIdentitiesFromPassphraseWithExtraSalts derives one identity

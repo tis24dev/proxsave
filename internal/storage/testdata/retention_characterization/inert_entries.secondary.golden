@@ -1,0 +1,14 @@
+--- applySimpleRetention max=1 ---
+DEBUG    Secondary Storage: retention - ignored <ROOT>/backups/pve-backup-20240610-120000.tar.zst (no reliable timestamp)
+INFO       Skipped, no reliable date: pve-backup-20240610-120000.tar.zst
+DEBUG    Secondary Storage: retention - ignored <ROOT>/backups/pve-backup-20240601-120000.tar.zst (no manifest/checksum)
+INFO       Skipped, no manifest: pve-backup-20240601-120000.tar.zst
+DEBUG    Secondary storage: 1 backups (within retention limit of 1)
+--- applyGFSRetention daily=1 weekly=0 monthly=0 yearly=1 ---
+DEBUG    Secondary Storage: retention - ignored <ROOT>/backups/pve-backup-20240610-120000.tar.zst (no reliable timestamp)
+INFO       Skipped, no reliable date: pve-backup-20240610-120000.tar.zst
+DEBUG    Secondary Storage: retention - ignored <ROOT>/backups/pve-backup-20240601-120000.tar.zst (no manifest/checksum)
+INFO       Skipped, no manifest: pve-backup-20240601-120000.tar.zst
+DEBUG    Applying GFS retention policy (daily=1, weekly=0, monthly=0, yearly=1)
+DEBUG    GFS classification -> daily: 1/1, weekly: 0/0, monthly: 0/0, yearly: 0/1, kept: 1, to_delete: 0
+DEBUG    Secondary storage retention applied: deleted 0 backups (logs deleted: 0), 1 backups remaining (0 logs remaining)

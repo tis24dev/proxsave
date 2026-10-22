@@ -509,9 +509,6 @@ func TestPVEGuestVMJobReplicationAndScheduleErrorBranches(t *testing.T) {
 		if err := collector.collectPVELXCConfigs(context.Background()); err == nil {
 			t.Fatal("expected lxc config copy error")
 		}
-		if err := collector.collectVMConfigs(context.Background()); err == nil {
-			t.Fatal("expected collectVMConfigs to return lxc copy error")
-		}
 	})
 
 	t.Run("job replication and schedule write failures", func(t *testing.T) {
@@ -765,9 +762,6 @@ func TestPVEStorageScanMetadataAndSummaryEdges(t *testing.T) {
 	}
 	if err := collector.writeDatastoreMetadataText(scratchUnderRoot(t, collector), pveStorageEntry{Name: "local", Path: storageDir}, []string{""}, nil, "ok", nil, []string{"sample"}, nil); err != nil {
 		t.Fatalf("writeDatastoreMetadataText empty rel sample: %v", err)
-	}
-	if got := relativeDepth("/tmp/base", "/tmp/base/."); got != 0 {
-		t.Fatalf("relativeDepth dot path = %d", got)
 	}
 }
 

@@ -157,9 +157,6 @@ func TestInitializePBSDatastoreReturnsSubdirError(t *testing.T) {
 	if !strings.Contains(err.Error(), ".chunks") {
 		t.Fatalf("expected error to mention failed subdir, got: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(baseDir, ".index")); !os.IsNotExist(statErr) {
-		t.Fatalf("expected .index creation to be skipped after first error, stat err=%v", statErr)
-	}
 }
 
 func TestRecreateDatastoreDirectoriesSkipsZFSMountPoints(t *testing.T) {

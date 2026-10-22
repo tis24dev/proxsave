@@ -147,8 +147,8 @@ func TestResetInstallBaseDirPreservesCoreDirectories(t *testing.T) {
 	}
 
 	logger := logging.NewBootstrapLogger()
-	if err := resetInstallBaseDir(base, logger); err != nil {
-		t.Fatalf("resetInstallBaseDir returned error: %v", err)
+	if err := resetInstallBaseDirWithContext(context.Background(), base, logger); err != nil {
+		t.Fatalf("resetInstallBaseDirWithContext returned error: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(base, "delete.txt")); !os.IsNotExist(err) {
@@ -194,8 +194,8 @@ func TestResetInstallBaseDirRespectsSharedPreserveSet(t *testing.T) {
 	}
 
 	logger := logging.NewBootstrapLogger()
-	if err := resetInstallBaseDir(base, logger); err != nil {
-		t.Fatalf("resetInstallBaseDir returned error: %v", err)
+	if err := resetInstallBaseDirWithContext(context.Background(), base, logger); err != nil {
+		t.Fatalf("resetInstallBaseDirWithContext returned error: %v", err)
 	}
 
 	for _, entry := range newInstallPreservedEntries() {
@@ -225,8 +225,8 @@ func TestResetInstallBaseDirAllowsNilBootstrap(t *testing.T) {
 	}
 
 	captureStdout(t, func() {
-		if err := resetInstallBaseDir(base, nil); err != nil {
-			t.Fatalf("resetInstallBaseDir returned error: %v", err)
+		if err := resetInstallBaseDirWithContext(context.Background(), base, nil); err != nil {
+			t.Fatalf("resetInstallBaseDirWithContext returned error: %v", err)
 		}
 	})
 
@@ -240,7 +240,7 @@ func TestResetInstallBaseDirAllowsNilBootstrap(t *testing.T) {
 
 func TestResetInstallBaseDirRefusesRoot(t *testing.T) {
 	logger := logging.NewBootstrapLogger()
-	if err := resetInstallBaseDir("/", logger); err == nil {
+	if err := resetInstallBaseDirWithContext(context.Background(), "/", logger); err == nil {
 		t.Fatal("expected error when trying to reset root directory")
 	}
 }

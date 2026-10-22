@@ -53,6 +53,12 @@ func TestOwnerFromManifestBytes(t *testing.T) {
 			wantServerID: "",
 		},
 		{
+			name:         "a KEY=VALUE sidecar that names no host",
+			data:         "COMPRESSION_TYPE=gzip\nPROXMOX_TYPE=pve\n",
+			wantHostname: "",
+			wantServerID: "",
+		},
+		{
 			name:         "JSON wins whenever it parses, exactly as it always has",
 			data:         `{"hostname":"from-json","script_version":"HOSTNAME=from-legacy"}`,
 			wantHostname: "from-json",
@@ -89,12 +95,6 @@ func TestOwnerFromManifestBytes(t *testing.T) {
 			}
 			if id != tt.wantServerID {
 				t.Errorf("server id = %q, want %q", id, tt.wantServerID)
-			}
-			// The older helper is now a wrapper, so the two can never disagree about
-			// who wrote an archive. Asserted on every row rather than once, because a
-			// wrapper that quietly stopped delegating is the failure being excluded.
-			if got := HostnameFromManifestBytes([]byte(tt.data)); got != tt.wantHostname {
-				t.Errorf("HostnameFromManifestBytes = %q, want %q; the two readers must agree on every payload", got, tt.wantHostname)
 			}
 		})
 	}

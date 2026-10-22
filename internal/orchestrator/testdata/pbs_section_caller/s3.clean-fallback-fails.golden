@@ -1,0 +1,17 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+INFO     Restoring PBS S3 endpoints...
+DEBUG    PBS S3 endpoint restore: mode=clean staged=/stage/etc/proxmox-backup/s3.cfg
+DEBUG    PBS S3 endpoint restore: backup s3-endpoints=1 names=obj1
+INFO       S3 endpoints to restore: 1
+INFO       Names: obj1
+DEBUG    PBS S3 endpoint restore: api apply failed error="forced API error"
+INFO     The S3 endpoint configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS S3 endpoint restore: fallback=file target=/etc/proxmox-backup/s3.cfg source=/stage/etc/proxmox-backup/s3.cfg
+DEBUG    PBS S3 endpoint restore: fallback current file read failed error="read <fakefs>/etc/proxmox-backup/s3.cfg: is a directory"
+DEBUG    Start pbs staged apply s3.cfg: stage=/stage
+DEBUG    End pbs staged apply s3.cfg (error=write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists, duration=<d>)
+DEBUG    PBS S3 endpoint restore: fallback write failed error="write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists"
+INFO     The S3 endpoint configuration could not be written to this PBS: "write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists"
+WARNING  ⚠ PBS S3 endpoint configuration: not applied
+DEBUG    End pbs staged apply (error=forced API error; file fallback: write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists, duration=<d>)
+returned: forced API error; file fallback: write /etc/proxmox-backup/s3.cfg: rename <fakefs>/etc/proxmox-backup/s3.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/s3.cfg: file exists

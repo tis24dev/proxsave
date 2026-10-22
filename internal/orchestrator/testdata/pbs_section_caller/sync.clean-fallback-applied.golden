@@ -1,0 +1,15 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+INFO     Restoring PBS sync jobs...
+DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
+DEBUG    PBS sync job restore: backup sync-jobs=1 names=obj1
+INFO       Sync jobs to restore: 1
+INFO       Names: obj1
+DEBUG    PBS sync job restore: api apply failed error="forced API error"
+INFO     The sync job configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS sync job restore: fallback=file target=/etc/proxmox-backup/sync.cfg source=/stage/etc/proxmox-backup/sync.cfg
+DEBUG    PBS sync job restore: fallback current file sync-jobs=0 names=
+DEBUG    pbs staged apply file: Applied etc/proxmox-backup/sync.cfg -> /etc/proxmox-backup/sync.cfg
+DEBUG    PBS sync job restore: fallback written
+WARNING  ⚠ PBS sync job configuration: applied from the backup file
+DEBUG    End pbs staged apply (error=forced API error, duration=<d>)
+returned: forced API error

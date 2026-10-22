@@ -643,9 +643,10 @@ func TestSecondaryStorage_ApplyRetention_SimpleCoversDisabledAndWithinLimitBranc
 func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	backupDir := t.TempDir()
-	badLogDir := filepath.Join(t.TempDir(), "[invalid")
-	if err := os.MkdirAll(badLogDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	// A file where the log folder should be: the folder cannot be read.
+	badLogDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badLogDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	cfg := &config.Config{
@@ -688,9 +689,10 @@ func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testi
 func TestSecondaryStorage_ApplyRetention_GFS_SetsNoLogInfoWhenLogCountFails(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	backupDir := t.TempDir()
-	badLogDir := filepath.Join(t.TempDir(), "[invalid")
-	if err := os.MkdirAll(badLogDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	// A file where the log folder should be: the folder cannot be read.
+	badLogDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(badLogDir, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 
 	cfg := &config.Config{

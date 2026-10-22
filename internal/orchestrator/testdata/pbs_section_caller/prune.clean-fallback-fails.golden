@@ -1,0 +1,15 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+INFO     Restoring PBS prune jobs...
+DEBUG    PBS prune job restore: mode=clean staged=/stage/etc/proxmox-backup/prune.cfg
+DEBUG    PBS prune job restore: backup prune-jobs=1 names=obj1
+INFO       Prune jobs to restore: 1
+INFO       Names: obj1
+DEBUG    PBS prune job restore: api apply failed error="forced API error"
+INFO     The prune job configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS prune job restore: fallback=file target=/etc/proxmox-backup/prune.cfg source=/stage/etc/proxmox-backup/prune.cfg
+DEBUG    PBS prune job restore: fallback current file read failed error="read <fakefs>/etc/proxmox-backup/prune.cfg: is a directory"
+DEBUG    PBS prune job restore: fallback write failed error="write /etc/proxmox-backup/prune.cfg: rename <fakefs>/etc/proxmox-backup/prune.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/prune.cfg: file exists"
+INFO     The prune job configuration could not be written to this PBS: "write /etc/proxmox-backup/prune.cfg: rename <fakefs>/etc/proxmox-backup/prune.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/prune.cfg: file exists"
+WARNING  ⚠ PBS prune job configuration: not applied
+DEBUG    End pbs staged apply (error=forced API error; file fallback: write /etc/proxmox-backup/prune.cfg: rename <fakefs>/etc/proxmox-backup/prune.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/prune.cfg: file exists, duration=<d>)
+returned: forced API error; file fallback: write /etc/proxmox-backup/prune.cfg: rename <fakefs>/etc/proxmox-backup/prune.cfg.proxsave.tmp.<n> <fakefs>/etc/proxmox-backup/prune.cfg: file exists

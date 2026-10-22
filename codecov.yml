@@ -245,10 +245,6 @@ ignore:
 # deadline pressure does not re-derive it and reach the opposite conclusion.
 # (No line numbers on purpose — they rot; the reasoning does not.)
 #
-# internal/ui/theme            0%, but StatusColor and StatusSymbol are pure
-#   switch statements over a string. A ~20-line table test takes the package to
-#   100%. 0% here means "nobody wrote the test", not "untestable".
-#
 # internal/closeerr            0%, but CloseIntoErr is real production code
 #   called from internal/orchestrator and internal/backup. It reads 0% only
 #   because CI runs without -coverpkg and the package has no _test.go of its own.

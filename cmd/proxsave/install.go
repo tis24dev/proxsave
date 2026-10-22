@@ -827,10 +827,6 @@ func detectTelegramCodeWithContext(ctx context.Context, baseDir string) string {
 	return code
 }
 
-func resetInstallBaseDir(baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
-	return resetInstallBaseDirWithContext(context.Background(), baseDir, bootstrap)
-}
-
 func resetInstallBaseDirWithContext(ctx context.Context, baseDir string, bootstrap *logging.BootstrapLogger) (err error) {
 	if ctx == nil {
 		ctx = context.Background()

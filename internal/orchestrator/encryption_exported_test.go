@@ -57,33 +57,31 @@ func TestValidateRecipientStringExported(t *testing.T) {
 	}
 }
 
-func TestDedupeRecipientStringsExported(t *testing.T) {
-	got := DedupeRecipientStrings([]string{"  age1alpha  ", "", "age1alpha", "ssh-ed25519 AAA", "ssh-ed25519 AAA"})
-	want := []string{"age1alpha", "ssh-ed25519 AAA"}
-	if len(got) != len(want) {
-		t.Fatalf("got=%v; want=%v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got[%d]=%q; want %q", i, got[i], want[i])
-		}
+func TestWriteRecipientFileWithDeps_NoRecipientsFails(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "recipient.txt")
+
+	if err := writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, nil); err == nil {
+		t.Fatalf("expected error")
 	}
 }
 
-func TestWriteRecipientFileExported(t *testing.T) {
+// The recipient file is written owner-only (0600) under a directory it creates, one
+// recipient per line.
+func TestWriteRecipientFileWithDeps_WritesOwnerOnlyFile(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "identity", "age", "recipient.txt")
 
-	if err := WriteRecipientFile(path, []string{"  age1alpha  ", "", "age1alpha", "ssh-ed25519 AAA"}); err != nil {
-		t.Fatalf("WriteRecipientFile error: %v", err)
+	if err := writeRecipientFileWithDeps(osFS{}, realTimeProvider{}, path, []string{"age1alpha", "ssh-ed25519 AAA"}); err != nil {
+		t.Fatalf("writeRecipientFileWithDeps error: %v", err)
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if got := string(content); got != "age1alpha\nssh-ed25519 AAA\n" {
-		t.Fatalf("content=%q; want %q", got, "age1alpha\nssh-ed25519 AAA\n")
+	if got, want := string(content), "age1alpha\nssh-ed25519 AAA\n"; got != want {
+		t.Fatalf("content=%q; want %q", got, want)
 	}
 
 	info, err := os.Stat(path)
@@ -92,51 +90,6 @@ func TestWriteRecipientFileExported(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("perm=%#o; want %#o", perm, 0o600)
-	}
-}
-
-func TestWriteRecipientFileExported_NoRecipientsFails(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "recipient.txt")
-
-	if err := WriteRecipientFile(path, []string{"", "   "}); err == nil {
-		t.Fatalf("expected error")
-	}
-}
-
-func TestBackupAgeRecipientFileExported(t *testing.T) {
-	tmp := t.TempDir()
-	path := filepath.Join(tmp, "recipient.txt")
-	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-
-	if err := BackupAgeRecipientFile(path); err != nil {
-		t.Fatalf("BackupAgeRecipientFile error: %v", err)
-	}
-	matches, err := filepath.Glob(path + ".bak-*")
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("expected backup file, got %v err=%v", matches, err)
-	}
-	original, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", path, err)
-	}
-	if got := string(original); got != "old" {
-		t.Fatalf("original content=%q; want %q", got, "old")
-	}
-	backup, err := os.ReadFile(matches[0])
-	if err != nil {
-		t.Fatalf("ReadFile(%s): %v", matches[0], err)
-	}
-	if got := string(backup); got != "old" {
-		t.Fatalf("backup content=%q; want %q", got, "old")
-	}
-}
-
-func TestBackupAgeRecipientFileExported_EmptyPathNoop(t *testing.T) {
-	if err := BackupAgeRecipientFile(""); err != nil {
-		t.Fatalf("expected nil, got %v", err)
 	}
 }
 

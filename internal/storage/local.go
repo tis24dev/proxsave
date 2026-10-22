@@ -2,9 +2,7 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -422,121 +420,26 @@ func (l *LocalStorage) Delete(ctx context.Context, backupFile string) (err error
 }
 
 func (l *LocalStorage) deleteBackupInternal(ctx context.Context, backupFile string) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	l.logger.Debug("Local storage: deleting backup %s", filepath.Base(backupFile))
-
-	basePath, _ := trimBundleSuffix(backupFile)
-	// Always include the bundle path so an orphan .bundle.tar (created while
-	// bundling was enabled, then disabled) is cleaned up. Remove of an absent
-	// bundle is a no-op, so this is behavior-preserving when no bundle exists.
-	filesToDelete := buildBackupCandidatePaths(basePath, true)
-
-	// Delete all files; collect real removal failures (not "already gone") and
-	// track whether the data archive itself (not just a sidecar) failed, so the
-	// caller never counts a backup whose archive remains on disk as deleted
-	// (PS-BH-001), while a sidecar-only failure still counts (the archive IS gone).
-	timeout := fsIoTimeout(l.config)
-	var failedFiles []string
-	dataFailed := false
-	for _, f := range filesToDelete {
-		if f == "" {
-			continue
-		}
-		l.logger.Debug("Local storage: removing file %s", f)
-		if err := safefs.Remove(ctx, f, timeout); err != nil {
-			if os.IsNotExist(err) {
-				l.logger.Debug("Local storage: file already removed %s", f)
-				continue
-			}
-			l.logger.Debug("Local Storage: retention - failed to remove %s: %v", f, err)
-			logDeleteFailure(l.logger, f, safefs.SystemErrorText(err))
-			failedFiles = append(failedFiles, f)
-			if !isBackupSidecar(f) {
-				dataFailed = true
-			}
-		}
-	}
-
-	// Best-effort: delete the associated log, but only once the backup's data file is
-	// gone. A backup that could not be deleted keeps its log.
-	logDeleted := false
-	if !dataFailed {
-		logDeleted = l.deleteAssociatedLog(ctx, backupFile)
-	} else {
-		l.logger.Debug("Local storage: keeping the log of %s, the backup was not deleted", filepath.Base(backupFile))
-	}
-
-	if len(failedFiles) > 0 {
-		if !dataFailed {
-			return logDeleted, fmt.Errorf("%w: %v", errBackupSidecarDeleteOnly, failedFiles)
-		}
-		return logDeleted, fmt.Errorf("failed to remove %d file(s): %v", len(failedFiles), failedFiles)
-	}
-
-	l.logger.Debug("Local storage: deleted backup and associated files: %s", filepath.Base(backupFile))
-	return logDeleted, nil
+	return l.retention().deleteBackup(ctx, backupFile)
 }
 
-// deleteAssociatedLog attempts to remove the local log file corresponding to a backup.
-// It is best-effort and never returns an error to the caller.
-func (l *LocalStorage) deleteAssociatedLog(ctx context.Context, backupFile string) bool {
-	if l == nil || l.config == nil {
-		return false
+// retention is this destination as the retention code it shares with the other
+// folder-backed destination sees it (retention_fs.go): LOG_PATH is its log folder.
+func (l *LocalStorage) retention() fsRetention {
+	ret := fsRetention{
+		logger:   l.logger,
+		config:   l.config,
+		basePath: l.basePath,
+		hostname: l.hostname,
+		aliases:  l.hostAliases,
+		tally:    &l.retTally,
+		lastRet:  &l.lastRet,
+		text:     localRetentionText,
 	}
-	logPath := strings.TrimSpace(l.config.LogPath)
-	if logPath == "" {
-		return false
+	if l.config != nil {
+		ret.logPath = l.config.LogPath
 	}
-
-	host, ts, ok := extractLogKeyFromBackup(backupFile)
-	if !ok {
-		return false
-	}
-
-	logName := fmt.Sprintf("backup-%s-%s.log", host, ts)
-	fullPath := filepath.Join(logPath, logName)
-	if keptOpenLog(ctx, l.logger, "Local logs", logPath, logName, fsIoTimeout(l.config)) {
-		return false
-	}
-
-	// Bounded against a dead/stale mount: on a cancelled/expired ctx safefs
-	// returns immediately without running the remove (best-effort cleanup).
-	if err := safefs.Remove(ctx, fullPath, fsIoTimeout(l.config)); err != nil {
-		if os.IsNotExist(err) {
-			l.logger.Debug("Local logs: log not found %s", logName)
-			return false
-		}
-		l.logger.Debug("Local logs: failed to delete %s: %v", logName, err)
-		l.logger.Info("  Log not deleted: %s: %s", logName, safefs.SystemErrorText(err))
-		l.retTally.logsNotDeleted++
-		return false
-	}
-
-	l.logger.Debug("Local logs: deleted log file %s", logName)
-	return true
-}
-
-func (l *LocalStorage) countLogFiles(ctx context.Context) int {
-	if l == nil || l.config == nil {
-		return -1
-	}
-	logPath := strings.TrimSpace(l.config.LogPath)
-	if logPath == "" {
-		return 0
-	}
-	pattern := filepath.Join(logPath, "backup-*.log")
-	// Bounded against a dead/stale mount, consistent with the main backup glob.
-	matches, err := safefs.Run(ctx, "local-log-glob", l.basePath, fsIoTimeout(l.config), func() ([]string, error) {
-		return filepath.Glob(pattern)
-	})
-	if err != nil {
-		l.logger.Debug("Local logs: failed to count log files: %v", err)
-		return -1
-	}
-	return len(matches)
+	return ret
 }
 
 // ApplyRetention removes old backups according to retention policy
@@ -654,209 +557,17 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on LOG_PATH once the
 // archives are rotated, and folds what it did into this pass's summary.
 func (l *LocalStorage) pruneOrphanLogs(ctx context.Context, backups []*types.BackupMetadata) error {
-	logPath := strings.TrimSpace(l.config.LogPath)
-	if logPath == "" {
-		return nil
-	}
-	l.retTally.hasLogPath = true
-	timeout := fsIoTimeout(l.config)
-	res := pruneOrphanLogs(ctx, l.logger, orphanLogTarget{
-		own: ownLogIn(l.logger, logPath),
-		heldOpen: func(ctx context.Context) (map[string]bool, error) {
-			return safefs.HeldOpenIn(ctx, logPath, timeout)
-		},
-		op:       "local orphan logs",
-		where:    logPath,
-		hostname: l.hostname,
-		aliases:  l.hostAliases,
-		list: func(ctx context.Context) ([]string, error) {
-			return listLogFolder(ctx, "local-log-list", logPath, timeout)
-		},
-		remove: func(ctx context.Context, name string) error {
-			return safefs.Remove(ctx, filepath.Join(logPath, name), timeout)
-		},
-	}, backups, l.retTally.removed)
-	mergeOrphanLogs(&l.lastRet, &l.retTally, res)
-	return res.stopped
+	return l.retention().pruneOrphanLogs(ctx, backups)
 }
 
 // applyGFSRetention applies GFS (Grandfather-Father-Son) retention policy
 func (l *LocalStorage) applyGFSRetention(ctx context.Context, backups []*types.BackupMetadata, config RetentionConfig) (int, error) {
-	eligible, inert := partitionRetentionEligible(backups)
-	l.retTally.skipped = logRetentionSkipped(l.logger, "Local Storage", inert)
-	backups = eligible
-
-	config = EffectiveGFSRetentionConfig(config)
-	l.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
-		config.Daily, config.Weekly, config.Monthly, config.Yearly)
-
-	initialLogs := l.countLogFiles(ctx)
-	logsDeleted := 0
-
-	// Classify backups according to GFS scheme
-	classification := ClassifyBackupsGFS(backups, config)
-
-	// Get statistics
-	stats := GetRetentionStats(classification)
-	kept := len(backups) - stats[CategoryDelete]
-	l.logger.Debug("GFS classification -> daily: %d/%d, weekly: %d/%d, monthly: %d/%d, yearly: %d/%d, kept: %d, to_delete: %d",
-		stats[CategoryDaily], config.Daily,
-		stats[CategoryWeekly], config.Weekly,
-		stats[CategoryMonthly], config.Monthly,
-		stats[CategoryYearly], config.Yearly,
-		kept,
-		stats[CategoryDelete])
-	l.retTally.planned = stats[CategoryDelete]
-
-	// Delete backups marked for deletion
-	deleted := 0
-	for backup, category := range classification {
-		if category != CategoryDelete {
-			continue
-		}
-
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-
-		l.logger.Debug("Deleting old backup: %s (created: %s)",
-			filepath.Base(backup.BackupFile),
-			backup.Timestamp.Format("2006-01-02 15:04:05"))
-
-		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
-		if err != nil {
-			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				l.logger.Debug("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
-				l.retTally.notDeleted++
-				continue
-			}
-			// Archive removed, only sidecar(s) failed: count as deleted; the fact
-			// line naming the leftover was printed by deleteBackupInternal.
-			l.logger.Debug("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
-			l.retTally.leftBehind++
-		}
-
-		deleted++
-		l.retTally.removed = append(l.retTally.removed, backup.BackupFile)
-		if logDeleted {
-			logsDeleted++
-		}
-	}
-
-	remaining := len(backups) - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
-		l.logger.Debug("Local storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",
-			deleted, logsDeleted, remaining, logsRemaining)
-		l.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			LogsRemaining:    logsRemaining,
-			HasLogInfo:       true,
-		}
-	} else {
-		l.logger.Debug("Local storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining",
-			deleted, logsDeleted, remaining)
-		l.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			HasLogInfo:       false,
-		}
-	}
-
-	return deleted, nil
+	return l.retention().applyGFS(ctx, backups, config)
 }
 
 // applySimpleRetention applies simple count-based retention policy
 func (l *LocalStorage) applySimpleRetention(ctx context.Context, backups []*types.BackupMetadata, maxBackups int) (int, error) {
-	if maxBackups <= 0 {
-		l.logger.Debug("Retention disabled for local storage (maxBackups = %d)", maxBackups)
-		return 0, nil
-	}
-
-	eligible, inert := partitionRetentionEligible(backups)
-	l.retTally.skipped = logRetentionSkipped(l.logger, "Local Storage", inert)
-	backups = eligible
-
-	totalBackups := len(backups)
-	if totalBackups <= maxBackups {
-		l.logger.Debug("Local storage: %d backups (within retention limit of %d)", totalBackups, maxBackups)
-		return 0, nil
-	}
-
-	// Calculate how many to delete
-	toDelete := totalBackups - maxBackups
-	l.logger.Debug("Simple retention -> current: %d, limit: %d, to_delete: %d",
-		totalBackups, maxBackups, toDelete)
-	logRetentionScale(l.logger, totalBackups, maxBackups)
-	l.retTally.planned = toDelete
-
-	// Delete oldest backups (already sorted newest first)
-	initialLogs := l.countLogFiles(ctx)
-	logsDeleted := 0
-	deleted := 0
-	for i := totalBackups - 1; i >= maxBackups; i-- {
-		if err := ctx.Err(); err != nil {
-			return deleted, err
-		}
-
-		backup := backups[i]
-		l.logger.Debug("Deleting old backup: %s (created: %s)",
-			filepath.Base(backup.BackupFile),
-			backup.Timestamp.Format("2006-01-02 15:04:05"))
-
-		logDeleted, err := l.deleteBackupInternal(ctx, backup.BackupFile)
-		if err != nil {
-			if !errors.Is(err, errBackupSidecarDeleteOnly) {
-				l.logger.Debug("Local Storage: retention - failed to delete %s: %v", backup.BackupFile, err)
-				l.retTally.notDeleted++
-				continue
-			}
-			// Archive removed, only sidecar(s) failed: count as deleted; the fact
-			// line naming the leftover was printed by deleteBackupInternal.
-			l.logger.Debug("Local Storage: retention - %s removed but the sidecar cleanup failed: %v", backup.BackupFile, err)
-			l.retTally.leftBehind++
-		}
-
-		deleted++
-		l.retTally.removed = append(l.retTally.removed, backup.BackupFile)
-		if logDeleted {
-			logsDeleted++
-		}
-	}
-
-	remaining := totalBackups - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
-
-	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
-		l.logger.Debug("Local storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",
-			deleted, logsDeleted, remaining, logsRemaining)
-		l.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			LogsRemaining:    logsRemaining,
-			HasLogInfo:       true,
-		}
-	} else {
-		l.logger.Debug("Local storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining",
-			deleted, logsDeleted, remaining)
-		l.lastRet = RetentionSummary{
-			BackupsDeleted:   deleted,
-			BackupsRemaining: remaining,
-			LogsDeleted:      logsDeleted,
-			HasLogInfo:       false,
-		}
-	}
-
-	return deleted, nil
+	return l.retention().applySimple(ctx, backups, maxBackups)
 }
 
 // LastRetentionSummary returns information about the latest retention run.

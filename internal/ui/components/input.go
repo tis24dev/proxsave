@@ -36,11 +36,6 @@ func WithInitialValue(v string) InputOption {
 	return func(i *Input) { i.ti.SetValue(sanitizeLine(v)) }
 }
 
-// WithPlaceholder sets the placeholder text.
-func WithPlaceholder(p string) InputOption {
-	return func(i *Input) { i.ti.Placeholder = sanitizeLine(p) }
-}
-
 // WithValidate rejects values for which f returns an error; the message is
 // shown inline and the prompt stays active.
 func WithValidate(f func(string) error) InputOption {

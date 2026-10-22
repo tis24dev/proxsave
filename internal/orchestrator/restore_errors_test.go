@@ -18,7 +18,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
-func TestAnalyzeBackupCategories_OpenError(t *testing.T) {
+func TestAnalyzeRestoreArchive_OpenError(t *testing.T) {
 	orig := restoreFS
 	defer func() { restoreFS = orig }()
 	fakeFS := NewFakeFS()
@@ -26,7 +26,7 @@ func TestAnalyzeBackupCategories_OpenError(t *testing.T) {
 	restoreFS = fakeFS
 	logger := logging.New(logging.GetDefaultLogger().GetLevel(), false)
 
-	_, err := AnalyzeBackupCategories("/missing/archive.tar", logger)
+	_, _, err := AnalyzeRestoreArchive("/missing/archive.tar", logger)
 	if err == nil {
 		t.Fatalf("expected error when archive cannot be opened")
 	}
@@ -1377,28 +1377,6 @@ func TestDetectConfiguredZFSPools_GlobError(t *testing.T) {
 	// Should return empty slice on error
 	if len(pools) != 0 {
 		t.Fatalf("expected empty pools on glob error, got: %v", pools)
-	}
-}
-
-// --------------------------------------------------------------------------
-// combinePoolNames tests
-// --------------------------------------------------------------------------
-
-func TestCombinePoolNames_Deduplication(t *testing.T) {
-	pools := combinePoolNames(
-		[]string{"tank", "backup"},
-		[]string{"backup", "rpool"},
-	)
-
-	if len(pools) != 3 {
-		t.Fatalf("expected 3 unique pools, got: %v", pools)
-	}
-
-	expected := map[string]bool{"tank": true, "backup": true, "rpool": true}
-	for _, p := range pools {
-		if !expected[p] {
-			t.Fatalf("unexpected pool: %s", p)
-		}
 	}
 }
 

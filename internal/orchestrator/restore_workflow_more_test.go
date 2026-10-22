@@ -31,7 +31,6 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
@@ -40,7 +39,6 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
@@ -49,7 +47,6 @@ func TestRunRestoreWorkflow_ClusterBackupSafeMode_ExportsClusterAndRestoresNetwo
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 
 	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}
@@ -143,7 +140,6 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
@@ -152,7 +148,6 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
@@ -161,7 +156,6 @@ func TestRunRestoreWorkflow_PBSStopsServicesAndChecksZFSWhenSelected(t *testing.
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 
 	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}
@@ -281,7 +275,6 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
@@ -290,7 +283,6 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
@@ -299,7 +291,6 @@ func TestRunRestoreWorkflow_IncompatibilityAndSafetyBackupFailureCanContinue(t *
 	restoreSandbox := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(restoreSandbox.Root) })
 	restoreFS = restoreSandbox
-	compatFS = restoreSandbox
 
 	safetySandbox := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(safetySandbox.Root) })
@@ -376,7 +367,6 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 	origRestoreCmd := restoreCmd
 	origRestoreSystem := restoreSystem
 	origRestoreTime := restoreTime
-	origCompatFS := compatFS
 	origPrepare := prepareRestoreBundleFunc
 	origSafetyFS := safetyFS
 	origSafetyNow := safetyNow
@@ -385,7 +375,6 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 		restoreCmd = origRestoreCmd
 		restoreSystem = origRestoreSystem
 		restoreTime = origRestoreTime
-		compatFS = origCompatFS
 		prepareRestoreBundleFunc = origPrepare
 		safetyFS = origSafetyFS
 		safetyNow = origSafetyNow
@@ -394,7 +383,6 @@ func TestRunRestoreWorkflow_ClusterRecoveryModeStopsAndRestartsServices(t *testi
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
-	compatFS = fakeFS
 	safetyFS = fakeFS
 
 	fakeNow := &FakeTime{Current: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}

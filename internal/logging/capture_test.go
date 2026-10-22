@@ -61,115 +61,7 @@ func TestNewLineWriter_PartialStaysBuffered(t *testing.T) {
 	}
 }
 
-func TestCaptureConsole_WiresAndRestores(t *testing.T) {
-	// Keep the process-global default logger clean across the test.
-	prev := GetDefaultLogger()
-	t.Cleanup(func() { SetDefaultLogger(prev) })
-
-	fresh := New(types.LogLevelInfo, false)
-	fresh.SetOutput(io.Discard) // so post-restore lines go nowhere noisy
-	SetDefaultLogger(fresh)
-
-	var mu sync.Mutex
-	var lines []string
-	sink := NewLineWriter(func(line string) {
-		mu.Lock()
-		lines = append(lines, line)
-		mu.Unlock()
-	})
-
-	bootstrap := NewBootstrapLogger()
-	bootstrap.SetConsoleQuiet(false)
-
-	restore := CaptureConsole(bootstrap, sink)
-
-	Info("hello")           // default logger -> swapped to sink
-	bootstrap.Info("world") // bootstrap -> mirror -> sink
-
-	mu.Lock()
-	captured := append([]string(nil), lines...)
-	mu.Unlock()
-
-	if len(captured) != 2 {
-		t.Fatalf("expected 2 captured lines, got %#v", captured)
-	}
-	if !containsAll(captured[0], "INFO", "hello") {
-		t.Fatalf("first captured line %q missing INFO/hello", captured[0])
-	}
-	if !containsAll(captured[1], "INFO", "world") {
-		t.Fatalf("second captured line %q missing INFO/world", captured[1])
-	}
-
-	// Bootstrap must be console-quiet while captured.
-	if !bootstrap.consoleQuietEnabled() {
-		t.Fatalf("bootstrap should be console-quiet during capture")
-	}
-
-	restore()
-
-	// After restore: default logger no longer feeds the sink.
-	before := len(captured)
-	Info("after-restore")
-	mu.Lock()
-	n := len(lines)
-	mu.Unlock()
-	if n != before {
-		t.Fatalf("default logger still feeding sink after restore: %d != %d", n, before)
-	}
-
-	// After restore: bootstrap mirror detached and prior quiet state restored.
-	bootstrap.mu.Lock()
-	mirror := bootstrap.mirror
-	bootstrap.mu.Unlock()
-	if mirror != nil {
-		t.Fatalf("bootstrap mirror should be nil after restore, got %v", mirror)
-	}
-	if bootstrap.consoleQuietEnabled() {
-		t.Fatalf("bootstrap console-quiet should be restored to false")
-	}
-}
-
-func TestCaptureConsole_FiltersDebugAtStandardLevel(t *testing.T) {
-	// Standard run: bootstrap + default logger both at INFO. Debug lines must NOT
-	// leak into the UI stream - the mirror is created at the bootstrap's level, not
-	// hardcoded Debug (a debug run raises the level and would stream debug).
-	prev := GetDefaultLogger()
-	t.Cleanup(func() { SetDefaultLogger(prev) })
-	fresh := New(types.LogLevelInfo, false)
-	fresh.SetOutput(io.Discard)
-	SetDefaultLogger(fresh)
-
-	var mu sync.Mutex
-	var lines []string
-	sink := NewLineWriter(func(line string) {
-		mu.Lock()
-		lines = append(lines, line)
-		mu.Unlock()
-	})
-
-	bootstrap := NewBootstrapLogger() // INFO by default
-	bootstrap.SetConsoleQuiet(false)
-	restore := CaptureConsole(bootstrap, sink)
-	defer restore()
-
-	bootstrap.Debug("boot-debug-hidden")
-	bootstrap.Info("boot-info-shown")
-	Debug("default-debug-hidden")
-	Info("default-info-shown")
-
-	mu.Lock()
-	joined := strings.Join(lines, "\n")
-	mu.Unlock()
-
-	if strings.Contains(joined, "boot-debug-hidden") || strings.Contains(joined, "default-debug-hidden") {
-		t.Fatalf("debug lines leaked into the standard-level stream:\n%s", joined)
-	}
-	if !strings.Contains(joined, "boot-info-shown") || !strings.Contains(joined, "default-info-shown") {
-		t.Fatalf("info lines missing from the stream:\n%s", joined)
-	}
-}
-
-func TestCaptureConsole_NilBootstrap(t *testing.T) {
+func TestCaptureConsoleWithColor_NilBootstrap(t *testing.T) {
 	prev := GetDefaultLogger()
 	t.Cleanup(func() { SetDefaultLogger(prev) })
 
@@ -180,7 +72,7 @@ func TestCaptureConsole_NilBootstrap(t *testing.T) {
 	var lines []string
 	sink := NewLineWriter(func(line string) { lines = append(lines, line) })
 
-	restore := CaptureConsole(nil, sink)
+	restore := CaptureConsoleWithColor(nil, sink)
 	Info("only-default")
 	restore()
 

@@ -91,20 +91,13 @@ var checksumOpen = func(ctx context.Context, path string, timeout time.Duration)
 	return safefs.Open(ctx, path, timeout)
 }
 
-// GenerateChecksum calculates the SHA256 checksum of a file with NO FS I/O
-// timeout (the FS_IO_TIMEOUT=0 opt-out / legacy behaviour). Prefer
-// GenerateChecksumBounded with the configured FS_IO_TIMEOUT on any path that
-// may touch a removable or network mount.
-func GenerateChecksum(ctx context.Context, logger *logging.Logger, filePath string) (string, error) {
-	return GenerateChecksumBounded(ctx, logger, filePath, 0)
-}
-
-// GenerateChecksumBounded is GenerateChecksum with a per-chunk no-progress
-// (stall) budget on the open, every read+hash chunk, and the close, so a
-// dead/stale mount cannot wedge any of them in an uninterruptible (D-state)
-// syscall. The budget re-arms on every chunk that makes progress, so a healthy
-// large file over a slow-but-alive link still hashes in full. timeout<=0 disables
-// bounding (a plain synchronous read loop, identical to the legacy behaviour).
+// GenerateChecksumBounded calculates the SHA256 checksum of a file with a
+// per-chunk no-progress (stall) budget on the open, every read+hash chunk, and
+// the close, so a dead/stale mount cannot wedge any of them in an
+// uninterruptible (D-state) syscall. The budget re-arms on every chunk that
+// makes progress, so a healthy large file over a slow-but-alive link still
+// hashes in full. timeout<=0 disables bounding (a plain synchronous read loop,
+// identical to the legacy behaviour).
 // On a stalled read the safefs.CopyBounded worker is abandoned while still
 // holding the fd, so the close is skipped and the *os.File finalizer reclaims the
 // fd once the wedged kernel call returns.
@@ -179,14 +172,8 @@ func CreateManifest(ctx context.Context, logger *logging.Logger, manifest *Manif
 	return nil
 }
 
-// VerifyChecksum verifies a file against a manifest's checksum with NO FS I/O
-// timeout (legacy). Prefer VerifyChecksumBounded on potentially remote/stale paths.
-func VerifyChecksum(ctx context.Context, logger *logging.Logger, filePath, expectedChecksum string) (bool, error) {
-	return VerifyChecksumBounded(ctx, logger, filePath, expectedChecksum, 0)
-}
-
-// VerifyChecksumBounded is VerifyChecksum with a per-chunk FS I/O stall budget
-// (see GenerateChecksumBounded).
+// VerifyChecksumBounded verifies a file against a manifest's checksum with a
+// per-chunk FS I/O stall budget (see GenerateChecksumBounded).
 func VerifyChecksumBounded(ctx context.Context, logger *logging.Logger, filePath, expectedChecksum string, timeout time.Duration) (bool, error) {
 	logger.Debug("Verifying checksum for: %s", filePath)
 
@@ -235,24 +222,6 @@ func LoadManifest(manifestPath string) (*Manifest, error) {
 	)
 }
 
-// HostnameFromManifestBytes returns the host a manifest payload names, reading both
-// forms the two pipelines produced: the JSON manifest the Go pipeline writes, and the
-// KEY=VALUE sidecar the pre-Go pipeline wrote. JSON wins whenever it parses, which is
-// the same key precedence LoadManifest applies.
-//
-// It is deliberately NOT LoadManifest itself. LoadManifest's legacy branch is gated
-// on a path ending in ".metadata" and on a stat-able archive sitting next to it, and
-// a caller holding only the payload bytes (the cloud path reads its manifests off the
-// remote with "rclone cat") has neither.
-//
-// "" means the payload names no host. Every caller must treat that as "cannot
-// attribute" and never as a match: on a shared location, claiming an archive whose
-// writer nothing can name means deleting another machine's backup.
-func HostnameFromManifestBytes(data []byte) string {
-	hostname, _ := OwnerFromManifestBytes(data)
-	return hostname
-}
-
 // OwnerFromManifestBytes returns both facts a manifest payload records about the
 // machine that wrote the archive: the host it names and the server identity it
 // carries. Both come from THE SAME payload, which is the point of returning them
@@ -260,11 +229,11 @@ func HostnameFromManifestBytes(data []byte) string {
 // a hostname taken from one sidecar and an identity taken from another would describe
 // a writer that never existed, and retention would be deciding a deletion on it.
 //
-// Format precedence is exactly HostnameFromManifestBytes's, which is exactly
-// LoadManifest's: JSON wins whenever it parses. The KEY=VALUE fallback can only ever
-// yield a hostname, because the pre-Go pipeline had no notion of a server identity
-// and never wrote such a key. Teaching parseLegacyMetadata one would invent a format
-// no archive on disk carries and could only ever fire on a hand-edited file.
+// Format precedence is exactly LoadManifest's: JSON wins whenever it parses. The
+// KEY=VALUE fallback can only ever yield a hostname, because the pre-Go pipeline had
+// no notion of a server identity and never wrote such a key. Teaching
+// parseLegacyMetadata one would invent a format no archive on disk carries and
+// could only ever fire on a hand-edited file.
 //
 // Either result may be "", independently, and "" always means "the payload does not
 // say". It is never a match.

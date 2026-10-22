@@ -42,17 +42,17 @@ type clusterRecoveryRun struct {
 func runClusterRecoveryRestore(t *testing.T, opts clusterRecoveryOptions) clusterRecoveryRun {
 	t.Helper()
 	origRestoreFS, origRestoreCmd, origRestoreSystem := restoreFS, restoreCmd, restoreSystem
-	origRestoreTime, origCompatFS, origPrepare := restoreTime, compatFS, prepareRestoreBundleFunc
+	origRestoreTime, origPrepare := restoreTime, prepareRestoreBundleFunc
 	origSafetyFS, origSafetyNow := safetyFS, safetyNow
 	t.Cleanup(func() {
 		restoreFS, restoreCmd, restoreSystem = origRestoreFS, origRestoreCmd, origRestoreSystem
-		restoreTime, compatFS, prepareRestoreBundleFunc = origRestoreTime, origCompatFS, origPrepare
+		restoreTime, prepareRestoreBundleFunc = origRestoreTime, origPrepare
 		safetyFS, safetyNow = origSafetyFS, origSafetyNow
 	})
 
 	fakeFS := NewFakeFS()
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
-	restoreFS, compatFS, safetyFS = fakeFS, fakeFS, fakeFS
+	restoreFS, safetyFS = fakeFS, fakeFS
 	fakeNow := &FakeTime{Current: time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)}
 	restoreTime, safetyNow = fakeNow, fakeNow.Now
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
@@ -573,9 +573,10 @@ func TestPVEClusterServicesSkipUnitsNotInstalled(t *testing.T) {
 	}
 }
 
-// When a stop fails after other services were stopped, the ones already stopped are
-// started again, last stopped first, and the original error is returned. A failed
-// restart is a warning and does not stop the others.
+// When a stop fails after other services were stopped, the unit that did not stop is
+// started to replace its queued stop job, the ones already stopped are started again,
+// last stopped first, and the original error is returned. A failed restart is a
+// warning and does not stop the others.
 func TestStopPVEClusterServicesRestartsWhatItStoppedWhenAStopFails(t *testing.T) {
 	origCmd := restoreCmd
 	t.Cleanup(func() { restoreCmd = origCmd })
@@ -600,10 +601,14 @@ func TestStopPVEClusterServicesRestartsWhatItStoppedWhenAStopFails(t *testing.T)
 		"systemctl stop --no-block pve-ha-lrm",
 		"systemctl stop --no-block pve-ha-crm",
 		"systemctl stop --no-block pve-cluster",
+		"systemctl start pve-cluster",
 		"systemctl start pve-ha-crm",
 		"systemctl start pve-ha-lrm",
 	)
-	for _, svc := range []string{"pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+	if countCalls(calls, "systemctl start pve-cluster") != 1 {
+		t.Fatalf("want one start of pve-cluster, the unit that did not stop; calls=%q", calls)
+	}
+	for _, svc := range []string{"pvedaemon", "pveproxy", "pvestatd"} {
 		if countCalls(calls, "systemctl start "+svc) != 0 {
 			t.Fatalf("%s started although it was never stopped; calls=%q", svc, calls)
 		}

@@ -333,7 +333,7 @@ func TestCollectWizardDataLeavesEmailFallbackToTheEngine(t *testing.T) {
 // the CLI's schedulerEngineDefault).
 func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
 	d := newDriver(t)
-	template := installer.UnsetEnvValueInTemplate(config.DefaultEnvTemplate(), "SCHEDULER_MODE")
+	template := config.RemoveEnvKeys(config.DefaultEnvTemplate(), "SCHEDULER_MODE")
 
 	type result struct {
 		data *installer.InstallWizardData

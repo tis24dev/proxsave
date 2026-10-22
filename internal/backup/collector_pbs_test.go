@@ -389,6 +389,13 @@ func TestHasTapeSupportHasDrives(t *testing.T) {
 	}
 }
 
+// collectDatastoreNamespaces collects namespace information for a datastore
+// using CLI first, then filesystem fallback.
+func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
+	_, err := c.collectDatastoreNamespacesSnapshot(ctx, ds, datastoreDir)
+	return err
+}
+
 func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
 	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
 		if name != "store1" || path != "/fake" {
@@ -870,22 +877,21 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 			if name != "proxmox-backup-manager" {
 				return nil, fmt.Errorf("unexpected command %s", name)
 			}
+			if len(args) == 3 && args[0] == "user" && args[1] == "list" {
+				return []byte(`[{"userid":"user@pam"},{"userid":""}]`), nil
+			}
 			if len(args) != 4 || args[0] != "user" || args[1] != "list-tokens" {
 				return nil, fmt.Errorf("unexpected args %v", args)
 			}
 			return []byte(`[{"tokenid":"mytoken"}]`), nil
 		},
 	})
-	commandsDir := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "commands", "pbs")
-	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
-		t.Fatalf("failed to create commands dir: %v", err)
-	}
-	userList := `[{"userid":"user@pam"},{"userid":""}]`
-	if err := os.WriteFile(filepath.Join(commandsDir, "user_list.json"), []byte(userList), 0o644); err != nil {
-		t.Fatalf("failed to write user list: %v", err)
-	}
 
-	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
+	runSelectedBricksForTest(t, context.Background(), collector, newPBSCommandsRecipe(), nil,
+		brickPBSRuntimeAccessUsers,
+		brickPBSRuntimeAccessUserTokens,
+		brickPBSRuntimeAccessTokensAggregate,
+	)
 
 	tokensPath := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "access-control", "tokens.json")
 	data, err := os.ReadFile(tokensPath)
@@ -902,16 +908,6 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 	}
 	if _, ok := aggregated["user@pam"]; !ok {
 		t.Fatalf("expected token entry for user@pam, got %v", aggregated)
-	}
-}
-
-func TestCollectUserConfigsMissingUserList(t *testing.T) {
-	collector := newTestCollectorWithDeps(t, CollectorDeps{})
-	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
-
-	tokensPath := filepath.Join(collector.tempDir, "var", "lib", "proxsave-info", "pbs", "access-control", "tokens.json")
-	if _, err := os.Stat(tokensPath); !os.IsNotExist(err) {
-		t.Fatalf("expected no tokens.json, got err=%v", err)
 	}
 }
 

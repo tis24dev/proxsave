@@ -1,0 +1,17 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+INFO     Restoring PBS S3 endpoints...
+DEBUG    PBS S3 endpoint restore: mode=clean staged=/stage/etc/proxmox-backup/s3.cfg
+DEBUG    PBS S3 endpoint restore: backup s3-endpoints=1 names=obj1
+INFO       S3 endpoints to restore: 1
+INFO       Names: obj1
+DEBUG    PBS S3 endpoint restore: api apply failed error="forced API error"
+INFO     The S3 endpoint configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS S3 endpoint restore: fallback=file target=/etc/proxmox-backup/s3.cfg source=/stage/etc/proxmox-backup/s3.cfg
+DEBUG    PBS S3 endpoint restore: fallback current file s3-endpoints=0 names=
+DEBUG    Start pbs staged apply s3.cfg: stage=/stage
+DEBUG    pbs staged apply file: Applied etc/proxmox-backup/s3.cfg -> /etc/proxmox-backup/s3.cfg
+DEBUG    End pbs staged apply s3.cfg (ok, duration=<d>)
+DEBUG    PBS S3 endpoint restore: fallback written
+WARNING  ⚠ PBS S3 endpoint configuration: applied from the backup file
+DEBUG    End pbs staged apply (error=forced API error, duration=<d>)
+returned: forced API error

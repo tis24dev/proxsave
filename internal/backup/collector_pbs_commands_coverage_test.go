@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -356,28 +357,6 @@ func TestCollectDatastoreConfigsCreatesDistinctNamespaceFilesForOverrideCollisio
 	}
 }
 
-func TestCollectUserConfigsSkipsInvalidUserListJSON(t *testing.T) {
-	tmp := t.TempDir()
-	collector := NewCollector(newTestLogger(), GetDefaultCollectorConfig(), tmp, types.ProxmoxBS, false)
-
-	commandsDir := filepath.Join(tmp, "var/lib/proxsave-info", "commands", "pbs")
-	usersDir := filepath.Join(tmp, "var/lib/proxsave-info", "pbs", "access-control")
-	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
-		t.Fatalf("mkdir commands: %v", err)
-	}
-	if err := os.MkdirAll(usersDir, 0o755); err != nil {
-		t.Fatalf("mkdir users: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(commandsDir, "user_list.json"), []byte("{invalid"), 0o640); err != nil {
-		t.Fatalf("write user_list.json: %v", err)
-	}
-
-	runRecipeForTest(t, context.Background(), collector, newPBSUserConfigRecipe(), nil)
-	if _, err := os.Stat(filepath.Join(usersDir, "tokens.json")); err == nil {
-		t.Fatalf("tokens.json should not be created for invalid user list JSON")
-	}
-}
-
 func TestCollectPBSCommandsSkipsTapeDetailsWhenHasTapeSupportErrors(t *testing.T) {
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = t.TempDir()
@@ -444,6 +423,7 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 	cfg.PBSConfigPath = pbsRoot
 	cfg.PxarDatastoreConcurrency = 2
 
+	var tokenCalls atomic.Int32
 	deps := CollectorDeps{
 		LookPath: func(name string) (string, error) { return "/bin/" + name, nil },
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -457,6 +437,7 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 				return []byte(`[{"userid":"user@pam"},{"userid":"second@pve"}]`), nil
 			}
 			if len(args) >= 3 && args[0] == "user" && args[1] == "list-tokens" {
+				tokenCalls.Add(1)
 				return []byte(`{"token":"ok"}`), nil
 			}
 			return []byte(`{}`), nil
@@ -478,6 +459,11 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "access-control", "tokens.json")); err != nil {
 		t.Fatalf("expected tokens.json to be aggregated: %v", err)
+	}
+	// The tokens are collected once per user on a PBS-only host: the runtime bricks of
+	// the PBS recipe do it, nothing runs them a second time.
+	if got := tokenCalls.Load(); got != 2 {
+		t.Fatalf("list-tokens ran %d times for 2 users, want 2 (once per user)", got)
 	}
 
 	pxarMeta := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "pbs", "pxar", "metadata", "store", "metadata.json")

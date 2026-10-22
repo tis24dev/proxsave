@@ -11,6 +11,9 @@ import (
 	"syscall"
 )
 
+// allowedPBSDatastoreScaffoldEntries are the entries a datastore directory may hold
+// without any data: what PBS creates (.chunks and .lock), and the .index directory
+// that earlier ProxSave versions created next to them, which PBS never uses.
 var allowedPBSDatastoreScaffoldEntries = map[string]struct{}{
 	".chunks": {},
 	".index":  {},
@@ -25,9 +28,6 @@ func validatePBSDatastoreReadOnly(datastorePath string) string {
 		return warn
 	}
 	if warn := validatePBSDatastoreSubdir(datastorePath, ".chunks"); warn != "" {
-		return warn
-	}
-	if warn := validatePBSDatastoreSubdir(datastorePath, ".index"); warn != "" {
 		return warn
 	}
 	return validatePBSDatastoreLock(datastorePath)

@@ -176,6 +176,10 @@ func TestSafeCmdOutput_LimitedPrivileges_DowngradesSmartctlToSkip(t *testing.T) 
 	}
 }
 
+func privilegeSensitiveFailureReason(command string, exitCode int, outputText string) string {
+	return privilegeSensitiveFailureMatch(command, exitCode, outputText).Reason
+}
+
 func TestPrivilegeSensitiveFailureReason(t *testing.T) {
 	const blkidReason = "block devices not accessible (restore hint: fstab remap may be limited)"
 

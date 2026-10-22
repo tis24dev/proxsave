@@ -26,7 +26,7 @@ func TestWriteBackupCollectionMetadata_FailuresEscalateToWarnings(t *testing.T) 
 	if err := os.WriteFile(badTemp, []byte("x"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	badCollector := backup.NewCollector(logger, backup.GetDefaultCollectorConfig(), badTemp, types.ProxmoxUnknown, false)
+	badCollector := backup.NewCollectorWithDeps(logger, backup.GetDefaultCollectorConfig(), badTemp, types.ProxmoxUnknown, false, backup.CollectorDeps{})
 
 	before := logger.WarningCount()
 	o.writeBackupCollectionMetadata(badTemp, "test-host", &BackupStats{}, badCollector)
@@ -36,7 +36,7 @@ func TestWriteBackupCollectionMetadata_FailuresEscalateToWarnings(t *testing.T) 
 
 	// Success path: a writable tempDir produces no warnings.
 	okTemp := t.TempDir()
-	okCollector := backup.NewCollector(logger, backup.GetDefaultCollectorConfig(), okTemp, types.ProxmoxUnknown, false)
+	okCollector := backup.NewCollectorWithDeps(logger, backup.GetDefaultCollectorConfig(), okTemp, types.ProxmoxUnknown, false, backup.CollectorDeps{})
 
 	before = logger.WarningCount()
 	o.writeBackupCollectionMetadata(okTemp, "test-host", &BackupStats{}, okCollector)
@@ -57,7 +57,7 @@ func TestWriteBackupCollectionMetadata_FailureReflectedInReSnapshot(t *testing.T
 	if err := os.WriteFile(badTemp, []byte("x"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	collector := backup.NewCollector(logger, backup.GetDefaultCollectorConfig(), badTemp, types.ProxmoxUnknown, false)
+	collector := backup.NewCollectorWithDeps(logger, backup.GetDefaultCollectorConfig(), badTemp, types.ProxmoxUnknown, false, backup.CollectorDeps{})
 
 	var stats BackupStats
 

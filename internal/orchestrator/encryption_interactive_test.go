@@ -144,7 +144,7 @@ func TestPromptAndConfirmPassphrase_Mismatch(t *testing.T) {
 	}
 }
 
-func TestPromptPassphraseRecipient_Success(t *testing.T) {
+func TestPromptAndConfirmPassphrase_Success(t *testing.T) {
 	orig := readPassword
 	t.Cleanup(func() { readPassword = orig })
 
@@ -164,22 +164,12 @@ func TestPromptPassphraseRecipient_Success(t *testing.T) {
 		return next, nil
 	}
 
-	recipient, err := promptPassphraseRecipientAge(context.Background())
+	pass, err := promptAndConfirmPassphraseAge(context.Background())
 	if err != nil {
-		t.Fatalf("promptPassphraseRecipientAge error: %v", err)
+		t.Fatalf("promptAndConfirmPassphraseAge error: %v", err)
 	}
-	if !strings.HasPrefix(recipient, "age1") {
-		t.Fatalf("recipient=%q; want age1... format", recipient)
-	}
-}
-
-func TestDeriveDeterministicRecipientFromPassphrase_ExportedWrapper(t *testing.T) {
-	recipient, err := DeriveDeterministicRecipientFromPassphrase("passphrase")
-	if err != nil {
-		t.Fatalf("DeriveDeterministicRecipientFromPassphrase error: %v", err)
-	}
-	if !strings.HasPrefix(recipient, "age1") {
-		t.Fatalf("recipient=%q; want age1... format", recipient)
+	if pass != "Str0ng!Passphrase" {
+		t.Fatalf("pass=%q; want %q", pass, "Str0ng!Passphrase")
 	}
 }
 

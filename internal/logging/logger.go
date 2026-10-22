@@ -67,8 +67,7 @@ type Logger struct {
 	// shares this one logger instance, so a channel outage never escalates the run.
 	// Guarded by mu; nestable via Enter/ExitNotifyErrorScope.
 	notifyErrorScope int
-	issueLines       []string // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
-	exitFunc         func(int)
+	issueLines       []string     // Captured WARNING/ERROR/CRITICAL lines for end-of-run summary
 	secrets          []secretForm // registered secret values scrubbed from every log line
 	// mirror is an optional COLORED tap that receives a copy of every line the
 	// logger records, on BOTH the standard path (logWithLabel) AND the raw path
@@ -115,7 +114,6 @@ func New(level types.LogLevel, useColor bool) *Logger {
 		useColor:   useColor,
 		output:     os.Stdout,
 		timeFormat: "2006-01-02 15:04:05",
-		exitFunc:   os.Exit,
 	}
 }
 
@@ -172,18 +170,6 @@ func (l *Logger) SetLevel(level types.LogLevel) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
-}
-
-// SetExitFunc allows customizing the exit function (useful for tests).
-// If fn is nil, it restores os.Exit.
-func (l *Logger) SetExitFunc(fn func(int)) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if fn == nil {
-		l.exitFunc = os.Exit
-		return
-	}
-	l.exitFunc = fn
 }
 
 // OpenLogFile opens a log file and starts real-time writing.
@@ -390,6 +376,19 @@ func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
 }
 
 func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride string, format string, args ...interface{}) {
+	l.emit(level, label, colorOverride, true, format, args...)
+}
+
+// logFileOnly records a line the console has already shown (a bootstrap line
+// printed before this logger existed): the same counters, issue capture, mirror
+// tap and file line as any other, without printing it on the console again.
+func (l *Logger) logFileOnly(level types.LogLevel, message string) {
+	l.emit(level, "", "", false, "%s", message)
+}
+
+// emit is the single write path of the logger. toConsole is false only for a line
+// the console already shows.
+func (l *Logger) emit(level types.LogLevel, label string, colorOverride string, toConsole bool, format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// The threshold is a CONSOLE filter (maintainer call, 2026-09-02). It used to
@@ -474,8 +473,9 @@ func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride 
 		l.issueLines = append(l.issueLines, issue)
 	}
 
-	// Write to stdout with colors - unless the console threshold mutes it.
-	if !consoleMuted {
+	// Write to stdout with colors - unless the console threshold mutes it, or the
+	// console already shows the line.
+	if !consoleMuted && toConsole {
 		_, _ = fmt.Fprint(l.output, outputStdout)
 	}
 
@@ -651,17 +651,6 @@ func (l *Logger) Critical(format string, args ...interface{}) {
 	l.log(types.LogLevelCritical, format, args...)
 }
 
-// Fatal writes a critical log and exits with the specified code
-func (l *Logger) Fatal(exitCode types.ExitCode, format string, args ...interface{}) {
-	l.Critical(format, args...)
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.exitFunc == nil {
-		l.exitFunc = os.Exit
-	}
-	l.exitFunc(exitCode.Int())
-}
-
 // AppendRaw writes a raw log line directly to the log file (if any)
 // without emitting it to stdout. It is primarily used by the bootstrap
 // logger to persist early banner/output without duplicating it on console.
@@ -740,9 +729,4 @@ func Error(format string, args ...interface{}) {
 // Critical writes a critical log using the default logger.
 func Critical(format string, args ...interface{}) {
 	defaultLogger.Critical(format, args...)
-}
-
-// Fatal writes a critical log and exits with the specified code
-func Fatal(exitCode types.ExitCode, format string, args ...interface{}) {
-	defaultLogger.Fatal(exitCode, format, args...)
 }

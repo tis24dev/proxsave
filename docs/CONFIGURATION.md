@@ -1626,6 +1626,8 @@ PXAR_FILE_EXCLUDE_PATTERN=         # Exclude patterns (e.g., *.tmp, *.lock)
 
 **Note (PBS snapshot behavior)**: ProxSave snapshots `PBS_CONFIG_PATH` (`/etc/proxmox-backup`) for completeness. When a PBS feature is disabled, proxsave excludes the corresponding well-known config files from that snapshot (for example, `remote.cfg` is excluded when `BACKUP_REMOTE_CONFIGS=false`) and also skips the related command outputs.
 
+**Note (ACME plugin credentials)**: with `BACKUP_PBS_ACME_PLUGINS=true` the archive also holds the output of `proxmox-backup-manager acme plugin config <id>` in `var/lib/proxsave-info/commands/pbs/acme_plugin_<id>_config.json`. Its `data` field carries the DNS provider credentials in the clear; PBS keeps the same data base64-encoded in `acme/plugins.cfg` (mode 0600), which the archive also holds.
+
 **PXAR scanning**: collects *metadata about* the `.pxar` archives inside your PBS datastores, never
 their contents. ProxSave backs up configuration, so no datastore data is copied with or
 without this setting: with it on you additionally get, per datastore, a subdirectory report
@@ -1673,35 +1675,6 @@ HOST_BACKUP_MODE=false             # Appliance backing up a host mounted read-on
 **Note**: `${PVE_CONFIG_PATH}` (and other `${VAR}` references) are resolved from the same `backup.env` file too, so you do not need to `export` them.
 
 **Note**: the PVE path overrides, `CEPH_CONFIG_PATH` and `SYSTEM_ROOT_PREFIX` choose where a file is read, not where it is stored. The archive always holds `/etc/pve`, `/var/lib/pve-cluster`, `/etc/pve/corosync.conf`, `/etc/vzdump.conf`, `/etc/corosync/authkey` and `/etc/ceph` at those paths, which is where the restore looks for them.
-
-### PBS API credentials (remote server only)
-
-Three variables let the PBS collectors reach a **remote** Proxmox Backup Server. A local
-PBS needs none of them: it is detected from the node. They ship commented out in the
-template.
-
-```bash
-# PBS_REPOSITORY=user@pbs!token@host:datastore
-# PBS_PASSWORD=<api-token-secret>
-# PBS_FINGERPRINT=<sha256-fingerprint-of-the-server-certificate>
-```
-
-Each is resolved in three steps, first match wins: the process environment, then this
-file, then auto-detection from the local node. The environment coming first is deliberate,
-so a systemd unit or a shell can supply the secret without it being written here. The
-fingerprint is only auto-detected when the repository is not an explicitly remote one, so a
-remote repository never silently borrows the local certificate's fingerprint. Without a
-repository and a password, namespace information for the affected datastore is skipped with
-a warning naming both variables; the rest of the backup is unaffected.
-
-When neither `PBS_REPOSITORY` nor `PBS_PASSWORD` is set by the environment or by this
-file, ProxSave reads an API token from these files, in this order:
-`${SECURE_ACCOUNT}/pbs_token`, `${SECURE_ACCOUNT}/pbs_api_token`, `/root/.pbs-token`. It
-uses the first line that is neither blank nor a `#` comment, in the first of these files
-that has one. A line `name=secret` gives the token name and its secret; a line holding the
-secret alone uses the token name `backup@pbs!go-client`. The repository then becomes
-`<token name>@localhost`. The security check expects each of these files at `0600` and
-`root:root`, and corrects them when `AUTO_FIX_PERMISSIONS=true` (see [SECURITY.md](SECURITY.md)).
 
 **Use case**: Working with mounted snapshots or mirrors at non-standard paths.
 

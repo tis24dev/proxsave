@@ -1,0 +1,15 @@
+DEBUG    Start secondary delete: file=<ROOT>/backups/pve-backup-20240620-120000.tar.zst
+DEBUG    Deleting secondary backup: <ROOT>/backups/pve-backup-20240620-120000.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240620-120000.tar.zst.bundle.tar
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240620-120000.tar.zst.bundle.tar
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240620-120000.tar.zst
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240620-120000.tar.zst.sha256
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240620-120000.tar.zst.manifest.json
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240620-120000.tar.zst.manifest.json
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata
+DEBUG    Removing file: <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata.sha256
+DEBUG    Secondary storage: file already removed <ROOT>/backups/pve-backup-20240620-120000.tar.zst.metadata.sha256
+DEBUG    Secondary logs: failed to delete backup-pve-20240620-120000.log: remove <ROOT>/logs/backup-pve-20240620-120000.log: directory not empty
+INFO       Log not deleted: backup-pve-20240620-120000.log: directory not empty
+DEBUG    Deleted secondary backup: pve-backup-20240620-120000.tar.zst
+DEBUG    End secondary delete (ok, duration=<D>)

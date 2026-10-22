@@ -151,25 +151,6 @@ type BackupMetadata struct {
 	Verified bool
 }
 
-// StorageLocation represents a storage destination.
-type StorageLocation string
-
-const (
-	// StorageLocal - Local storage
-	StorageLocal StorageLocation = "local"
-
-	// StorageSecondary - Secondary storage
-	StorageSecondary StorageLocation = "secondary"
-
-	// StorageCloud - Cloud storage (rclone)
-	StorageCloud StorageLocation = "cloud"
-)
-
-// String returns the string representation of the location.
-func (s StorageLocation) String() string {
-	return string(s)
-}
-
 // LogLevel represents the logging level.
 type LogLevel int
 

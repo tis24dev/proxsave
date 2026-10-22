@@ -19,17 +19,17 @@ func TestWriteJSONAtomicReportsMarshalError(t *testing.T) {
 	}
 }
 
-// TestRecordPingRoundTripEachKind writes one kind at a time and confirms that,
+// TestRecordOutcomePingRoundTripEachKind writes one kind at a time and confirms that,
 // after each write, LoadStatus returns exactly the record set, the other kinds
 // stay nil until they are recorded, and earlier records accumulate rather than
 // being clobbered. It also checks that TS/OK/Mode round-trip through the file.
-func TestRecordPingRoundTripEachKind(t *testing.T) {
+func TestRecordOutcomePingRoundTripEachKind(t *testing.T) {
 	base := t.TempDir()
 
 	// Each step records one kind, then asserts which fields are (non-)nil so we
 	// see accumulation kind by kind.
-	if err := RecordPing(base, "centralized", KindHeartbeat, 1000, true, nil); err != nil {
-		t.Fatalf("RecordPing heartbeat: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindHeartbeat, 1000, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing heartbeat: %v", err)
 	}
 	st := mustLoad(t, base)
 	assertRecord(t, "heartbeat", st.Record(KindHeartbeat), 1000, true, "")
@@ -40,8 +40,8 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("mode = %q, want centralized", st.Mode)
 	}
 
-	if err := RecordPing(base, "centralized", KindRunStarted, 2000, true, nil); err != nil {
-		t.Fatalf("RecordPing start: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindRunStarted, 2000, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing start: %v", err)
 	}
 	st = mustLoad(t, base)
 	assertRecord(t, "heartbeat", st.Record(KindHeartbeat), 1000, true, "") // still there
@@ -50,8 +50,8 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("finished/hang should still be nil, got %+v", st)
 	}
 
-	if err := RecordPing(base, "centralized", KindRunFinished, 3000, true, nil); err != nil {
-		t.Fatalf("RecordPing finish: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindRunFinished, 3000, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing finish: %v", err)
 	}
 	st = mustLoad(t, base)
 	assertRecord(t, "run_finished", st.Record(KindRunFinished), 3000, true, "")
@@ -59,8 +59,8 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 		t.Fatalf("finish step: unexpected field state %+v", st)
 	}
 
-	if err := RecordPing(base, "centralized", KindRunHang, 4000, false, errors.New("timed out")); err != nil {
-		t.Fatalf("RecordPing hang: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindRunHang, 4000, false, false, errors.New("timed out")); err != nil {
+		t.Fatalf("RecordOutcomePing hang: %v", err)
 	}
 	st = mustLoad(t, base)
 	assertRecord(t, "run_hang", st.Record(KindRunHang), 4000, false, "timed out")
@@ -70,7 +70,7 @@ func TestRecordPingRoundTripEachKind(t *testing.T) {
 }
 
 // TestRecordOutcomePingDown pins F09-02 at the writer: a failed finish (failed=true) round-trips
-// PingRecord.Down=true, and RecordPing (the failed=false shorthand) leaves Down=false.
+// PingRecord.Down=true, and a successful finish (failed=false) leaves Down=false.
 func TestRecordOutcomePingDown(t *testing.T) {
 	base := t.TempDir()
 
@@ -82,8 +82,8 @@ func TestRecordOutcomePingDown(t *testing.T) {
 		t.Fatalf("failed finish record = %+v, want OK && Down", rec)
 	}
 
-	if err := RecordPing(base, "self", KindRunFinished, 4000, true, nil); err != nil {
-		t.Fatalf("RecordPing finish: %v", err)
+	if err := RecordOutcomePing(base, "self", KindRunFinished, 4000, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing finish: %v", err)
 	}
 	st = mustLoad(t, base)
 	if rec := st.Record(KindRunFinished); rec == nil || !rec.OK || rec.Down {
@@ -150,15 +150,15 @@ func TestLoadStatusBadJSON(t *testing.T) {
 func TestErrPopulatedOnlyOnFailure(t *testing.T) {
 	base := t.TempDir()
 
-	if err := RecordPing(base, "self", KindHeartbeat, 10, true, nil); err != nil {
-		t.Fatalf("RecordPing ok: %v", err)
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, 10, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing ok: %v", err)
 	}
 	if st := mustLoad(t, base); st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).Err != "" {
 		t.Fatalf("nil pingErr should leave Err empty, got %+v", st.Record(KindHeartbeat))
 	}
 
-	if err := RecordPing(base, "self", KindHeartbeat, 20, false, errors.New("healthcheck alive: dial tcp: refused")); err != nil {
-		t.Fatalf("RecordPing fail: %v", err)
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, 20, false, false, errors.New("healthcheck alive: dial tcp: refused")); err != nil {
+		t.Fatalf("RecordOutcomePing fail: %v", err)
 	}
 	st := mustLoad(t, base)
 	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).OK {
@@ -176,8 +176,8 @@ func TestErrPopulatedOnlyOnFailure(t *testing.T) {
 func TestNoURLErrorClassifiedAsReason(t *testing.T) {
 	base := t.TempDir()
 
-	if err := RecordPing(base, "centralized", KindHeartbeat, 10, false, ErrNoAliveURL); err != nil {
-		t.Fatalf("RecordPing no-url: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindHeartbeat, 10, false, false, ErrNoAliveURL); err != nil {
+		t.Fatalf("RecordOutcomePing no-url: %v", err)
 	}
 	st := mustLoad(t, base)
 	if st.Record(KindHeartbeat) == nil || st.Record(KindHeartbeat).OK {
@@ -191,16 +191,16 @@ func TestNoURLErrorClassifiedAsReason(t *testing.T) {
 	}
 
 	// ErrNoBackupURL classifies the same way.
-	if err := RecordPing(base, "centralized", KindRunFinished, 20, false, ErrNoBackupURL); err != nil {
-		t.Fatalf("RecordPing no-url backup: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindRunFinished, 20, false, false, ErrNoBackupURL); err != nil {
+		t.Fatalf("RecordOutcomePing no-url backup: %v", err)
 	}
 	if rf := mustLoad(t, base).Record(KindRunFinished); rf == nil || rf.Reason != ReasonNoURL || rf.Err != "" {
 		t.Fatalf("ErrNoBackupURL should be Reason=no_url + empty Err, got %+v", rf)
 	}
 
 	// A genuine error keeps Reason empty and fills Err.
-	if err := RecordPing(base, "centralized", KindHeartbeat, 30, false, errors.New("healthcheck alive: HTTP 500")); err != nil {
-		t.Fatalf("RecordPing real err: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindHeartbeat, 30, false, false, errors.New("healthcheck alive: HTTP 500")); err != nil {
+		t.Fatalf("RecordOutcomePing real err: %v", err)
 	}
 	hb := mustLoad(t, base).Record(KindHeartbeat)
 	if hb.Reason != "" || hb.Err != "healthcheck alive: HTTP 500" {
@@ -222,8 +222,8 @@ func TestStatusPathShape(t *testing.T) {
 // afterwards (no leftover temp).
 func TestAtomicWriteLeavesNoTmp(t *testing.T) {
 	base := t.TempDir()
-	if err := RecordPing(base, "centralized", KindRunFinished, 5000, true, nil); err != nil {
-		t.Fatalf("RecordPing: %v", err)
+	if err := RecordOutcomePing(base, "centralized", KindRunFinished, 5000, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing: %v", err)
 	}
 	dir := filepath.Dir(StatusPath(base))
 	entries, err := os.ReadDir(dir)
@@ -281,7 +281,7 @@ func TestPruneNotifyRecords(t *testing.T) {
 	if err := RecordNotifyPing(base, "self", CheckKeyNotify("telegram"), 2, true, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordPing(base, "self", KindHeartbeat, 3, true, nil); err != nil {
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, 3, true, false, nil); err != nil {
 		t.Fatal(err)
 	}
 

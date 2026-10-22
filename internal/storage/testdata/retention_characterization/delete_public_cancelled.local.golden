@@ -1,0 +1,2 @@
+DEBUG    Start local delete: file=<ROOT>/backups/pve-backup-20240620-120000.tar.zst
+DEBUG    End local delete (error=context canceled, duration=<D>)

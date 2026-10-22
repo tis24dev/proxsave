@@ -1,0 +1,15 @@
+DEBUG    Start pbs staged apply: dryRun=false stage=/stage
+INFO     Restoring PBS verify jobs...
+DEBUG    PBS verify job restore: mode=clean staged=/stage/etc/proxmox-backup/verification.cfg
+DEBUG    PBS verify job restore: backup verify-jobs=1 names=obj1
+INFO       Verify jobs to restore: 1
+INFO       Names: obj1
+DEBUG    PBS verify job restore: api apply failed error="forced API error"
+INFO     The verify job configuration could not be applied through the PBS API: "forced API error"
+DEBUG    PBS verify job restore: fallback=file target=/etc/proxmox-backup/verification.cfg source=/stage/etc/proxmox-backup/verification.cfg
+DEBUG    PBS verify job restore: fallback current file verify-jobs=0 names=
+DEBUG    pbs staged apply file: Applied etc/proxmox-backup/verification.cfg -> /etc/proxmox-backup/verification.cfg
+DEBUG    PBS verify job restore: fallback written
+WARNING  ⚠ PBS verify job configuration: applied from the backup file
+DEBUG    End pbs staged apply (error=forced API error, duration=<d>)
+returned: forced API error

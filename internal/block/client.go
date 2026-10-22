@@ -85,7 +85,7 @@ func (c Client) Run(ctx context.Context, args ...string) ClientResult {
 }
 
 // clientEnv is base without any PBS_* variable, plus the storage's own secrets: a PBS_*
-// exported for the collector (PBS_REPOSITORY, PBS_PASSWORD, PBS_FINGERPRINT, ...) must
+// already in the process environment (PBS_REPOSITORY, PBS_PASSWORD, PBS_FINGERPRINT, ...) must
 // not reach the client that writes to this storage.
 func clientEnv(base []string, password, fingerprint string) []string {
 	env := make([]string, 0, len(base)+2)

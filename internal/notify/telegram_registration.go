@@ -182,10 +182,9 @@ func linkStateFromFields(linkState, chatID string) TelegramLinkState {
 // get-chat-id handshake (5s timeout, X-Proxsave-Version header). It returns the
 // public status AND, on a 200, the notify_secret parsed from the body. The secret
 // is registered with the logger BEFORE the body-preview line below, so the masker
-// scrubs it from every subsequent log line for ALL callers. When provision is
-// true it also sends the provision-intent header so the server may (re)issue a
-// token; the bare status probe passes false and never churns the relay secret.
-func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, serverID string, provision bool, logger *logging.Logger) (TelegramRegistrationStatus, string) {
+// scrubs it from every subsequent log line for ALL callers. It also sends the
+// provision-intent header so the server may (re)issue a token.
+func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) (TelegramRegistrationStatus, string) {
 	logTelegramRegistrationDebug(logger, "Telegram registration: start (serverAPIHost=%q serverID=%q len=%d)", serverAPIHost, serverID, len(serverID))
 
 	if serverID == "" {
@@ -199,14 +198,14 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 
 	// Uses http.DefaultClient (its httptest tests hit a real client; no seam here) via
 	// the shared serverbot transport (host normalize, X-Proxsave-Version always,
-	// X-Proxsave-Provision iff provision, bounded 8 KiB read, error redaction). This is
+	// X-Proxsave-Provision set, bounded 8 KiB read, error redaction). This is
 	// the pre-auth get-chat-id call: NO X-Server-Auth (Secret left empty).
-	logTelegramRegistrationDebug(logger, "Telegram registration: get-chat-id GET /api/get-chat-id (serverID=%q provisionIntent=%v)", serverID, provision)
+	logTelegramRegistrationDebug(logger, "Telegram registration: get-chat-id GET /api/get-chat-id (serverID=%q provisionIntent=true)", serverID)
 	resp, err := serverbot.New(serverAPIHost, http.DefaultClient, logger).Do(ctx, serverbot.Request{
 		Method:    http.MethodGet,
 		Path:      "/api/get-chat-id",
 		Query:     url.Values{"server_id": {serverID}},
-		Provision: provision,
+		Provision: true,
 		Timeout:   5 * time.Second,
 		MaxBytes:  8192,
 	})
@@ -286,27 +285,18 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 	}
 }
 
-// CheckTelegramRegistration checks the registration status on the centralized
-// server. Signature and behavior are unchanged; it is the bare status probe and
-// sends NO provision-intent header, so it never issues/re-issues the relay secret
-// (see CheckTelegramRegistrationAndProvision).
-func CheckTelegramRegistration(ctx context.Context, serverAPIHost, serverID string, logger *logging.Logger) TelegramRegistrationStatus {
-	status, _ := checkTelegramRegistrationWithSecret(ctx, serverAPIHost, serverID, false, logger)
-	return status
-}
-
-// CheckTelegramRegistrationAndProvision performs the same handshake AS a real
-// provisioning call (provision-intent header set) and, on a 200 that carries a
-// notify_secret, OVERWRITES the persisted secret and CONFIRMS it back to the
+// CheckTelegramRegistrationAndProvision performs the get-chat-id handshake AS a
+// real provisioning call (provision-intent header set) and, on a 200 that carries
+// a notify_secret, OVERWRITES the persisted secret and CONFIRMS it back to the
 // server so the subsequent Send in this same run relays through the server
 // instead of leaking the bot token. The server returns a token ONLY when it wants
 // the client to (re)adopt it, so there is no idempotent skip. The returned
-// Status is identical to CheckTelegramRegistration's; persist and confirm are
+// Status is the handshake's classification; persist and confirm are
 // best-effort and NEVER change the returned Status. The Provision field records
 // what the persist+confirm phase did so callers (the install Check UIs) can show
 // a distinct message without altering the registration status.
 func CheckTelegramRegistrationAndProvision(ctx context.Context, serverAPIHost, serverID, baseDir string, logger *logging.Logger) TelegramRegistrationResult {
-	status, secret := checkTelegramRegistrationWithSecret(ctx, serverAPIHost, serverID, true, logger)
+	status, secret := checkTelegramRegistrationWithSecret(ctx, serverAPIHost, serverID, logger)
 	res := TelegramRegistrationResult{Status: status, Provision: TelegramProvisionNotApplicable}
 
 	if status.Code != 200 {

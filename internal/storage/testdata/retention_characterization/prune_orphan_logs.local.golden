@@ -1,0 +1,9 @@
+--- log folder variable not set ---
+--- no backup carries a run key ---
+DEBUG    local orphan logs: no backup kept, skipped
+--- log folder cannot be listed ---
+DEBUG    local orphan logs: scan path=<ROOT>/logs-file pattern=backup-*.log
+DEBUG    local orphan logs: failed stage=list path=<ROOT>/logs-file error=open <ROOT>/logs-file: not a directory
+--- context cancelled ---
+DEBUG    local orphan logs: scan path=<ROOT>/logs pattern=backup-*.log
+DEBUG    local orphan logs: failed stage=list path=<ROOT>/logs error=local-log-list <ROOT>/logs: canceled

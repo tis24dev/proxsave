@@ -114,7 +114,7 @@ Build from source for development or an architecture without a published release
 
 ### Prerequisites
 
-Install Git, make, and a Go toolchain satisfying `go.mod` (currently Go 1.26.9). Choose the Go download for your host architecture and verify it according to the Go project's instructions. Install rclone only if you plan to use cloud storage. Do not extract a new Go toolchain over an existing `/usr/local/go` tree.
+Install Git, make, and a Go toolchain satisfying `go.mod` (currently Go 1.26.10). Choose the Go download for your host architecture and verify it according to the Go project's instructions. Install rclone only if you plan to use cloud storage. Do not extract a new Go toolchain over an existing `/usr/local/go` tree.
 
 ### Building from Source
 

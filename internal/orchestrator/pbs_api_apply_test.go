@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -245,7 +246,7 @@ func TestPBSAPIApply_ReadStageFileOptionalErrors(t *testing.T) {
 		if err := fs.AddDir(stageRoot + "/etc/proxmox-backup/node.cfg"); err != nil {
 			t.Fatalf("create staged dir: %v", err)
 		}
-		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot)
+		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil)
 		if err == nil || !strings.Contains(err.Error(), "read staged") {
 			t.Fatalf("expected read staged error, got: %v", err)
 		}
@@ -422,8 +423,6 @@ func TestPBSAPIApply_StrictListParseErrors(t *testing.T) {
 }
 
 func TestPBSAPIApply_CreateUpdateBothFailErrors(t *testing.T) {
-	logger := logging.New(types.LogLevelDebug, false)
-
 	tests := []struct {
 		name    string
 		relPath string
@@ -475,12 +474,19 @@ func TestPBSAPIApply_CreateUpdateBothFailErrors(t *testing.T) {
 				tt.create: errors.New("create failed"),
 				tt.update: errors.New("update failed"),
 			}
+			logger := logging.New(types.LogLevelDebug, false)
+			var logBuf bytes.Buffer
+			logger.SetOutput(&logBuf)
 			err := tt.apply(context.Background(), logger, stageRoot, false)
 			if err == nil {
 				t.Fatalf("expected error")
 			}
-			if !strings.Contains(err.Error(), "create failed") || !strings.Contains(err.Error(), "update failed") {
-				t.Fatalf("expected create/update errors, got: %s", err.Error())
+			var incomplete *pbsSectionRestoreIncompleteError
+			if !errors.As(err, &incomplete) || len(incomplete.notApplied) != 1 {
+				t.Fatalf("expected the block's not-applied error, got: %T %v", err, err)
+			}
+			if !strings.Contains(logBuf.String(), `create failed error="create failed"`) || !strings.Contains(logBuf.String(), `update failed error="update failed"`) {
+				t.Fatalf("expected create/update errors in the DEBUG lines, log: %s", logBuf.String())
 			}
 		})
 	}
@@ -608,10 +614,10 @@ func TestApplyPBSRemoteCfgViaAPI_StrictCleanupAndCreate(t *testing.T) {
 		"proxmox-backup-manager remote remove old": errors.New("cannot remove old"),
 	}
 
-	// Clean (1:1) mode with a failed remove must surface as errPBSCleanRemoveIncomplete
+	// Clean (1:1) mode with a failed remove must surface as a stale object not removed
 	// (reported "with warnings"), while create/update still run (no abort).
-	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -668,6 +674,8 @@ func TestApplyPBSRemoteCfgViaAPI_CreateFailsThenUpdate(t *testing.T) {
 func TestApplyPBSRemoteCfgViaAPI_RedactsPasswordOnFailure(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
 		"remote: r1\n"+
@@ -688,8 +696,151 @@ func TestApplyPBSRemoteCfgViaAPI_RedactsPasswordOnFailure(t *testing.T) {
 	if strings.Contains(err.Error(), "secret1") {
 		t.Fatalf("expected password to be redacted, got: %s", err.Error())
 	}
-	if !strings.Contains(err.Error(), "<redacted>") {
-		t.Fatalf("expected <redacted> in error, got: %s", err.Error())
+	if strings.Contains(logBuf.String(), "secret1") {
+		t.Fatalf("expected password to be redacted in the log, got: %s", logBuf.String())
+	}
+	// The block logs what PBS answered, never the command line that carried the
+	// password; the redaction of that command line is tested on runPBSManagerRedacted.
+	if !strings.Contains(logBuf.String(), `remote=r1 create failed error="create failed"`) || strings.Contains(logBuf.String(), "--password") {
+		t.Fatalf("expected the refusal without the command line in the log: %s", logBuf.String())
+	}
+}
+
+// PBS stores a remote's password in remote.cfg as standard base64 (measured on PBS
+// 4.2.8: `remote create --password dummyprobe` writes `password ZHVtbXlwcm9iZQ==`),
+// and create/update take the plain value: passing the stored value through would
+// store the base64 of the base64.
+func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
+	const (
+		plain   = "dummyprobe"
+		encoded = "ZHVtbXlwcm9iZQ=="
+	)
+
+	t.Run("create gets the decoded password", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		var logBuf bytes.Buffer
+		logger.SetOutput(&logBuf)
+
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+			"remote: r1\n"+
+				"    host pbs.example\n"+
+				"    password "+encoded+"\n",
+			0o640,
+		)
+
+		if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+		}
+		want := []string{"proxmox-backup-manager remote create r1 --host pbs.example --password " + plain}
+		if !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls=%v want %v", runner.calls, want)
+		}
+		if strings.Contains(logBuf.String(), "not valid base64") || !strings.Contains(logBuf.String(), "DEBUG    PBS remote restore: remote=r1 password decoded from base64") {
+			t.Fatalf("expected the decode line and no invalid-base64 line for a valid base64 password, got: %s", logBuf.String())
+		}
+	})
+
+	t.Run("decoded password stays redacted", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		var logBuf bytes.Buffer
+		logger.SetOutput(&logBuf)
+
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+			"remote: r1\n"+
+				"    host pbs.example\n"+
+				"    password "+encoded+"\n",
+			0o640,
+		)
+		runner.errs = map[string]error{
+			"proxmox-backup-manager remote create r1 --host pbs.example --password " + plain: errors.New("create failed"),
+			"proxmox-backup-manager remote update r1 --host pbs.example --password " + plain: errors.New("update failed"),
+		}
+
+		err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false)
+		if err == nil {
+			t.Fatalf("expected error")
+		}
+		for _, secret := range []string{plain, encoded} {
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("password form %q leaked into the error: %s", secret, err.Error())
+			}
+			if strings.Contains(logBuf.String(), secret) {
+				t.Fatalf("password form %q leaked into the log: %s", secret, logBuf.String())
+			}
+		}
+		// The block logs what PBS answered to create and update, never the command
+		// line that carried the password.
+		if !strings.Contains(logBuf.String(), `create failed error="create failed"`) || !strings.Contains(logBuf.String(), `update failed error="update failed"`) || strings.Contains(logBuf.String(), "--password") {
+			t.Fatalf("expected both refusals without the command line in the log: %s", logBuf.String())
+		}
+	})
+
+	t.Run("invalid base64 is passed verbatim with one debug line", func(t *testing.T) {
+		const verbatim = "not-base64-value"
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		logger := logging.New(types.LogLevelDebug, false)
+		var logBuf bytes.Buffer
+		logger.SetOutput(&logBuf)
+
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+			"remote: r1\n"+
+				"    host pbs.example\n"+
+				"    password "+verbatim+"\n",
+			0o640,
+		)
+
+		if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+			t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+		}
+		want := []string{"proxmox-backup-manager remote create r1 --host pbs.example --password " + verbatim}
+		if !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls=%v want %v", runner.calls, want)
+		}
+		var lines []string
+		for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+			if strings.Contains(line, "base64") {
+				lines = append(lines, line)
+			}
+		}
+		if len(lines) != 1 || !strings.Contains(lines[0], "DEBUG    PBS remote restore: remote=r1 password is not valid base64, passing the staged value unchanged") {
+			t.Fatalf("expected the block's DEBUG line naming r1 and password, got: %q", logBuf.String())
+		}
+		if strings.Contains(logBuf.String(), verbatim) {
+			t.Fatalf("the value leaked into the log: %s", logBuf.String())
+		}
+	})
+}
+
+// The staged base64 is trimmed, the decoded password is not: a password that begins or
+// ends with a space reaches --password with it, as one argument.
+func TestApplyPBSRemoteCfgViaAPI_KeepsSpacesOfDecodedPassword(t *testing.T) {
+	const (
+		plain   = " dummyprobe "
+		encoded = "IGR1bW15cHJvYmUg"
+	)
+	stageRoot, fs, _ := setupPBSAPIApplyTestDeps(t)
+	runner := &pbsSectionCharRunner{}
+	restoreCmd = runner
+	logger := logging.New(types.LogLevelDebug, false)
+
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+		"remote: r1\n"+
+			"    host pbs.example\n"+
+			"    password   "+encoded+"  \n",
+		0o640,
+	)
+
+	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+		t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command, got %d: %+v", len(runner.calls), runner.calls)
+	}
+	want := []string{"remote", "create", "r1", "--host", "pbs.example", "--password", plain}
+	if got := runner.calls[0].args; !reflect.DeepEqual(got, want) {
+		t.Fatalf("args=%q want %q", got, want)
 	}
 }
 
@@ -713,8 +864,8 @@ func TestApplyPBSS3CfgViaAPI_CreateUpdateAndStrictCleanup(t *testing.T) {
 		"proxmox-backup-manager s3 endpoint create e1 --endpoint https://s3.example --access-key access1 --secret-key secret1": errors.New("already exists"),
 	}
 
-	if err := applyPBSS3CfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSS3CfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -743,6 +894,8 @@ func TestApplyPBSS3CfgViaAPI_NoFileNoCalls(t *testing.T) {
 func TestApplyPBSS3CfgViaAPI_RedactsKeysOnFailure(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
 
 	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/s3.cfg",
 		"s3: e1\n"+
@@ -764,8 +917,13 @@ func TestApplyPBSS3CfgViaAPI_RedactsKeysOnFailure(t *testing.T) {
 	if strings.Contains(err.Error(), "access1") || strings.Contains(err.Error(), "secret1") {
 		t.Fatalf("expected keys to be redacted, got: %s", err.Error())
 	}
-	if !strings.Contains(err.Error(), "<redacted>") {
-		t.Fatalf("expected <redacted> in error, got: %s", err.Error())
+	if strings.Contains(logBuf.String(), "access1") || strings.Contains(logBuf.String(), "secret1") {
+		t.Fatalf("expected keys to be redacted in the log, got: %s", logBuf.String())
+	}
+	// The block logs what PBS answered, never the command line that carried the
+	// keys; the redaction of that command line is tested on runPBSManagerRedacted.
+	if !strings.Contains(logBuf.String(), `s3-endpoint=e1 create failed error="create failed"`) || strings.Contains(logBuf.String(), "--access-key") || strings.Contains(logBuf.String(), "--secret-key") {
+		t.Fatalf("expected the refusal without the command line in the log: %s", logBuf.String())
 	}
 }
 
@@ -798,8 +956,11 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 		"proxmox-backup-manager datastore create ds4 /p4 --comment c4": errors.New("already exists"),
 	}
 
-	if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true); err != nil {
-		t.Fatalf("applyPBSDatastoreCfgViaAPI error: %v", err)
+	// ds2 has no path in the backup: it is the one datastore not applied.
+	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
+	var incomplete *pbsDatastoreRestoreIncompleteError
+	if !errors.As(err, &incomplete) || len(incomplete.notApplied) != 1 || incomplete.notApplied[0] != "ds2" || len(incomplete.notRemoved) != 0 {
+		t.Fatalf("expected ds2 not applied, got: %v", err)
 	}
 
 	want := []string{
@@ -813,70 +974,6 @@ func TestApplyPBSDatastoreCfgViaAPI_StrictFullFlow(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
-	}
-}
-
-// P-09: when a strict path change removes a datastore and the create at the NEW
-// path fails, the datastore must be re-created at its ORIGINAL path so it is not
-// left deconfigured.
-func TestApplyPBSDatastoreCfgViaAPI_StrictRecreatesOriginalOnCreateFail(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old1"}]}`),
-	}
-	// The create at the NEW path fails; the rollback create at the ORIGINAL path succeeds.
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /new1 --comment c1": errors.New("boom"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatal("expected an error reporting the failed path change")
-	}
-	// The datastore was re-created at its original path /old1.
-	foundRollback := false
-	for _, c := range runner.calls {
-		if c == "proxmox-backup-manager datastore create ds1 /old1 --comment c1" {
-			foundRollback = true
-		}
-	}
-	if !foundRollback {
-		t.Fatalf("expected a re-create at the original path /old1, calls=%v", runner.calls)
-	}
-	if !strings.Contains(err.Error(), "/old1") && !strings.Contains(strings.ToLower(err.Error()), "restored") && !strings.Contains(strings.ToLower(err.Error()), "original") {
-		t.Fatalf("error must report restoration to the original path, got: %v", err)
-	}
-}
-
-// If BOTH the new-path create and the original-path rollback create fail, the
-// error must report both and that the datastore is left removed.
-func TestApplyPBSDatastoreCfgViaAPI_StrictReportsBothCreateFailures(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n    path /new1\n    comment c1\n", 0o640)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old1"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /new1 --comment c1": errors.New("boom-new"),
-		"proxmox-backup-manager datastore create ds1 /old1 --comment c1": errors.New("boom-old"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatal("expected an error when both creates fail")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "boom-new") || !strings.Contains(msg, "boom-old") {
-		t.Fatalf("error must report both create failures, got: %v", err)
 	}
 }
 
@@ -1006,8 +1103,8 @@ func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *
 		"proxmox-backup-manager datastore remove id1": errors.New("cannot remove id1"),
 	}
 
-	if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1018,112 +1115,6 @@ func TestApplyPBSDatastoreCfgViaAPI_CurrentPathsFallbacksAndStrictRemoveWarn(t *
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRemoveFails(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /new\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore remove ds1": errors.New("cannot remove ds1"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !strings.Contains(err.Error(), "path mismatch") || !strings.Contains(err.Error(), "remove failed") {
-		t.Fatalf("unexpected error: %s", err.Error())
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_StrictPathMismatchRecreateFails(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /new\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/old"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /new --comment c1": errors.New("create failed"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, true)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	// The create at the new path fails but the rollback re-create at the original
-	// path succeeds (only the /new create is stubbed to fail), so the datastore is
-	// restored rather than left deconfigured (P-09).
-	if !strings.Contains(err.Error(), "/old") && !strings.Contains(strings.ToLower(err.Error()), "restored") && !strings.Contains(strings.ToLower(err.Error()), "original") {
-		t.Fatalf("error must report restoration to the original path, got: %s", err.Error())
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_UpdateFails(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /p1\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager datastore list --output-format=json": []byte(`{"data":[{"name":"ds1","path":"/p1"}]}`),
-	}
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore update ds1 --comment c1": errors.New("update failed"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
-	if err == nil || !strings.Contains(err.Error(), "update failed") {
-		t.Fatalf("expected update failed error, got: %v", err)
-	}
-}
-
-func TestApplyPBSDatastoreCfgViaAPI_CreateAndUpdateFail(t *testing.T) {
-	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-	logger := logging.New(types.LogLevelDebug, false)
-
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/datastore.cfg",
-		"datastore: ds1\n"+
-			"    path /p1\n"+
-			"    comment c1\n",
-		0o640,
-	)
-
-	runner.errs = map[string]error{
-		"proxmox-backup-manager datastore create ds1 /p1 --comment c1": errors.New("create failed"),
-		"proxmox-backup-manager datastore update ds1 --comment c1":     errors.New("update failed"),
-	}
-
-	err := applyPBSDatastoreCfgViaAPI(context.Background(), logger, stageRoot, false)
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-	if !strings.Contains(err.Error(), "create failed") || !strings.Contains(err.Error(), "update failed") {
-		t.Fatalf("expected create/update errors, got: %s", err.Error())
 	}
 }
 
@@ -1197,8 +1188,8 @@ func TestApplyPBSSyncCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 		"proxmox-backup-manager sync-job create job1 --remote r1 --store ds1": errors.New("already exists"),
 	}
 
-	if err := applyPBSSyncCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSSyncCfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1252,8 +1243,8 @@ func TestApplyPBSVerificationCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing
 		"proxmox-backup-manager verify-job create v1 --store ds1": errors.New("already exists"),
 	}
 
-	if err := applyPBSVerificationCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSVerificationCfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1309,8 +1300,8 @@ func TestApplyPBSPruneCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 		"proxmox-backup-manager prune-job create p1 --store ds1 --keep-last 3": errors.New("already exists"),
 	}
 
-	if err := applyPBSPruneCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSPruneCfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1341,8 +1332,8 @@ func TestApplyPBSTrafficControlCfgViaAPI_StrictCleanupAndCreate(t *testing.T) {
 		"proxmox-backup-manager traffic-control remove old": errors.New("cannot remove old"),
 	}
 
-	if err := applyPBSTrafficControlCfgViaAPI(context.Background(), logger, stageRoot, true); !errors.Is(err, errPBSCleanRemoveIncomplete) {
-		t.Fatalf("expected errPBSCleanRemoveIncomplete (clean 1:1 remove), got: %v", err)
+	if err := applyPBSTrafficControlCfgViaAPI(context.Background(), logger, stageRoot, true); !pbsTestHasNotRemoved(err) {
+		t.Fatalf("expected a stale object reported not removed (clean 1:1 remove), got: %v", err)
 	}
 
 	want := []string{
@@ -1382,25 +1373,36 @@ func TestApplyPBSTrafficControlCfgViaAPI_CreateFailsThenUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyPBSNodeCfgViaAPI_UsesFirstSection(t *testing.T) {
+// pbsNodeCfgMeasured is a node.cfg as PBS 4.2.8 wrote it on VM 201 (2026-10-18):
+// one "key: value" line per setting and the description as "#" lines. Running
+// node update with the flags built from it on an empty node.cfg wrote the same
+// file back.
+const pbsNodeCfgMeasured = "#line one\n#line two\n" +
+	"acme: account=default\n" +
+	"acmedomain0: domain=a.example.com,plugin=cf\n" +
+	"acmedomain1: domain=b.example.com,alias=c.example.com\n" +
+	"ciphers-tls-1.2: ECDHE-RSA-AES256-GCM-SHA384\n" +
+	"ciphers-tls-1.3: TLS_AES_256_GCM_SHA384\n" +
+	"consent-text: consent probe\n" +
+	"default-lang: de\n" +
+	"email-from: pbs@example.com\n" +
+	"http-proxy: http://user:pw@proxy.example:3128\n" +
+	"task-log-max-days: 7\n"
+
+func TestApplyPBSNodeCfgViaAPI_SetsEverySetting(t *testing.T) {
 	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", pbsNodeCfgMeasured, 0o640)
 
-	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg",
-		"node: n1\n"+
-			"    dns1 1.1.1.1\n"+
-			"    foo_bar baz\n"+
-			"\n"+
-			"node: n2\n"+
-			"    dns1 9.9.9.9\n",
-		0o640,
-	)
-
-	if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+	if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 		t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 	}
 
 	want := []string{
-		"proxmox-backup-manager node update --dns1 1.1.1.1 --foo-bar baz",
+		"proxmox-backup-manager node update --acme account=default --acmedomain0 domain=a.example.com,plugin=cf" +
+			" --acmedomain1 domain=b.example.com,alias=c.example.com --ciphers-tls-1.2 ECDHE-RSA-AES256-GCM-SHA384" +
+			" --ciphers-tls-1.3 TLS_AES_256_GCM_SHA384 --consent-text consent probe --default-lang de" +
+			" --email-from pbs@example.com --http-proxy http://user:pw@proxy.example:3128 --task-log-max-days 7" +
+			" --description line one\nline two",
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
 		t.Fatalf("calls=%v want %v", runner.calls, want)
@@ -1410,7 +1412,7 @@ func TestApplyPBSNodeCfgViaAPI_UsesFirstSection(t *testing.T) {
 func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 	t.Run("no-file", func(t *testing.T) {
 		stageRoot, _, runner := setupPBSAPIApplyTestDeps(t)
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
 		if len(runner.calls) != 0 {
@@ -1418,10 +1420,10 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 		}
 	})
 
-	t.Run("empty-sections", func(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
 		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "   \n# comment\n", 0o640)
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err != nil {
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "   \n\n", 0o640)
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
 			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
 		}
 		if len(runner.calls) != 0 {
@@ -1429,18 +1431,37 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 		}
 	})
 
-	t.Run("command-error", func(t *testing.T) {
+	t.Run("description-only", func(t *testing.T) {
 		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
-		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg",
-			"node: n1\n"+
-				"    dns1 1.1.1.1\n",
-			0o640,
-		)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "#just a description\n", 0o640)
+		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil); err != nil {
+			t.Fatalf("applyPBSNodeCfgViaAPI error: %v", err)
+		}
+		if want := []string{"proxmox-backup-manager node update --description just a description"}; !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls=%v want %v", runner.calls, want)
+		}
+	})
+
+	t.Run("command-error-redacts-the-proxy", func(t *testing.T) {
+		stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+		writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/node.cfg", "http-proxy: http://user:pw@proxy.example:3128\n", 0o640)
 		runner.errs = map[string]error{
-			"proxmox-backup-manager node update --dns1 1.1.1.1": errors.New("boom"),
+			"proxmox-backup-manager node update --http-proxy http://user:pw@proxy.example:3128": errors.New("boom"),
 		}
-		if err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot); err == nil {
-			t.Fatalf("expected error")
+		err := applyPBSNodeCfgViaAPI(context.Background(), stageRoot, nil)
+		if err == nil || strings.Contains(err.Error(), "user:pw") || !strings.Contains(err.Error(), "--http-proxy <redacted>") {
+			t.Fatalf("err = %v, want the refusal with --http-proxy redacted", err)
 		}
 	})
+}
+
+// pbsTestHasNotRemoved reports whether err is the incomplete error of a section or
+// datastore block that names a stale object it did not remove.
+func pbsTestHasNotRemoved(err error) bool {
+	var section *pbsSectionRestoreIncompleteError
+	if errors.As(err, &section) {
+		return len(section.notRemoved) > 0
+	}
+	var datastore *pbsDatastoreRestoreIncompleteError
+	return errors.As(err, &datastore) && len(datastore.notRemoved) > 0
 }

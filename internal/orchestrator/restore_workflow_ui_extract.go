@@ -412,9 +412,25 @@ func (w *restoreUIWorkflowRun) runStageApplyStep(step restoreStageApplyStep) err
 	return nil
 }
 
+// stageApplyOutcomeLoggedError is a staged-apply step failure whose outcome lines
+// the step already wrote. The runner records the restore warning from it and keeps
+// the error at DEBUG, without a second visible line.
+type stageApplyOutcomeLoggedError struct {
+	err error
+}
+
+func (e *stageApplyOutcomeLoggedError) Error() string { return e.err.Error() }
+
+func (e *stageApplyOutcomeLoggedError) Unwrap() error { return e.err }
+
 func (w *restoreUIWorkflowRun) logStageApplyWarning(name string, err error) {
 	if errors.Is(err, ErrAccessControlApplyNotCommitted) {
 		w.logAccessControlNotCommitted(err)
+		return
+	}
+	var logged *stageApplyOutcomeLoggedError
+	if errors.As(err, &logged) {
+		w.logger.Debug("%s: outcome already reported: %v", name, err)
 		return
 	}
 	w.logger.Warning("%s: %v", name, err)

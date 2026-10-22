@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/ui/theme"
 )
 
 // Hookable functions for testing staged PBS apply logic without touching the real system/API.
@@ -26,6 +27,7 @@ var (
 	pbsStagedApplySyncCfgViaAPIFn           = applyPBSSyncCfgViaAPI
 	pbsStagedApplyVerificationCfgViaAPIFn   = applyPBSVerificationCfgViaAPI
 	pbsStagedApplyPruneCfgViaAPIFn          = applyPBSPruneCfgViaAPI
+	pbsStagedApplyAcmePluginsCfgViaAPIFn    = applyPBSAcmePluginsCfgViaAPI
 )
 
 func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool) (err error) {
@@ -74,59 +76,53 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		}
 	}
 
-	// failedItems accumulates config items that ended up NOT applied (the API
-	// apply failed and either there was no fallback or the fallback also failed),
-	// so the caller reports the restore "with warnings" instead of a clean
-	// success rather than silently swallowing failed applies (BH-003).
-	var failedItems []string
+	// outcomeLogged holds the blocks that left something not applied or not
+	// removed, whose outcomes they already logged: the restore ends with
+	// warnings (BH-003) and the step adds no line of its own.
+	var outcomeLogged []error
 
 	if plan.HasCategoryID("pbs_host") {
 		// Always restore file-only configs (no stable API coverage yet).
 		// ACME should be applied before node config (node.cfg references ACME accounts/plugins).
 		// The accounts are a directory, not a .cfg, so they get their own apply.
-		if err := applyPBSAcmeAccountsFromStage(logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", pbsAcmeAccountsRelPath, err)
-			failedItems = append(failedItems, pbsAcmeAccountsRelPath)
+		// Each block logs its own outcome: a failure is recorded as already logged.
+		if err := applyPBSAcmeAccountsBlock(logger, stageRoot); err != nil {
+			outcomeLogged = append(outcomeLogged, err)
 		}
-		for _, rel := range []string{
-			"etc/proxmox-backup/acme/plugins.cfg",
-			"etc/proxmox-backup/metricserver.cfg",
-			"etc/proxmox-backup/proxy.cfg",
-		} {
-			if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-				logger.Warning("PBS staged apply: %s: %v", rel, err)
-				failedItems = append(failedItems, rel)
+		// The ACME plugins go through the PBS API as a section config. Without the
+		// API they are written from the backup file in Merge mode too, as they
+		// always were.
+		if apiAvailable {
+			if err := pbsStagedApplyAcmePluginsCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsAcmePluginsSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
+				}
+			}
+		} else {
+			pbsSectionFileBlock(ctx, logger, stageRoot, strict, pbsAcmePluginsSectionCfg(), &outcomeLogged)
+		}
+		for _, f := range []pbsConfigFileBlock{pbsMetricServerFileBlock, pbsProxyFileBlock} {
+			if err := applyPBSConfigFileBlock(logger, stageRoot, f); err != nil {
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		}
 
 		if apiAvailable {
 			if err := pbsStagedApplyTrafficControlCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: traffic-control failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "traffic-control.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "traffic-control.cfg", allowFileFallback, func() error {
-					return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/traffic-control.cfg")
-				}) {
-					failedItems = append(failedItems, "traffic-control.cfg")
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsTrafficControlSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
 				}
 			}
-			if err := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot); err != nil {
-				logger.Warning("PBS API apply: node config failed: %v", err)
-				if !pbsFallbackApplied(logger, "node.cfg", allowFileFallback, func() error {
-					return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/node.cfg")
-				}) {
-					failedItems = append(failedItems, "node.cfg")
+			if err := applyPBSNodeCfgBlock(ctx, logger, stageRoot, strict, true); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
 				}
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		} else if allowFileFallback {
-			for _, rel := range []string{
-				"etc/proxmox-backup/traffic-control.cfg",
-				"etc/proxmox-backup/node.cfg",
-			} {
-				if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-					logger.Warning("PBS staged apply: %s: %v", rel, err)
-					failedItems = append(failedItems, rel)
-				}
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsTrafficControlSectionCfg(), &outcomeLogged)
+			if err := applyPBSNodeCfgBlock(ctx, logger, stageRoot, true, false); err != nil {
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping node.cfg/traffic-control.cfg: merge mode requires PBS API apply")
@@ -136,33 +132,41 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("datastore_pbs") {
 		if apiAvailable {
 			if err := pbsStagedApplyS3CfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: s3.cfg failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "s3.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "s3.cfg", allowFileFallback, func() error {
-					return applyPBSS3CfgFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "s3.cfg")
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsS3SectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyDatastoreCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: datastore.cfg failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "datastore.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "datastore.cfg", allowFileFallback, func() error {
-					return applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "datastore.cfg")
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					// Cancelled: no line, no file fallback, the restore stops.
+					return ctxErr
+				}
+				var incomplete *pbsDatastoreRestoreIncompleteError
+				var stopped *pbsDatastoreRestoreNotAppliedError
+				switch {
+				case errors.As(err, &stopped):
+					// The block stopped before any datastore through the API, ran the
+					// file-based fallback itself in Clean mode, and logged its outcome.
+					outcomeLogged = append(outcomeLogged, err)
+				case errors.As(err, &incomplete):
+					// The datastore block already logged the outcome of every datastore
+					// and its own: no line here, no file fallback over those outcomes,
+					// and the restore still ends with warnings.
+					outcomeLogged = append(outcomeLogged, err)
+				default:
+					// An error the block does not return today: the block again, with
+					// that error as its event, written from the backup file in Clean
+					// mode and not applied in Merge mode.
+					if ferr := applyPBSDatastoreCfgAfterAPIError(ctx, logger, stageRoot, strict, err); ferr != nil {
+						outcomeLogged = append(outcomeLogged, ferr)
+					}
 				}
 			}
 		} else if allowFileFallback {
-			if err := applyPBSS3CfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PBS staged apply: s3.cfg: %v", err)
-				failedItems = append(failedItems, "s3.cfg")
-			}
-			if err := applyPBSDatastoreCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PBS staged apply: datastore.cfg: %v", err)
-				failedItems = append(failedItems, "datastore.cfg")
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsS3SectionCfg(), &outcomeLogged)
+			if err := applyPBSDatastoreCfgFileBlock(ctx, logger, stageRoot, pbsDatastoreEventAPIUnavailable, errors.New("PBS API unavailable")); err != nil {
+				// The block logged the outcome of every datastore and its own.
+				outcomeLogged = append(outcomeLogged, err)
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping datastore.cfg/s3.cfg: merge mode requires PBS API apply")
@@ -172,20 +176,12 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("pbs_remotes") {
 		if apiAvailable {
 			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: remote.cfg failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "remote.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "remote.cfg", allowFileFallback, func() error {
-					return applyPBSRemoteCfgFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "remote.cfg")
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsRemoteSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
 				}
 			}
 		} else if allowFileFallback {
-			if err := applyPBSRemoteCfgFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PBS staged apply: remote.cfg: %v", err)
-				failedItems = append(failedItems, "remote.cfg")
-			}
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsRemoteSectionCfg(), &outcomeLogged)
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
 		}
@@ -194,39 +190,23 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	if plan.HasCategoryID("pbs_jobs") {
 		if apiAvailable {
 			if err := pbsStagedApplySyncCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: sync jobs failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "sync.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "job configs", allowFileFallback, func() error {
-					return applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "sync.cfg")
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsSyncSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyVerificationCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: verification jobs failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "verification.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "job configs", allowFileFallback, func() error {
-					return applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "verification.cfg")
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsVerificationSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
 				}
 			}
 			if err := pbsStagedApplyPruneCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				logger.Warning("PBS API apply: prune jobs failed: %v", err)
-				if errors.Is(err, errPBSCleanRemoveIncomplete) {
-					failedItems = append(failedItems, "prune.cfg (clean 1:1 incomplete)")
-				} else if !pbsFallbackApplied(logger, "job configs", allowFileFallback, func() error {
-					return applyPBSJobConfigsFromStage(ctx, logger, stageRoot)
-				}) {
-					failedItems = append(failedItems, "prune.cfg")
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsPruneSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
 				}
 			}
 		} else if allowFileFallback {
-			if err := applyPBSJobConfigsFromStage(ctx, logger, stageRoot); err != nil {
-				logger.Warning("PBS staged apply: job configs: %v", err)
-				failedItems = append(failedItems, "job configs")
+			for _, cfg := range []pbsSectionCfg{pbsSyncSectionCfg(), pbsVerificationSectionCfg(), pbsPruneSectionCfg()} {
+				pbsSectionFileBlock(ctx, logger, stageRoot, true, cfg, &outcomeLogged)
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping sync/verification/prune configs: merge mode requires PBS API apply")
@@ -234,32 +214,64 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 	}
 
 	if plan.HasCategoryID("pbs_tape") {
-		if err := applyPBSTapeConfigsFromStage(ctx, logger, stageRoot); err != nil {
-			logger.Warning("PBS staged apply: tape configs: %v", err)
-			failedItems = append(failedItems, "tape configs")
+		// Tape is file-only: drives and changers need their device, and the keys
+		// are secret material. Each file is its own block.
+		for _, f := range pbsTapeFileBlocks {
+			if err := applyPBSConfigFileBlock(logger, stageRoot, f); err != nil {
+				outcomeLogged = append(outcomeLogged, err)
+			}
 		}
 	}
 
-	if len(failedItems) > 0 {
-		return fmt.Errorf("%d PBS config item(s) failed to apply: %s", len(failedItems), strings.Join(failedItems, ", "))
+	if len(outcomeLogged) > 0 {
+		return &stageApplyOutcomeLoggedError{err: joinPBSLoggedOutcomes(outcomeLogged)}
 	}
 	return nil
 }
 
-// pbsFallbackApplied runs the file-based fallback for a PBS API apply that
-// failed. It returns true when the item was applied (clean mode and the fallback
-// succeeded) and false when the item remains unapplied (merge mode has no
-// fallback, or the fallback itself failed) so the caller can record a failure.
-func pbsFallbackApplied(logger *logging.Logger, label string, allowFileFallback bool, fallback func() error) bool {
-	if !allowFileFallback {
-		return false
+// joinPBSLoggedOutcomes is the error of the blocks whose outcomes are already
+// logged, in the order they ran, each still matchable with errors.Is and errors.As.
+func joinPBSLoggedOutcomes(errs []error) error {
+	joined := errs[0]
+	for _, err := range errs[1:] {
+		joined = fmt.Errorf("%w; %w", joined, err)
 	}
-	logger.Warning("PBS staged apply: falling back to file-based %s", label)
-	if err := fallback(); err != nil {
-		logger.Warning("PBS staged apply: %s fallback: %v", label, err)
-		return false
+	return joined
+}
+
+// pbsSectionFileBlock writes, in Clean (1:1) mode without the PBS API, a section
+// config from the backup file as its block, which names what it does and logs
+// its outcome: a result other than nil is recorded in outcomeLogged.
+func pbsSectionFileBlock(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg, outcomeLogged *[]error) {
+	cause := fmt.Errorf("%s: PBS API unavailable", filepath.Base(cfg.file))
+	if err := applyPBSSectionCfgFileBlock(ctx, logger, stageRoot, strict, cfg, pbsDatastoreEventAPIUnavailable, cause); err != nil {
+		*outcomeLogged = append(*outcomeLogged, err)
 	}
-	return true
+}
+
+// pbsSectionApplyFailed handles the failed PBS API apply of a section config, the
+// same way for every config. A cancellation stops the staged apply: it is
+// returned, with no line and no fallback. A block that has already logged its
+// outcome is recorded in outcomeLogged, with no line and no fallback over it.
+// Any other error, which the block does not return today, runs the block again
+// with that error as its event: the file written from the backup in strict
+// (Clean 1:1) mode, the configuration not applied in Merge mode.
+func pbsSectionApplyFailed(ctx context.Context, logger *logging.Logger, stageRoot string, strict bool, cfg pbsSectionCfg, err error, outcomeLogged *[]error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// Cancelled: no line, no file fallback, the restore stops.
+		return ctxErr
+	}
+	if pbsSectionOutcomeLogged(err) {
+		// The section block already logged the outcome of every object and its
+		// own: no line here, no file fallback over those outcomes, and the
+		// restore still ends with warnings.
+		*outcomeLogged = append(*outcomeLogged, err)
+		return nil
+	}
+	if blockErr := applyPBSSectionCfgAfterAPIError(ctx, logger, stageRoot, strict, cfg, err); blockErr != nil {
+		*outcomeLogged = append(*outcomeLogged, blockErr)
+	}
+	return nil
 }
 
 func applyPBSRemoteCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
@@ -276,138 +288,235 @@ func applyPBSS3CfgFromStage(ctx context.Context, logger *logging.Logger, stageRo
 	return applyPBSConfigFileFromStage(ctx, logger, stageRoot, "etc/proxmox-backup/s3.cfg")
 }
 
-func applyPBSTapeConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	done := logging.DebugStart(logger, "pbs staged apply tape configs", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	paths := []string{
-		"etc/proxmox-backup/tape.cfg",
-		"etc/proxmox-backup/tape-job.cfg",
-		"etc/proxmox-backup/media-pool.cfg",
-	}
-	for _, rel := range paths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", rel, err)
-		}
-	}
-
-	// Tape encryption keys are JSON (no section headers) and should be applied as a sensitive file.
-	if err := applySensitiveFileFromStage(logger, stageRoot, "etc/proxmox-backup/tape-encryption-keys.json", "/etc/proxmox-backup/tape-encryption-keys.json", 0o600); err != nil {
-		logger.Warning("PBS staged apply: tape-encryption-keys.json: %v", err)
-	}
-
-	return nil
-}
-
 type pbsDatastoreBlock struct {
 	Name  string
 	Path  string
 	Lines []string
 }
 
-func applyPBSDatastoreCfgFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	_ = ctx // reserved for future validation hooks
+// pbsDatastoreFileItem is one datastore of the staged datastore.cfg as the
+// file-based apply judged it.
+type pbsDatastoreFileItem struct {
+	name string
+	path string
+	// deferReason is set when the datastore is not safe to apply now: its
+	// definition is saved aside instead of written.
+	deferReason string
+	// onRootFS: the path resolves to the root filesystem (its mount is missing?);
+	// the definition is written anyway.
+	onRootFS bool
+	// preflight is a problem found on the path of a datastore that has data; the
+	// definition is written anyway.
+	preflight string
+	// keptCurrent: the datastore is deferred and this PBS already has it, so its
+	// current definition is written back unchanged.
+	keptCurrent bool
+}
 
-	done := logging.DebugStart(logger, "pbs staged apply datastore.cfg", "stage=%s", stageRoot)
-	defer func() { done(err) }()
+// pbsDatastoreFileResult is what the file-based datastore.cfg apply found and did,
+// for the caller to log in its own form.
+type pbsDatastoreFileResult struct {
+	stagePath string
+	destPath  string
+	// missing: no datastore.cfg in the staging directory, nothing done.
+	missing bool
+	// emptied: the staged datastore.cfg has no datastore definitions (it is empty
+	// or holds only comments), the target file was removed.
+	emptied bool
+	// commentsOnly: the staged file that emptied the target holds only comments.
+	commentsOnly bool
+	// current holds the datastores of the target file before it was written,
+	// currentErr why they could not be read. removed are the datastores of this
+	// PBS that the write took out, set only once the write succeeded.
+	current    []pbsDatastoreBlock
+	currentErr error
+	removed    []string
+	// cleanup is what was removed with each removed datastore: its jobs and its
+	// permissions, as PBS removes them with the datastore.
+	cleanup map[string]*pbsDatastoreCleanup
+	// fixed is the number of malformed lines normalized in the staged file.
+	fixed int
+	// invalidReason is set when the staged file looked invalid and the
+	// configuration was rebuilt from pbs_datastore_inventory.json.
+	invalidReason  string
+	recoveredFrom  string
+	recoveredFixed int
+	// recoveryFailed is set when that rebuild failed; the current configuration
+	// is kept and nothing is written.
+	recoveryFailed string
+	items          []pbsDatastoreFileItem
+	// deferredPath is where the deferred definitions were saved, deferredErr why
+	// they could not be.
+	deferredPath string
+	deferredErr  error
+	// readFailed: the staged file could not be read or parsed.
+	readFailed bool
+	// noSafe: every definition was deferred, the current configuration is kept.
+	noSafe  bool
+	written int
+}
 
-	stagePath := filepath.Join(stageRoot, "etc/proxmox-backup/datastore.cfg")
-	data, err := restoreFS.ReadFile(stagePath)
+func (r pbsDatastoreFileResult) deferredCount() int {
+	n := 0
+	for _, it := range r.items {
+		if it.deferReason != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func (r pbsDatastoreFileResult) keptCurrentCount() int {
+	n := 0
+	for _, it := range r.items {
+		if it.keptCurrent {
+			n++
+		}
+	}
+	return n
+}
+
+// runPBSDatastoreCfgFile writes /etc/proxmox-backup/datastore.cfg from the staged
+// datastore.cfg, without logging: the datastores whose path is not safe to apply
+// now are saved aside, a staged file that looks invalid is rebuilt from the
+// datastore inventory.
+func runPBSDatastoreCfgFile(stageRoot string) (res pbsDatastoreFileResult, err error) {
+	res.stagePath = filepath.Join(stageRoot, "etc/proxmox-backup/datastore.cfg")
+	res.destPath = "/etc/proxmox-backup/datastore.cfg"
+	data, err := restoreFS.ReadFile(res.stagePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Skipped: datastore.cfg not present in staging directory")
-			return nil
+			res.missing = true
+			return res, nil
 		}
-		return fmt.Errorf("read staged datastore.cfg: %w", err)
+		res.readFailed = true
+		return res, fmt.Errorf("read staged datastore.cfg: %w", err)
 	}
+
+	res.current, res.currentErr = readCurrentPBSDatastoreBlocks(res.destPath)
 
 	raw := string(data)
 	if strings.TrimSpace(raw) == "" {
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Staged datastore.cfg is empty; removing target file to avoid PBS parse errors")
-		return removeIfExists("/etc/proxmox-backup/datastore.cfg")
+		res.emptied = true
+		return res, res.removeTarget()
 	}
 
 	normalized, fixed := normalizePBSDatastoreCfgContent(raw)
-	if fixed > 0 {
-		logger.Warning("PBS staged apply: datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", fixed)
-	}
-
+	res.fixed = fixed
 	blocks, err := parsePBSDatastoreCfgBlocks(normalized)
 	if err != nil {
-		return err
+		res.readFailed = true
+		return res, err
 	}
 	if len(blocks) == 0 {
-		logging.DebugStep(logger, "pbs staged apply datastore.cfg", "No datastore blocks detected; skipping apply")
-		return nil
+		// Only comments: a backup without datastores, like an empty file.
+		res.emptied = true
+		res.commentsOnly = true
+		return res, res.removeTarget()
 	}
 
 	if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
-		logger.Warning("PBS staged apply: staged datastore.cfg looks invalid (%s); attempting recovery from pbs_datastore_inventory.json", reason)
-		if recovered, src, recErr := loadPBSDatastoreCfgFromInventory(stageRoot); recErr != nil {
-			logger.Warning("PBS staged apply: unable to recover datastore.cfg from inventory (%v); leaving current configuration unchanged", recErr)
-			return nil
-		} else if strings.TrimSpace(recovered) == "" {
-			logger.Warning("PBS staged apply: recovered datastore.cfg from %s is empty; leaving current configuration unchanged", src)
-			return nil
-		} else {
-			normalized, fixed = normalizePBSDatastoreCfgContent(recovered)
-			if fixed > 0 {
-				logger.Warning("PBS staged apply: recovered datastore.cfg normalization fixed %d malformed line(s) (properties must be indented)", fixed)
-			}
-			blocks, err = parsePBSDatastoreCfgBlocks(normalized)
-			if err != nil {
-				logger.Warning("PBS staged apply: recovered datastore.cfg from %s is still invalid (%v); leaving current configuration unchanged", src, err)
-				return nil
-			}
-			if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
-				logger.Warning("PBS staged apply: recovered datastore.cfg from %s still looks invalid (%s); leaving current configuration unchanged", src, reason)
-				return nil
-			}
-			logger.Info("PBS staged apply: datastore.cfg recovered from %s", src)
+		res.invalidReason = reason
+		recovered, src, recErr := loadPBSDatastoreCfgFromInventory(stageRoot)
+		switch {
+		case recErr != nil:
+			res.recoveryFailed = fmt.Sprintf("unable to recover datastore.cfg from inventory (%v)", recErr)
+			return res, nil
+		case strings.TrimSpace(recovered) == "":
+			res.recoveryFailed = fmt.Sprintf("recovered datastore.cfg from %s is empty", src)
+			return res, nil
 		}
+		normalized, res.recoveredFixed = normalizePBSDatastoreCfgContent(recovered)
+		blocks, err = parsePBSDatastoreCfgBlocks(normalized)
+		if err != nil {
+			res.recoveryFailed = fmt.Sprintf("recovered datastore.cfg from %s is still invalid (%v)", src, err)
+			return res, nil
+		}
+		if reason := detectPBSDatastoreCfgDuplicateKeys(blocks); reason != "" {
+			res.recoveryFailed = fmt.Sprintf("recovered datastore.cfg from %s still looks invalid (%s)", src, reason)
+			return res, nil
+		}
+		res.recoveredFrom = src
 	}
 
-	var applyBlocks []pbsDatastoreBlock
-	var deferred []pbsDatastoreBlock
+	currentByName := make(map[string]pbsDatastoreBlock, len(res.current))
+	for _, b := range res.current {
+		currentByName[b.Name] = b
+	}
+	inBackup := make(map[string]bool, len(blocks))
+	var applyBlocks, deferred, keptCurrent []pbsDatastoreBlock
 	for _, b := range blocks {
-		ok, reason := shouldApplyPBSDatastoreBlock(b, logger)
+		inBackup[b.Name] = true
+		item := pbsDatastoreFileItem{name: b.Name, path: b.Path}
+		ok, reason, onRootFS, preflight := inspectPBSDatastoreBlock(b)
+		item.onRootFS, item.preflight = onRootFS, preflight
 		if ok {
 			applyBlocks = append(applyBlocks, b)
 		} else {
-			logging.DebugStep(logger, "pbs staged apply datastore.cfg", "Deferring datastore %s (path=%s): %s", b.Name, b.Path, reason)
+			item.deferReason = reason
 			deferred = append(deferred, b)
+			if cur, found := currentByName[b.Name]; found {
+				item.keptCurrent = true
+				keptCurrent = append(keptCurrent, cur)
+			}
 		}
+		res.items = append(res.items, item)
 	}
 
 	if len(deferred) > 0 {
-		if path, err := writeDeferredPBSDatastoreCfg(deferred); err != nil {
-			logger.Debug("Failed to write deferred datastore.cfg: %v", err)
-		} else {
-			logger.Warning("PBS staged apply: deferred %d datastore definition(s); saved to %s", len(deferred), path)
-		}
+		res.deferredPath, res.deferredErr = writeDeferredPBSDatastoreCfg(deferred)
 	}
-
 	if len(applyBlocks) == 0 {
-		logger.Warning("PBS staged apply: datastore.cfg contains no safe datastore definitions to apply; leaving current configuration unchanged")
-		return nil
+		res.noSafe = true
+		return res, nil
 	}
 
 	var out strings.Builder
-	for i, b := range applyBlocks {
+	for i, b := range append(applyBlocks, keptCurrent...) {
 		if i > 0 {
 			out.WriteString("\n")
 		}
 		out.WriteString(strings.TrimRight(strings.Join(b.Lines, "\n"), "\n"))
 		out.WriteString("\n")
 	}
-
-	destPath := "/etc/proxmox-backup/datastore.cfg"
-	if err := writeFileAtomic(destPath, []byte(out.String()), 0o640); err != nil {
-		return fmt.Errorf("write %s: %w", destPath, err)
+	if err := writeFileAtomic(res.destPath, []byte(out.String()), 0o640); err != nil {
+		return res, fmt.Errorf("write %s: %w", res.destPath, err)
 	}
+	res.written = len(applyBlocks)
+	for _, b := range res.current {
+		if !inBackup[b.Name] {
+			res.removed = append(res.removed, b.Name)
+		}
+	}
+	res.cleanup = removePBSDatastoreJobsAndACL(res.removed)
+	return res, nil
+}
 
-	logger.Info("PBS staged apply: datastore.cfg applied (%d datastore(s)); deferred=%d", len(applyBlocks), len(deferred))
+// removeTarget removes the target datastore.cfg for a staged file without
+// datastores; once it is gone every datastore of this PBS is removed.
+func (r *pbsDatastoreFileResult) removeTarget() error {
+	if err := removeIfExists(r.destPath); err != nil {
+		return err
+	}
+	for _, b := range r.current {
+		r.removed = append(r.removed, b.Name)
+	}
+	r.cleanup = removePBSDatastoreJobsAndACL(r.removed)
 	return nil
+}
+
+// readCurrentPBSDatastoreBlocks reads the datastores of the datastore.cfg on this
+// PBS; a missing file has none.
+func readCurrentPBSDatastoreBlocks(path string) ([]pbsDatastoreBlock, error) {
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	normalized, _ := normalizePBSDatastoreCfgContent(string(data))
+	return parsePBSDatastoreCfgBlocks(normalized)
 }
 
 type pbsDatastoreInventoryRestoreLite struct {
@@ -559,45 +668,55 @@ func parsePBSDatastoreCfgBlocks(content string) ([]pbsDatastoreBlock, error) {
 }
 
 func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logger) (bool, string) {
+	ok, reason, onRootFS, preflight := inspectPBSDatastoreBlock(block)
+	if logger != nil {
+		if onRootFS {
+			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", block.Name, filepath.Clean(strings.TrimSpace(block.Path)))
+		}
+		if preflight != "" {
+			logger.Warning("PBS datastore preflight: %s", preflight)
+		}
+	}
+	return ok, reason
+}
+
+// inspectPBSDatastoreBlock decides whether a staged datastore definition is safe to
+// write now. onRootFS reports a path that resolves to the root filesystem (its mount
+// may be offline), preflight a problem found on the path of a datastore with data;
+// both are written anyway.
+func inspectPBSDatastoreBlock(block pbsDatastoreBlock) (ok bool, reason string, onRootFS bool, preflight string) {
 	path := filepath.Clean(strings.TrimSpace(block.Path))
 	if path == "" || path == "." || path == string(os.PathSeparator) {
-		return false, "invalid or missing datastore path"
+		return false, "invalid or missing datastore path", false, ""
 	}
 
 	hasData, dataErr := pbsDatastoreHasData(path)
 	if dataErr != nil {
-		return false, fmt.Sprintf("datastore path inspection failed: %v", dataErr)
+		return false, fmt.Sprintf("datastore path inspection failed: %v", dataErr), false, ""
 	}
 
-	onRootFS, _, devErr := isPathOnRootFilesystem(path)
+	rootFS, _, devErr := isPathOnRootFilesystem(path)
 	if devErr != nil {
-		return false, fmt.Sprintf("filesystem identity check failed: %v", devErr)
+		return false, fmt.Sprintf("filesystem identity check failed: %v", devErr), false, ""
 	}
-	if onRootFS && isSuspiciousDatastoreMountLocation(path) && !hasData {
-		// On fresh restores the mount backing this path may be offline/not mounted yet.
-		// We still apply the datastore definition 1:1 so PBS shows the datastore as unavailable
-		// rather than silently dropping it from datastore.cfg.
-		if logger != nil {
-			logger.Warning("PBS staged apply: datastore %s path %s resolves to root filesystem (mount missing?), applying definition anyway", block.Name, path)
-		}
-	}
+	// On fresh restores the mount backing this path may be offline/not mounted yet.
+	// The datastore definition is still applied 1:1 so PBS shows the datastore as
+	// unavailable rather than silently dropping it from datastore.cfg.
+	onRootFS = rootFS && isSuspiciousDatastoreMountLocation(path) && !hasData
 
 	if hasData {
-		if warn := validatePBSDatastoreReadOnly(path); warn != "" && logger != nil {
-			logger.Warning("PBS datastore preflight: %s", warn)
-		}
-		return true, ""
+		return true, "", onRootFS, validatePBSDatastoreReadOnly(path)
 	}
 
 	unexpected, err := pbsDatastoreHasUnexpectedEntries(path)
 	if err != nil {
-		return false, fmt.Sprintf("failed to inspect datastore directory: %v", err)
+		return false, fmt.Sprintf("failed to inspect datastore directory: %v", err), onRootFS, ""
 	}
 	if unexpected {
-		return false, "datastore directory is not empty (unexpected entries present)"
+		return false, "datastore directory is not empty (unexpected entries present)", onRootFS, ""
 	}
 
-	return true, ""
+	return true, "", onRootFS, ""
 }
 
 func writeDeferredPBSDatastoreCfg(blocks []pbsDatastoreBlock) (string, error) {
@@ -624,24 +743,6 @@ func writeDeferredPBSDatastoreCfg(blocks []pbsDatastoreBlock) (string, error) {
 	return path, nil
 }
 
-func applyPBSJobConfigsFromStage(ctx context.Context, logger *logging.Logger, stageRoot string) (err error) {
-	done := logging.DebugStart(logger, "pbs staged apply jobs", "stage=%s", stageRoot)
-	defer func() { done(err) }()
-
-	paths := []string{
-		"etc/proxmox-backup/sync.cfg",
-		"etc/proxmox-backup/verification.cfg",
-		"etc/proxmox-backup/prune.cfg",
-	}
-
-	for _, rel := range paths {
-		if err := applyPBSConfigFileFromStage(ctx, logger, stageRoot, rel); err != nil {
-			logger.Warning("PBS staged apply: %s: %v", rel, err)
-		}
-	}
-	return nil
-}
-
 // pbsAcmeAccountsRelPath is the archive-relative directory holding the PBS ACME account
 // registrations: one JSON document per account. PBS has no acme/accounts.cfg (#313).
 const pbsAcmeAccountsRelPath = "etc/proxmox-backup/acme/accounts"
@@ -666,26 +767,57 @@ const pbsAcmeAccountsRelPath = "etc/proxmox-backup/acme/accounts"
 // 0700 backup:backup on a real PBS, so inheriting from it would hand the ACME private keys to
 // the unprivileged backup service account. PBS itself creates this directory 0700 root:root.
 func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) error {
+	res, err := applyPBSAcmeAccounts(logger, stageRoot)
+	if err != nil {
+		return err
+	}
+	for _, rm := range res.removals {
+		if rm.err != nil {
+			return rm.err
+		}
+		logger.Info("PBS staged apply: removed ACME account not present in the backup: %s", rm.name)
+	}
+	return nil
+}
+
+// pbsAcmeAccountRemoval is one account of this PBS that the backup does not have:
+// err is why it could not be removed, nil when it was.
+type pbsAcmeAccountRemoval struct {
+	name string
+	err  error
+}
+
+// pbsAcmeAccountsResult is what applyPBSAcmeAccounts did: the accounts it wrote
+// and, in the order the directory lists them, the removals of the others.
+type pbsAcmeAccountsResult struct {
+	applied  int
+	removals []pbsAcmeAccountRemoval
+}
+
+// applyPBSAcmeAccounts is applyPBSAcmeAccountsFromStage without its lines: it
+// returns what it did for its caller to log. A removal that fails does not stop
+// the others.
+func applyPBSAcmeAccounts(logger *logging.Logger, stageRoot string) (res pbsAcmeAccountsResult, err error) {
 	stageDir := filepath.Join(stageRoot, pbsAcmeAccountsRelPath)
 
 	info, err := restoreFS.Lstat(stageDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			logging.DebugStep(logger, "pbs staged apply acme accounts", "Skip: %s not present in staging directory", pbsAcmeAccountsRelPath)
-			return nil
+			return res, nil
 		}
-		return fmt.Errorf("stat staged %s: %w", pbsAcmeAccountsRelPath, err)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("stat staged %s: %w", pbsAcmeAccountsRelPath, err)}
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("staged %s must not be a symlink", pbsAcmeAccountsRelPath)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("staged %s must not be a symlink", pbsAcmeAccountsRelPath)}
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("staged %s is not a directory", pbsAcmeAccountsRelPath)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("staged %s is not a directory", pbsAcmeAccountsRelPath)}
 	}
 
 	entries, err := restoreFS.ReadDir(stageDir)
 	if err != nil {
-		return fmt.Errorf("read staged %s: %w", pbsAcmeAccountsRelPath, err)
+		return res, &pbsAcmeAccountsStagedError{fmt.Errorf("read staged %s: %w", pbsAcmeAccountsRelPath, err)}
 	}
 
 	// Validate the whole staged set BEFORE the destination is touched, so a malformed
@@ -693,12 +825,12 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 	// for it.
 	names, err := readPBSAcmeStagedAccounts(stageDir, entries)
 	if err != nil {
-		return err
+		return res, &pbsAcmeAccountsStagedError{err}
 	}
 
 	destDir := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsAcmeAccountsRelPath))
 	if err := ensurePBSAcmeAccountsDir(destDir); err != nil {
-		return err
+		return res, err
 	}
 
 	applied := make(map[string]struct{}, len(names))
@@ -707,22 +839,27 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 
 		data, err := restoreFS.ReadFile(filepath.Join(stageDir, name))
 		if err != nil {
-			return fmt.Errorf("read staged %s: %w", rel, err)
+			return res, &pbsAcmeAccountsStagedError{fmt.Errorf("read staged %s: %w", rel, err)}
 		}
 		if err := writeFileAtomic(filepath.Join(destDir, name), data, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", filepath.Join(destDir, name), err)
+			return res, fmt.Errorf("write %s: %w", filepath.Join(destDir, name), err)
 		}
 		applied[name] = struct{}{}
 	}
 
-	removed, err := removePBSAcmeAccountsNotIn(logger, destDir, applied)
-	if err != nil {
-		return err
+	res.applied = len(applied)
+	if res.removals, err = removePBSAcmeAccountsNotIn(destDir, applied); err != nil {
+		return res, err
 	}
-
+	removed := 0
+	for _, rm := range res.removals {
+		if rm.err == nil {
+			removed++
+		}
+	}
 	logging.DebugStep(logger, "pbs staged apply acme accounts",
 		"Applied %d account(s) to %s, removed %d not present in the backup", len(applied), destDir, removed)
-	return nil
+	return res, nil
 }
 
 // readPBSAcmeStagedAccounts returns the account names the staged directory carries, and
@@ -735,8 +872,8 @@ func applyPBSAcmeAccountsFromStage(logger *logging.Logger, stageRoot string) err
 // reaches the keep-set, so removePBSAcmeAccountsNotIn would delete the live account of that
 // name: the node would lose a working registration and its private key, while the staged
 // replacement it was supposed to get was never written either. Refusing leaves every live
-// account in place and surfaces the archive as a failed item, which the restore reports as
-// completed with warnings.
+// account in place and ends the accounts block with a ⚠ outcome, which the restore reports
+// as completed with warnings.
 func readPBSAcmeStagedAccounts(stageDir string, entries []os.DirEntry) ([]string, error) {
 	names := make([]string, 0, len(entries))
 	var rejected []string
@@ -795,17 +932,18 @@ func ensurePBSAcmeAccountsDir(destDir string) error {
 }
 
 // removePBSAcmeAccountsNotIn is the mirroring half: it drops the account entries the backup
-// did not carry. It reports how many it removed so the caller can log the whole outcome.
-func removePBSAcmeAccountsNotIn(logger *logging.Logger, destDir string, keep map[string]struct{}) (int, error) {
+// did not carry, each one even when another could not be removed, and returns every
+// removal with its result so the caller can log the whole outcome.
+func removePBSAcmeAccountsNotIn(destDir string, keep map[string]struct{}) ([]pbsAcmeAccountRemoval, error) {
 	entries, err := restoreFS.ReadDir(destDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, fmt.Errorf("read %s: %w", destDir, err)
+		return nil, fmt.Errorf("read %s: %w", destDir, err)
 	}
 
-	removed := 0
+	var removals []pbsAcmeAccountRemoval
 	for _, entry := range entries {
 		if entry == nil {
 			continue
@@ -815,13 +953,324 @@ func removePBSAcmeAccountsNotIn(logger *logging.Logger, destDir string, keep map
 			continue
 		}
 		target := filepath.Join(destDir, name)
+		rm := pbsAcmeAccountRemoval{name: name}
 		if err := restoreFS.RemoveAll(target); err != nil {
-			return removed, fmt.Errorf("remove %s: %w", target, err)
+			rm.err = fmt.Errorf("remove %s: %w", target, err)
 		}
-		logger.Info("PBS staged apply: removed ACME account not present in the backup: %s", name)
-		removed++
+		removals = append(removals, rm)
 	}
-	return removed, nil
+	return removals, nil
+}
+
+// pbsAcmeAccountsStagedError is a failure of the ACME accounts apply on the side
+// of the backup: the staged directory or an account in it could not be read, or
+// is not what PBS writes. Any other failure is on the side of this PBS.
+type pbsAcmeAccountsStagedError struct{ err error }
+
+func (e *pbsAcmeAccountsStagedError) Error() string { return e.err.Error() }
+
+func (e *pbsAcmeAccountsStagedError) Unwrap() error { return e.err }
+
+const pbsAcmeAccountsRestoreDebug = "PBS ACME accounts restore: "
+
+// applyPBSAcmeAccountsBlock restores the ACME accounts as one block: nothing
+// visible when the backup has none, otherwise the opening line and the outcome,
+// with the event of a failure in between. A failure returns its error, whose
+// outcome is already logged.
+func applyPBSAcmeAccountsBlock(logger *logging.Logger, stageRoot string) error {
+	stageDir := filepath.Join(stageRoot, pbsAcmeAccountsRelPath)
+	if _, err := restoreFS.Lstat(stageDir); errors.Is(err, os.ErrNotExist) {
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"staged=%s not in the backup action=skip", stageDir)
+		return nil
+	}
+	logger.Info("Restoring PBS ACME accounts...")
+	logger.Debug(pbsAcmeAccountsRestoreDebug+"staged=%s target=%s", stageDir, filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsAcmeAccountsRelPath)))
+	res, err := applyPBSAcmeAccounts(logger, stageRoot)
+	var staged *pbsAcmeAccountsStagedError
+	switch {
+	case err == nil:
+		return pbsAcmeAccountsOutcome(logger, res)
+	case errors.As(err, &staged):
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"staged read failed error=%q", err.Error())
+		logger.Info("The ACME accounts in the backup could not be read: \"%s\"", err.Error())
+	default:
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"write failed error=%q", err.Error())
+		logger.Info("The ACME accounts could not be written to this PBS: \"%s\"", err.Error())
+	}
+	logger.Warning("%s PBS ACME accounts: not applied", theme.SymbolWarning)
+	return err
+}
+
+// pbsAcmeAccountsOutcome names each account of this PBS that the backup does not
+// have, removed or not, then logs the outcome of the block: applied, or when a
+// removal failed partially applied, or not applied when nothing else was done.
+func pbsAcmeAccountsOutcome(logger *logging.Logger, res pbsAcmeAccountsResult) error {
+	var notRemoved []string
+	for _, rm := range res.removals {
+		logger.Debug(pbsAcmeAccountsRestoreDebug+"account=%s not in backup action=remove", rm.name)
+		if rm.err != nil {
+			logger.Debug(pbsAcmeAccountsRestoreDebug+"account=%s remove failed error=%q", rm.name, rm.err.Error())
+			logger.Info("ACME account %s is configured on this PBS but not present in the backup", rm.name)
+			logger.Warning("%s PBS ACME account %s: not removed", theme.SymbolWarning, rm.name)
+			notRemoved = append(notRemoved, rm.name)
+			continue
+		}
+		logger.Info("ACME account %s is configured on this PBS but not present in the backup", rm.name)
+		logger.Info("%s PBS ACME account %s: removed", theme.SymbolSuccess, rm.name)
+	}
+	switch {
+	case len(notRemoved) == 0:
+		logger.Info("%s PBS ACME accounts: applied", theme.SymbolSuccess)
+		return nil
+	case len(notRemoved) == res.applied+len(res.removals):
+		logger.Warning("%s PBS ACME accounts: not applied", theme.SymbolWarning)
+	default:
+		logger.Warning("%s PBS ACME accounts: partially applied", theme.SymbolWarning)
+	}
+	return fmt.Errorf("%d ACME account(s) not removed [%s]", len(notRemoved), strings.Join(notRemoved, ", "))
+}
+
+// pbsConfigFileBlock is a PBS configuration file restored as a file, with the
+// words of its block.
+type pbsConfigFileBlock struct {
+	rel     string
+	debug   string // DEBUG prefix
+	opening string
+	config  string // event subject: "The metric server configuration"
+	outcome string
+	// json: the file is JSON, not a section config: no section header or
+	// comment rule, only an empty file removes the target. perm is its mode
+	// (0 means 0640).
+	json bool
+	perm os.FileMode
+}
+
+var (
+	pbsMetricServerFileBlock = pbsConfigFileBlock{
+		rel:     "etc/proxmox-backup/metricserver.cfg",
+		debug:   "PBS metric server restore: ",
+		opening: "Restoring PBS metric server configuration...",
+		config:  "The metric server configuration",
+		outcome: "PBS metric server configuration",
+	}
+	// pbsTapeFileBlocks are the tape files, written as staged (the drives and
+	// changers need their device, the keys are secret material).
+	pbsTapeFileBlocks = []pbsConfigFileBlock{
+		{rel: "etc/proxmox-backup/tape.cfg", debug: "PBS tape drives restore: ",
+			opening: "Restoring PBS tape drives and changers...", config: "The tape drives and changers", outcome: "PBS tape drives and changers"},
+		{rel: "etc/proxmox-backup/media-pool.cfg", debug: "PBS tape media pools restore: ",
+			opening: "Restoring PBS tape media pools...", config: "The tape media pools", outcome: "PBS tape media pools"},
+		{rel: "etc/proxmox-backup/tape-job.cfg", debug: "PBS tape backup jobs restore: ",
+			opening: "Restoring PBS tape backup jobs...", config: "The tape backup jobs", outcome: "PBS tape backup jobs"},
+		{rel: "etc/proxmox-backup/tape-encryption-keys.json", debug: "PBS tape encryption keys restore: ",
+			opening: "Restoring PBS tape encryption keys...", config: "The tape encryption keys", outcome: "PBS tape encryption keys",
+			json: true, perm: 0o600},
+		{rel: "etc/proxmox-backup/tape-encryption-key-config.json", debug: "PBS tape encryption key configuration restore: ",
+			opening: "Restoring PBS tape encryption key configuration...", config: "The tape encryption key configuration", outcome: "PBS tape encryption key configuration",
+			json: true, perm: 0o600},
+	}
+	pbsProxyFileBlock = pbsConfigFileBlock{
+		rel:     "etc/proxmox-backup/proxy.cfg",
+		debug:   "PBS proxy restore: ",
+		opening: "Restoring PBS proxy configuration...",
+		config:  "The proxy configuration",
+		outcome: "PBS proxy configuration",
+	}
+)
+
+// pbsConfigCommentsOnly reports whether content holds only comments and blank
+// lines.
+func pbsConfigCommentsOnly(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			return false
+		}
+	}
+	return true
+}
+
+// applyPBSConfigFileBlock writes one staged PBS configuration file to this PBS as
+// one block: nothing visible when the backup does not have it; a file without
+// configuration (empty, or only comments) removes the target; a file without a
+// section header is not written. A failure returns its error, whose outcome is
+// already logged.
+func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConfigFileBlock) error {
+	stagePath := filepath.Join(stageRoot, f.rel)
+	destPath := filepath.Join(string(os.PathSeparator), filepath.FromSlash(f.rel))
+	data, err := restoreFS.ReadFile(stagePath)
+	if errors.Is(err, os.ErrNotExist) {
+		logger.Debug(f.debug+"staged=%s not in the backup action=skip", stagePath)
+		return nil
+	}
+	logger.Info("%s", f.opening)
+	logger.Debug(f.debug+"staged=%s target=%s", stagePath, destPath)
+	notApplied := func(err error) error {
+		logger.Warning("%s %s: not applied", theme.SymbolWarning, f.outcome)
+		return err
+	}
+	if err != nil {
+		err = fmt.Errorf("read staged %s: %w", f.rel, err)
+		logger.Debug(f.debug+"staged read failed error=%q", err.Error())
+		logger.Info("%s in the backup could not be read: \"%s\"", f.config, err.Error())
+		return notApplied(err)
+	}
+	trimmed := strings.TrimSpace(string(data))
+	perm := f.perm
+	if perm == 0 {
+		perm = 0o640
+	}
+	var writeErr error
+	switch {
+	case f.json && trimmed == "":
+		if writeErr = removeIfExists(destPath); writeErr == nil {
+			logger.Debug("%sstaged file is empty, target removed", f.debug)
+		}
+	case f.json:
+		if writeErr = writeFileAtomic(destPath, []byte(trimmed+"\n"), perm); writeErr != nil {
+			writeErr = fmt.Errorf("write %s: %w", destPath, writeErr)
+		} else {
+			logger.Debug("%swritten", f.debug)
+		}
+	case pbsConfigCommentsOnly(trimmed):
+		if writeErr = removeIfExists(destPath); writeErr == nil {
+			logger.Debug(f.debug+"staged file has no configuration comments_only=%v, target removed", trimmed != "")
+		}
+	case !pbsConfigHasHeader(trimmed):
+		writeErr = fmt.Errorf("%s does not look like a valid PBS config file (missing section header)", f.rel)
+	default:
+		if writeErr = writeFileAtomic(destPath, []byte(trimmed+"\n"), perm); writeErr != nil {
+			writeErr = fmt.Errorf("write %s: %w", destPath, writeErr)
+		} else {
+			logger.Debug("%swritten", f.debug)
+		}
+	}
+	if writeErr != nil {
+		logger.Debug(f.debug+"write failed error=%q", writeErr.Error())
+		logger.Info("%s could not be written to this PBS: \"%s\"", f.config, writeErr.Error())
+		return notApplied(writeErr)
+	}
+	logger.Info("%s %s: applied", theme.SymbolSuccess, f.outcome)
+	return nil
+}
+
+// pbsNodeKeysToDelete reads this PBS's node.cfg and returns, for a Clean
+// restore, the settings it has that the backup (keys) does not, which
+// "node update --delete" takes. Only key names are logged, never values; a
+// node.cfg that cannot be read is DEBUG only and deletes nothing.
+func pbsNodeKeysToDelete(debug func(string, ...any), keys []string) []string {
+	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsNodeCfgRel))
+	data, err := restoreFS.ReadFile(target)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		debug("current file=%s read failed error=%q", target, err.Error())
+		return nil
+	}
+	_, current := pbsNodeUpdateFlags(string(data))
+	debug("current keys=%s", strings.Join(current, ","))
+	inBackup := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		inBackup[k] = true
+	}
+	var del []string
+	for _, k := range current {
+		if !inBackup[k] && pbsNodeDeletableKeys[k] {
+			del = append(del, k)
+		}
+	}
+	if len(del) > 0 {
+		debug("action=delete keys=%s", strings.Join(del, ","))
+	}
+	return del
+}
+
+const (
+	pbsNodeCfgRel       = "etc/proxmox-backup/node.cfg"
+	pbsNodeRestoreDebug = "PBS node restore: "
+)
+
+// applyPBSNodeCfgBlock restores node.cfg as one block. Through the PBS API
+// (apiAvailable) every setting of the staged file is applied with one
+// "node update" (Merge and Clean alike: settings this PBS has and the backup
+// does not are kept); when PBS refuses it, Clean (1:1) mode writes the staged file
+// instead and Merge mode leaves the node configuration as it is. Without the API
+// (Clean mode only) the staged file is written. Nothing visible happens when the
+// backup has no node.cfg or no setting in it. A ⚠ outcome returns its error,
+// already logged; a cancellation returns the cancellation, with no outcome.
+func applyPBSNodeCfgBlock(ctx context.Context, logger *logging.Logger, stageRoot string, strict, apiAvailable bool) error {
+	debug := func(format string, args ...any) { logger.Debug(pbsNodeRestoreDebug+format, args...) }
+	stagePath := filepath.Join(stageRoot, pbsNodeCfgRel)
+	raw, present, err := readStageFileOptional(stageRoot, pbsNodeCfgRel)
+	if err == nil && !present {
+		debug("staged=%s not in the backup action=skip", stagePath)
+		return nil
+	}
+	mode := "merge"
+	if strict {
+		mode = "clean"
+	}
+	notApplied := func(err error) error {
+		logger.Warning("%s PBS node configuration: not applied", theme.SymbolWarning)
+		return err
+	}
+	if err != nil {
+		logger.Info("Restoring PBS node configuration...")
+		debug("mode=%s staged=%s", mode, stagePath)
+		debug("staged=%s read failed error=%q", stagePath, err.Error())
+		logger.Info("The node configuration in the backup could not be read: \"%s\"", err.Error())
+		return notApplied(err)
+	}
+	_, keys := pbsNodeUpdateFlags(raw)
+	if len(keys) == 0 {
+		debug("staged=%s has no setting action=skip", stagePath)
+		return nil
+	}
+	logger.Info("Restoring PBS node configuration...")
+	debug("mode=%s staged=%s", mode, stagePath)
+
+	var cause error
+	if apiAvailable {
+		debug("action=update keys=%s", strings.Join(keys, ","))
+		var deleteKeys []string
+		if strict {
+			deleteKeys = pbsNodeKeysToDelete(debug, keys)
+		}
+		updateErr := pbsStagedApplyNodeCfgViaAPIFn(ctx, stageRoot, deleteKeys)
+		if updateErr == nil {
+			debug("updated")
+			logger.Info("%s PBS node configuration: applied", theme.SymbolSuccess)
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		debug("update failed error=%q", pbsManagerErrorText(updateErr))
+		logger.Info("The node configuration was rejected by PBS: \"%s\"", pbsManagerErrorLine(updateErr))
+		// The command line runPBSManager puts in front of the refusal may carry a
+		// flag value: the result keeps the refusal only.
+		cause = fmt.Errorf("node update refused: %s", pbsManagerErrorLine(updateErr))
+		if !strict {
+			return notApplied(cause)
+		}
+	} else {
+		logger.Info("%s", pbsDatastoreEventAPIUnavailable)
+		cause = errors.New("node.cfg: PBS API unavailable")
+	}
+
+	target := filepath.Join(string(os.PathSeparator), filepath.FromSlash(pbsNodeCfgRel))
+	debug("fallback=file target=%s source=%s", target, stagePath)
+	// node.cfg has no section header (its description is a block of comments):
+	// it is written as staged.
+	var writeErr error
+	if err := writeFileAtomic(target, []byte(strings.TrimSpace(raw)+"\n"), 0o640); err != nil {
+		writeErr = fmt.Errorf("write %s: %w", target, err)
+	}
+	if writeErr != nil {
+		debug("fallback write failed error=%q", writeErr.Error())
+		logger.Info("The node configuration could not be written to this PBS: \"%s\"", writeErr.Error())
+		return notApplied(fmt.Errorf("%w; file fallback: %w", cause, writeErr))
+	}
+	debug("fallback written")
+	logger.Warning("%s PBS node configuration: applied from the backup file", theme.SymbolWarning)
+	return cause
 }
 
 func applyPBSConfigFileFromStage(ctx context.Context, logger *logging.Logger, stageRoot, relPath string) error {

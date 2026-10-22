@@ -106,8 +106,8 @@ func setupBackupCharPBS(t *testing.T, dirs backupCharDirs, cfg *config.Config, s
 		Retention:     block.PBSRetentionFromConfig(cfg),
 		Logger:        startup,
 	})
-	if want := scenario != "not_initialized"; report.Initialized() != want {
-		t.Fatalf("PBS initialized = %v, want %v (fact=%v cause=%v)", report.Initialized(), want, report.Fact, report.Cause)
+	if want := scenario != "not_initialized"; p.Initialized() != want {
+		t.Fatalf("PBS initialized = %v, want %v (fact=%v cause=%v)", p.Initialized(), want, report.Fact, report.Cause)
 	}
 	return p
 }

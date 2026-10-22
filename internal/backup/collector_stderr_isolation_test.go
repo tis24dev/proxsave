@@ -28,7 +28,7 @@ func newStderrNoiseCollector(t *testing.T, stdout, stderr string, runErr error) 
 		LookPath: func(name string) (string, error) {
 			return "/bin/" + name, nil
 		},
-		RunCommandCaptured: func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		RunCommandCaptured: func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 			return []byte(stdout), []byte(stderr), runErr
 		},
 	}
@@ -58,53 +58,6 @@ func TestSafeCmdOutputKeepsStderrOutOfArtifact(t *testing.T) {
 	}
 	if !json.Valid(data) {
 		t.Fatalf("artifact is not valid JSON: %q", string(data))
-	}
-}
-
-func TestSafeCmdOutputWithPBSAuthKeepsStderrOutOfArtifact(t *testing.T) {
-	collector := newStderrNoiseCollector(t, diskListStdout, smartctlStderrNoise, nil)
-	collector.config.PBSRepository = "root@pam@localhost:store"
-	output := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "snapshots.json")
-
-	err := collector.safeCmdOutputWithPBSAuth(context.Background(),
-		commandSpec("proxmox-backup-client", "snapshot", "list", "--output-format=json"),
-		output,
-		"Snapshot list",
-		false)
-	if err != nil {
-		t.Fatalf("safeCmdOutputWithPBSAuth: %v", err)
-	}
-
-	data, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatalf("read snapshots.json: %v", err)
-	}
-	if string(data) != diskListStdout {
-		t.Fatalf("artifact must contain stdout verbatim, got: %q", string(data))
-	}
-}
-
-func TestSafeCmdOutputForDatastoreKeepsStderrOutOfArtifact(t *testing.T) {
-	collector := newStderrNoiseCollector(t, diskListStdout, smartctlStderrNoise, nil)
-	collector.config.PBSRepository = "root@pam@localhost:store"
-	output := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "namespaces.json")
-
-	err := collector.safeCmdOutputWithPBSAuthForDatastore(context.Background(),
-		commandSpec("proxmox-backup-client", "namespace", "list", "--output-format=json"),
-		output,
-		"Namespace list",
-		"store",
-		false)
-	if err != nil {
-		t.Fatalf("safeCmdOutputWithPBSAuthForDatastore: %v", err)
-	}
-
-	data, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatalf("read namespaces.json: %v", err)
-	}
-	if string(data) != diskListStdout {
-		t.Fatalf("artifact must contain stdout verbatim, got: %q", string(data))
 	}
 }
 
@@ -141,7 +94,7 @@ func TestDatastoreEnumerationWarningCarriesStderr(t *testing.T) {
 		LookPath: func(name string) (string, error) {
 			return "/bin/" + name, nil
 		},
-		RunCommandCaptured: func(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+		RunCommandCaptured: func(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 			return nil, []byte("permission denied (run as root)\n"), errors.New("exit status 2")
 		},
 	}
@@ -152,43 +105,6 @@ func TestDatastoreEnumerationWarningCarriesStderr(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "permission denied (run as root)") {
 		t.Fatalf("warning must quote stderr, log:\n%s", buf.String())
-	}
-}
-
-// An injected runner must never be bypassed: falling through to the real runner because
-// the path needs extra environment would execute the command against the host.
-func TestExtraEnvPathNeverEscapesAnInjectedRunner(t *testing.T) {
-	called := false
-	deps := CollectorDeps{
-		LookPath: func(name string) (string, error) {
-			return "/bin/" + name, nil
-		},
-		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			called = true
-			return []byte(diskListStdout), nil
-		},
-	}
-	collector := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
-	collector.config.PBSRepository = "root@pam@localhost:store"
-	output := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "snapshots.json")
-
-	if err := collector.safeCmdOutputWithPBSAuth(context.Background(),
-		commandSpec("proxmox-backup-client", "snapshot", "list", "--output-format=json"),
-		output,
-		"Snapshot list",
-		false); err != nil {
-		t.Fatalf("safeCmdOutputWithPBSAuth: %v", err)
-	}
-	if !called {
-		t.Fatal("the injected RunCommand hook was bypassed for an extraEnv path")
-	}
-
-	data, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatalf("read snapshots.json: %v", err)
-	}
-	if string(data) != diskListStdout {
-		t.Fatalf("artifact mismatch: %q", string(data))
 	}
 }
 
@@ -211,6 +127,42 @@ func TestLegacyRunCommandDepStillFeedsArtifact(t *testing.T) {
 		"Disk list",
 		false); err != nil {
 		t.Fatalf("safeCmdOutput: %v", err)
+	}
+
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatalf("read disk_list.json: %v", err)
+	}
+	if string(data) != diskListStdout {
+		t.Fatalf("legacy dep output mismatch: %q", string(data))
+	}
+}
+
+// A Collector wired with only the merged-output RunCommand hook is served by that
+// hook: the command is never handed to the real runner behind the caller's back.
+func TestLegacyRunCommandDepIsNotBypassed(t *testing.T) {
+	called := false
+	deps := CollectorDeps{
+		LookPath: func(name string) (string, error) {
+			return "/bin/" + name, nil
+		},
+		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			called = true
+			return []byte(diskListStdout), nil
+		},
+	}
+	collector := NewCollectorWithDeps(newTestLogger(), GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxBS, false, deps)
+	output := filepath.Join(collector.tempDir, "var/lib/proxsave-info", "commands", "pbs", "disk_list.json")
+
+	if err := collector.safeCmdOutput(context.Background(),
+		commandSpec("proxmox-backup-manager", "disk", "list", "--output-format=json"),
+		output,
+		"Disk list",
+		false); err != nil {
+		t.Fatalf("safeCmdOutput: %v", err)
+	}
+	if !called {
+		t.Fatal("the injected RunCommand hook was bypassed")
 	}
 
 	data, err := os.ReadFile(output)

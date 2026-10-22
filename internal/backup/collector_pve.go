@@ -875,23 +875,6 @@ func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
 	return nil
 }
 
-// collectVMConfigs collects VM and Container configurations
-func (c *Collector) collectVMConfigs(ctx context.Context) error {
-	c.logger.Debug("Collecting VM and container configuration directories")
-	if err := c.collectPVEQEMUConfigs(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVELXCConfigs(ctx); err != nil {
-		return err
-	}
-	if err := c.collectPVEGuestInventory(ctx); err != nil {
-		return err
-	}
-
-	c.logger.Debug("VM/CT configuration collection finished")
-	return nil
-}
-
 func (c *Collector) collectPVEBackupJobDefinitions(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -2568,21 +2551,6 @@ func (c *Collector) writeDatastoreMetadataText(
 	return c.writeReportFile(filepath.Join(metaDir, "metadata.txt"), []byte(builder.String()))
 }
 
-func relativeDepth(root, path string) int {
-	if root == path {
-		return 0
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return 0
-	}
-	if rel == "." {
-		return 0
-	}
-	rel = filepath.ToSlash(rel)
-	return strings.Count(rel, "/") + 1
-}
-
 // pveClusterDetectionError keeps an observable fact separate from its system
 // cause and state details. The validation brick chooses their visible levels;
 // callers still retain the original cause through errors.Is/errors.As.
@@ -2830,21 +2798,6 @@ func shortHostname(host string) string {
 	return host
 }
 
-func (c *Collector) hasCorosyncClusterConfig() bool {
-	corosyncPath := c.effectiveCorosyncConfigPath()
-	data, err := os.ReadFile(corosyncPath)
-	if err != nil {
-		return false
-	}
-	content := strings.ToLower(string(data))
-	for _, key := range []string{"cluster_name", "nodelist", "ring0_addr"} {
-		if strings.Contains(content, key) {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *Collector) effectiveCorosyncConfigPath() string {
 	corosyncPath := strings.TrimSpace(c.config.CorosyncConfigPath)
 	if corosyncPath == "" {
@@ -2868,26 +2821,6 @@ func (c *Collector) effectiveVzdumpConfigPath() string {
 		return c.systemPath(vzdumpPath)
 	}
 	return filepath.Join(c.effectivePVEConfigPath(), vzdumpPath)
-}
-
-func (c *Collector) hasMultiplePVENodes() bool {
-	count, err := c.pveNodesDirCount()
-	return err == nil && count > 1
-}
-
-func (c *Collector) pveNodesDirCount() (int, error) {
-	nodesDir := filepath.Join(c.effectivePVEConfigPath(), "nodes")
-	entries, err := os.ReadDir(nodesDir)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			count++
-		}
-	}
-	return count, nil
 }
 
 func isPvecmMissingCorosyncConfig(output string) bool {

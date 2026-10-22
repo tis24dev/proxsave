@@ -58,15 +58,6 @@ func WithSelectorBack[T any](err error) SelectorOption[T] {
 	return func(s *Selector[T]) { s.backErr = err }
 }
 
-// WithSelectorCursor preselects the row at index i.
-func WithSelectorCursor[T any](i int) SelectorOption[T] {
-	return func(s *Selector[T]) {
-		if i >= 0 && i < len(s.items) {
-			s.cursor = i
-		}
-	}
-}
-
 // WithSelectorPrompt adds an explanatory line under the title.
 func WithSelectorPrompt[T any](prompt string) SelectorOption[T] {
 	return func(s *Selector[T]) { s.prompt = sanitize(prompt) }

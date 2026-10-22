@@ -886,7 +886,7 @@ func TestSystemCronProxsaveRefsSeesADirectProxsaveLine(t *testing.T) {
 	}
 
 	if indirect := indirectProxsaveSystemCronRefs(); len(indirect) != 0 {
-		t.Fatalf("the --upgrade refusal predicate must be unchanged by this: a direct line is not an INDIRECT reference, got %+v", indirect)
+		t.Fatalf("the INDIRECT-only view must be unchanged by this: a direct line is not an INDIRECT reference, got %+v", indirect)
 	}
 
 	// And the unrelated operator line in the system crontab stays unflagged under both
@@ -1036,8 +1036,8 @@ func TestSchedulerTimeAdoptedFromSystemCron(t *testing.T) {
 		if len(refs) != 1 {
 			t.Fatalf("want the direct line, got %+v", refs)
 		}
-		if got := cron.ScheduleToTime(refs[0].Line); got != "05:00" {
-			t.Fatalf("the adopted time must be 05:00, got %q", got)
+		if got, err := cron.ParseSchedule(refs[0].Line); err != nil || got.Time != "05:00" {
+			t.Fatalf("the adopted time must be 05:00, got %+v (err %v)", got, err)
 		}
 	})
 

@@ -225,21 +225,6 @@ func TestParseZpoolImportOutput(t *testing.T) {
 	}
 }
 
-func TestCombinePoolNames(t *testing.T) {
-	got := combinePoolNames([]string{"tank", "pool2"}, []string{"pool2", "pool3"})
-	expected := []string{"pool2", "pool3", "tank"}
-
-	if len(got) != len(expected) {
-		t.Fatalf("expected %d pools, got %d (%v)", len(expected), len(got), got)
-	}
-
-	for i, pool := range expected {
-		if got[i] != pool {
-			t.Fatalf("expected %v, got %v", expected, got)
-		}
-	}
-}
-
 func TestHasCategoryID(t *testing.T) {
 	categories := []Category{
 		{ID: "ssl"},
@@ -944,29 +929,6 @@ func TestShortHost(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// sanitizeID tests
-// --------------------------------------------------------------------------
-
-func TestSanitizeID(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"local", "local"},
-		{"local-backup", "local-backup"},
-		{"local/backup", "local_backup"},
-		{"a:b:c", "a_b_c"},
-		{"test@123", "test_123"},
-	}
-
-	for _, tc := range tests {
-		if got := sanitizeID(tc.input); got != tc.expected {
-			t.Fatalf("sanitizeID(%q) = %q, want %q", tc.input, got, tc.expected)
-		}
-	}
-}
-
-// --------------------------------------------------------------------------
 // shouldStopPBSServices tests
 // --------------------------------------------------------------------------
 
@@ -1004,27 +966,6 @@ func TestShouldStopPBSServices(t *testing.T) {
 				t.Fatalf("shouldStopPBSServices() = %v, want %v", got, tc.expected)
 			}
 		})
-	}
-}
-
-// --------------------------------------------------------------------------
-// splitExportCategories tests
-// --------------------------------------------------------------------------
-
-func TestSplitExportCategories(t *testing.T) {
-	categories := []Category{
-		{ID: "ssl", ExportOnly: false},
-		{ID: "pve_cluster", ExportOnly: true},
-		{ID: "network", ExportOnly: false},
-		{ID: "secrets", ExportOnly: true},
-	}
-
-	normal, export := splitExportCategories(categories)
-	if len(normal) != 2 {
-		t.Fatalf("expected 2 normal, got %d", len(normal))
-	}
-	if len(export) != 2 {
-		t.Fatalf("expected 2 export, got %d", len(export))
 	}
 }
 
@@ -1412,4 +1353,8 @@ func TestDetectConfiguredZFSPools_NoUnits(t *testing.T) {
 	if len(pools) != 0 {
 		t.Fatalf("expected 0 pools, got %d", len(pools))
 	}
+}
+
+func sanitizeRestoreEntryTarget(destRoot, entryName string) (string, string, error) {
+	return sanitizeRestoreEntryTargetWithFS(restoreFS, destRoot, entryName)
 }

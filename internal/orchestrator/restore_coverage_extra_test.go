@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tis24dev/proxsave/internal/logging"
 )
 
 type runOnlyRunner struct{}
@@ -711,4 +713,14 @@ func writeTarFile(path string, files map[string]string) (err error) {
 		}
 	}
 	return nil
+}
+
+// runSafeClusterApply applies selected cluster configs via pvesh without touching config.db.
+// It operates on files extracted to exportRoot (e.g. exportDestRoot).
+func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) (err error) {
+	if logger == nil {
+		logger = logging.GetDefaultLogger()
+	}
+	ui := newCLIWorkflowUI(reader, logger)
+	return runSafeClusterApplyWithUI(ctx, ui, exportRoot, logger, nil)
 }

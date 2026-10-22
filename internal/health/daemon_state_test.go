@@ -9,7 +9,7 @@ import (
 // seedFreshHeartbeat records a transmitting heartbeat at ts (a healthy status).
 func seedFreshHeartbeat(t *testing.T, base string, ts int64) {
 	t.Helper()
-	if err := RecordPing(base, "self", KindHeartbeat, ts, true, nil); err != nil {
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, ts, true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/checks"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/environment"
@@ -84,36 +83,34 @@ func TestBackupStatsToPrometheusMetrics(t *testing.T) {
 	}
 }
 
-func TestDescribeTelegramConfigVariants(t *testing.T) {
-	logger := logging.New(types.LogLevelError, false)
-	o := &Orchestrator{logger: logger}
-	if got := o.describeTelegramConfig(); got != "disabled" {
-		t.Fatalf("describeTelegramConfig nil cfg = %q, want disabled", got)
+func TestDescribeTelegramStatusVariants(t *testing.T) {
+	if got := describeTelegramStatus(nil); got != "disabled" {
+		t.Fatalf("describeTelegramStatus nil cfg = %q, want disabled", got)
 	}
 
-	o.cfg = &config.Config{TelegramEnabled: false}
-	if got := o.describeTelegramConfig(); got != "disabled" {
-		t.Fatalf("describeTelegramConfig disabled = %q, want disabled", got)
+	cfg := &config.Config{TelegramEnabled: false}
+	if got := describeTelegramStatus(cfg); got != "disabled" {
+		t.Fatalf("describeTelegramStatus disabled = %q, want disabled", got)
 	}
 
-	o.cfg.TelegramEnabled = true
-	o.cfg.TelegramBotType = ""
-	if got := o.describeTelegramConfig(); got != "personal" {
+	cfg.TelegramEnabled = true
+	cfg.TelegramBotType = ""
+	if got := describeTelegramStatus(cfg); got != "personal" {
 		t.Fatalf("empty bot type => %q, want personal", got)
 	}
 
-	o.cfg.TelegramBotType = "personal"
-	if got := o.describeTelegramConfig(); got != "personal" {
+	cfg.TelegramBotType = "personal"
+	if got := describeTelegramStatus(cfg); got != "personal" {
 		t.Fatalf("personal => %q, want personal", got)
 	}
 
-	o.cfg.TelegramBotType = "centralized"
-	if got := o.describeTelegramConfig(); got != "centralized" {
+	cfg.TelegramBotType = "centralized"
+	if got := describeTelegramStatus(cfg); got != "centralized" {
 		t.Fatalf("centralized => %q, want centralized", got)
 	}
 
-	o.cfg.TelegramBotType = " custom "
-	if got := o.describeTelegramConfig(); got != "custom" {
+	cfg.TelegramBotType = " custom "
+	if got := describeTelegramStatus(cfg); got != "custom" {
 		t.Fatalf("trimmed custom => %q, want custom", got)
 	}
 }
@@ -305,16 +302,13 @@ func TestSetAndFinalizeStorageStatus(t *testing.T) {
 	}
 }
 
-func TestSplitExportCategoriesAndRedirectCluster(t *testing.T) {
-	categories := []Category{
+func TestRedirectClusterCategoryToExport_WithExistingExport(t *testing.T) {
+	normal := []Category{
 		{ID: "pve_cluster", ExportOnly: false},
 		{ID: "network", ExportOnly: false},
-		{ID: "pve_config_export", ExportOnly: true},
 	}
-
-	normal, export := splitExportCategories(categories)
-	if len(normal) != 2 || len(export) != 1 {
-		t.Fatalf("unexpected split result normal=%d export=%d", len(normal), len(export))
+	export := []Category{
+		{ID: "pve_config_export", ExportOnly: true},
 	}
 
 	normal2, export2 := redirectClusterCategoryToExport(normal, export)
@@ -342,9 +336,6 @@ func TestExportDestRootAndHelpers(t *testing.T) {
 	}
 	if got := shortHost("hostname"); got != "hostname" {
 		t.Fatalf("shortHost no dot = %q, want hostname", got)
-	}
-	if got := sanitizeID("stor@ge-1.*"); got != "stor_ge-1__" {
-		t.Fatalf("sanitizeID = %q, want stor_ge-1__", got)
 	}
 }
 
@@ -1609,19 +1600,6 @@ func TestApplyStorageStatsCloud(t *testing.T) {
 	}
 }
 
-func TestFileExistsHelper(t *testing.T) {
-	tmp := filepath.Join(t.TempDir(), "file.txt")
-	if fileExists(tmp) {
-		t.Fatalf("file should not exist yet")
-	}
-	if err := os.WriteFile(tmp, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write file: %v", err)
-	}
-	if !fileExists(tmp) {
-		t.Fatalf("fileExists should return true for existing file")
-	}
-}
-
 func TestLoadEntriesEmptyFile(t *testing.T) {
 	regPath := filepath.Join(t.TempDir(), "reg.json")
 	if err := os.WriteFile(regPath, []byte(""), 0o600); err != nil {
@@ -1770,20 +1748,4 @@ func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
 	if !strings.Contains(buf.String(), "SKIP     Secondary Storage: disabled\n") || !strings.Contains(buf.String(), "SKIP     Cloud Storage: disabled\n") {
 		t.Fatalf("expected skip logs for disabled storage, got: %s", buf.String())
 	}
-}
-
-func TestCheckSystemRequirementsNoPanic(t *testing.T) {
-	// DetectCurrentSystem now walks the real detection ladder, which runs pveversion
-	// and proxmox-backup-manager with a 5s timeout each. Left unstubbed this test asks
-	// the build host what it is, so it both slows down and answers differently on a
-	// developer laptop and on the PVE box the suite is usually run on.
-	stubDetection(t, &environment.EnvironmentInfo{Type: types.ProxmoxBS}, nil)
-
-	// manifest nil
-	CheckSystemRequirements(nil)
-	// just ensure no panic
-
-	manifest := &backup.Manifest{ProxmoxType: "pbs", Hostname: "pbs-node"}
-	CheckSystemRequirements(manifest)
-	// no specific assertions; just ensure call succeeds
 }

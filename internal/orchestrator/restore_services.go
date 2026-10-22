@@ -84,6 +84,10 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 			stop = stopHALRMWithoutSignals
 		}
 		if err := stop(ctx, logger, service); err != nil {
+			if service != "pve-ha-lrm" {
+				// stopHALRMWithoutSignals has already done this for the LRM.
+				startAfterFailedStop(logger, "PVE", service)
+			}
 			restartPVEServicesAfterFailedStop(logger, stopped)
 			return fmt.Errorf("failed to stop PVE services (%s): %w", service, err)
 		}
@@ -97,28 +101,33 @@ func stopPVEClusterServices(ctx context.Context, logger *logging.Logger) error {
 // the LRM closes its watchdog only when it exits on its own, and a SIGKILL before
 // that leaves the watchdog armed, so the node is fenced. Every failure, of the stop
 // command or of the wait (timeout, failed status query, cancelled restore), goes
-// through cancelHALRMStopJob before its error is returned.
+// through startAfterFailedStop before its error is returned.
 func stopHALRMWithoutSignals(ctx context.Context, logger *logging.Logger, service string) error {
 	if err := runCommandWithTimeoutCountdown(ctx, logger, serviceStopNoBlockTimeout, service, "stop (no-block)", "systemctl", "stop", "--no-block", service); err != nil {
-		cancelHALRMStopJob(logger, service)
+		startAfterFailedStop(logger, "PVE", service)
 		return err
 	}
 	if err := waitForServiceInactive(ctx, logger, service, haLRMStopTimeout); err != nil {
-		cancelHALRMStopJob(logger, service)
+		startAfterFailedStop(logger, "PVE", service)
 		return err
 	}
 	resetFailedService(ctx, logger, service)
 	return nil
 }
 
-// cancelHALRMStopJob runs systemctl start on pve-ha-lrm after its stop failed. The
-// no-block stop job may still be queued: left alone, the LRM would stop later, after
-// the restore gave up, with nothing to start it again. The start replaces the queued
-// stop job and leaves the LRM running; where nothing was queued it is harmless. Its
-// own context, like the other restarts, so a cancelled restore still issues it.
-func cancelHALRMStopJob(logger *logging.Logger, service string) {
+// startAfterFailedStop runs systemctl start on a unit whose stop failed. The no-block
+// stop job may still be queued: left alone, the unit would stop later, after the
+// restore gave up, with nothing to start it again. The start replaces the queued stop
+// job and leaves the unit running, or starts it again when the stop did get it down;
+// where nothing was queued it is harmless. Its own context, like the other restarts,
+// so a cancelled restore still issues it. scope names the services in the warning:
+// "PVE" or "PBS".
+func startAfterFailedStop(logger *logging.Logger, scope, service string) {
+	if logger != nil {
+		logger.Debug("Stop of %s failed: starting it to replace its queued stop job", service)
+	}
 	if err := runCommandWithTimeout(context.Background(), logger, serviceStartTimeout, "systemctl", "start", service); err != nil && logger != nil {
-		logger.Warning("Failed to restart PVE services (%s) after the stop failed: %v", service, err)
+		logger.Warning("Failed to restart %s services (%s) after the stop failed: %v", scope, service, err)
 	}
 }
 
@@ -232,17 +241,35 @@ func stopPBSServices(ctx context.Context, logger *logging.Logger) error {
 	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
 		return fmt.Errorf("systemctl not available: %w", err)
 	}
+	// A unit that does not stop ends the stop: it is started to replace its queued
+	// stop job and the units already stopped are started again, so when the operator
+	// goes on with the services running, every one of them runs.
 	services := []string{"proxmox-backup-proxy", "proxmox-backup"}
-	var failures []string
+	var stopped []string
 	for _, service := range services {
 		if err := stopServiceWithRetries(ctx, logger, service); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", service, err))
+			startAfterFailedStop(logger, "PBS", service)
+			restartPBSServicesAfterFailedStop(logger, stopped)
+			return fmt.Errorf("%s: %w", service, err)
 		}
-	}
-	if len(failures) > 0 {
-		return errors.New(strings.Join(failures, "; "))
+		stopped = append(stopped, service)
 	}
 	return nil
+}
+
+// restartPBSServicesAfterFailedStop starts stopped again, last stopped first, with its
+// own context so a cancelled restore still gets its services back.
+func restartPBSServicesAfterFailedStop(logger *logging.Logger, stopped []string) {
+	if len(stopped) == 0 {
+		return
+	}
+	restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
+	defer cancel()
+	for i := len(stopped) - 1; i >= 0; i-- {
+		if err := startServiceWithRetries(restartCtx, logger, stopped[i]); err != nil && logger != nil {
+			logger.Warning("Failed to restart PBS services (%s) after the stop failed: %v", stopped[i], err)
+		}
+	}
 }
 
 func startPBSServices(ctx context.Context, logger *logging.Logger) error {

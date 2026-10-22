@@ -59,3 +59,21 @@ func TestTimeToSchedule(t *testing.T) {
 		})
 	}
 }
+
+// TestTimeToScheduleRoundTrip pins ParseSchedule as the exact inverse of
+// TimeToSchedule: the daemon's HH:MM and the crontab line must never drift.
+func TestTimeToScheduleRoundTrip(t *testing.T) {
+	for _, hhmm := range []string{"00:00", DefaultTime, "21:00", "07:30", "23:59"} {
+		schedule := TimeToSchedule(hhmm)
+		if schedule == "" {
+			t.Fatalf("TimeToSchedule(%q) returned empty", hhmm)
+		}
+		got, err := ParseSchedule(schedule)
+		if err != nil {
+			t.Fatalf("ParseSchedule(TimeToSchedule(%q)): %v", hhmm, err)
+		}
+		if got.Frequency != FrequencyDaily || got.Time != hhmm {
+			t.Fatalf("ParseSchedule(TimeToSchedule(%q)) = %+v, want a daily cadence at %q", hhmm, got, hhmm)
+		}
+	}
+}

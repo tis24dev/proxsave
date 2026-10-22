@@ -143,41 +143,21 @@ func (c *Collector) depRunCommand(ctx context.Context, name string, args ...stri
 	return runCommand(ctx, name, args...)
 }
 
-func (c *Collector) depRunCommandWithEnv(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, error) {
-	if c.deps.RunCommandWithEnv != nil {
-		return c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
-	}
-	return runCommandWithEnv(ctx, extraEnv, name, args...)
-}
-
 // depRunCommandCaptured runs a command with stdout and stderr kept apart. A Collector
-// wired only with the merged-output hooks falls back to them, reporting the merged text
+// wired only with the merged-output hook falls back to it, reporting the merged text
 // as stdout and no stderr.
 //
-// Any injected hook wins over the package-level runner, extraEnv or not: a caller that
-// supplied a runner never wants a real command executed behind its back. RunCommand
-// cannot carry extraEnv, so a Collector wired with only that hook runs the command
-// without the extra environment; the fact is logged rather than worked around.
-func (c *Collector) depRunCommandCaptured(ctx context.Context, extraEnv []string, name string, args ...string) ([]byte, []byte, error) {
+// Any injected hook wins over the package-level runner: a caller that
+// supplied a runner never wants a real command executed behind its back.
+func (c *Collector) depRunCommandCaptured(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
 	if c.deps.RunCommandCaptured != nil {
-		return c.deps.RunCommandCaptured(ctx, extraEnv, name, args...)
-	}
-	if len(extraEnv) == 0 && c.deps.RunCommand != nil {
-		out, err := c.deps.RunCommand(ctx, name, args...)
-		return out, nil, err
-	}
-	if c.deps.RunCommandWithEnv != nil {
-		out, err := c.deps.RunCommandWithEnv(ctx, extraEnv, name, args...)
-		return out, nil, err
+		return c.deps.RunCommandCaptured(ctx, name, args...)
 	}
 	if c.deps.RunCommand != nil {
-		if c.logger != nil {
-			c.logger.Debug("Running %s through the RunCommand hook, which cannot carry %d extra environment variable(s)", name, len(extraEnv))
-		}
 		out, err := c.deps.RunCommand(ctx, name, args...)
 		return out, nil, err
 	}
-	return runCommandCapturedWithEnv(ctx, extraEnv, name, args...)
+	return runCommandCaptured(ctx, name, args...)
 }
 
 type CommandSpec struct {
@@ -310,11 +290,6 @@ type CollectorConfig struct {
 	VzdumpConfigPath     string
 	PBSConfigPath        string
 	PBSDatastorePaths    []string
-
-	// PBS Authentication (auto-detected)
-	PBSRepository  string
-	PBSPassword    string
-	PBSFingerprint string
 }
 
 var defaultExcludePatterns = []string{
@@ -381,12 +356,7 @@ func (c *CollectorConfig) normalizeCommandTimeouts() {
 	}
 }
 
-// NewCollector creates a new backup collector
-func NewCollector(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool) *Collector {
-	return NewCollectorWithDeps(logger, config, tempDir, proxType, dryRun, defaultCollectorDeps())
-}
-
-// NewCollectorWithDeps creates a collector with explicit dependency overrides (for testing).
+// NewCollectorWithDeps creates a collector with explicit dependency overrides.
 func NewCollectorWithDeps(logger *logging.Logger, config *CollectorConfig, tempDir string, proxType types.ProxmoxType, dryRun bool, deps CollectorDeps) *Collector {
 	return &Collector{
 		logger:   logger,
@@ -1268,7 +1238,7 @@ func (c *Collector) runAndClassifyCommand(ctx context.Context, spec CommandSpec,
 		defer cancel()
 	}
 
-	out, stderr, err := c.depRunCommandCaptured(runCtx, nil, spec.Name, spec.Args...)
+	out, stderr, err := c.depRunCommandCaptured(runCtx, spec.Name, spec.Args...)
 	result.output = out
 	if err != nil {
 		// Failure handling reads both streams: exit reasons, privilege hints and the
@@ -1455,205 +1425,6 @@ func (c *Collector) safeCmdOutputBestEffort(ctx context.Context, spec CommandSpe
 
 	c.logger.Debug("Successfully collected %s via command: %s", description, spec.String())
 	return nil
-}
-
-// safeCmdOutputWithPBSAuth executes a command with PBS authentication environment variables
-// This enables automatic authentication for proxmox-backup-client commands
-func (c *Collector) safeCmdOutputWithPBSAuth(ctx context.Context, spec CommandSpec, output, description string, critical bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := spec.validate(); err != nil {
-		return err
-	}
-
-	if output != "" && c.shouldExclude(output) {
-		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
-		c.incFilesSkipped()
-		return nil
-	}
-
-	// Check if command exists
-	if _, err := c.depLookPath(spec.Name); err != nil {
-		if critical {
-			c.incFilesFailed()
-			return fmt.Errorf("critical command not available: %s", spec.Name)
-		}
-		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
-		return nil
-	}
-
-	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command with PBS auth: %s > %s", spec.String(), output)
-		return nil
-	}
-
-	// Set PBS authentication environment variables (if available)
-	var extraEnv []string
-	pbsAuthUsed := false
-	if c.config.PBSRepository != "" {
-		extraEnv = append(extraEnv, fmt.Sprintf("PBS_REPOSITORY=%s", c.config.PBSRepository))
-		pbsAuthUsed = true
-	}
-	if c.config.PBSPassword != "" {
-		extraEnv = append(extraEnv, fmt.Sprintf("PBS_PASSWORD=%s", c.config.PBSPassword))
-		pbsAuthUsed = true
-	}
-	if c.config.PBSFingerprint != "" {
-		extraEnv = append(extraEnv, fmt.Sprintf("PBS_FINGERPRINT=%s", c.config.PBSFingerprint))
-		pbsAuthUsed = true
-	}
-
-	if pbsAuthUsed {
-		c.logger.Debug("Using PBS authentication for command: %s", spec.Name)
-	}
-
-	cmdString := spec.String()
-	out, stderr, err := c.depRunCommandCaptured(ctx, extraEnv, spec.Name, spec.Args...)
-	if err != nil {
-		summary := summarizeCommandOutputText(mergeCommandStreams(out, stderr))
-		if critical {
-			c.incFilesFailed()
-			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summary)
-		}
-		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
-			description,
-			cmdString,
-			err,
-			summary,
-		)
-		return nil // Non-critical failure
-	}
-
-	if len(bytes.TrimSpace(stderr)) > 0 {
-		c.logger.Debug("Command `%s` wrote to stderr while succeeding (%s): %s",
-			cmdString, description, summarizeCommandOutputText(string(stderr)))
-	}
-
-	if err := c.writeReportFile(output, out); err != nil {
-		return err
-	}
-	c.logger.Debug("Successfully collected %s via PBS-authenticated command: %s", description, cmdString)
-
-	return nil
-}
-
-func pbsRepositoryWithDatastore(repository, datastoreName string) string {
-	separator := -1
-	bracketDepth := 0
-	for i, r := range repository {
-		switch r {
-		case '[':
-			bracketDepth++
-		case ']':
-			if bracketDepth > 0 {
-				bracketDepth--
-			}
-		case ':':
-			if bracketDepth == 0 {
-				separator = i
-			}
-		}
-	}
-	if separator >= 0 {
-		return repository[:separator+1] + datastoreName
-	}
-	return repository + ":" + datastoreName
-}
-
-// safeCmdOutputWithPBSAuthForDatastore executes a command with PBS authentication for a specific datastore
-// This function appends the datastore name to the PBS_REPOSITORY environment variable
-func (c *Collector) safeCmdOutputWithPBSAuthForDatastore(ctx context.Context, spec CommandSpec, output, description, datastoreName string, critical bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := spec.validate(); err != nil {
-		return err
-	}
-
-	if output != "" && c.shouldExclude(output) {
-		c.logger.Debug("Skipping %s: output %s excluded by pattern", description, output)
-		c.incFilesSkipped()
-		return nil
-	}
-
-	// Check if command exists
-	if _, err := c.depLookPath(spec.Name); err != nil {
-		if critical {
-			c.incFilesFailed()
-			return fmt.Errorf("critical command not available: %s", spec.Name)
-		}
-		c.logger.Debug("Command not available: %s (skipping %s)", spec.Name, description)
-		return nil
-	}
-
-	if c.dryRun {
-		c.logger.Debug("[DRY RUN] Would execute command with PBS auth for datastore %s: %s > %s", datastoreName, spec.String(), output)
-		return nil
-	}
-
-	// Check if PBS credentials are configured
-	if c.config.PBSRepository == "" && c.config.PBSPassword == "" {
-		// No PBS credentials configured - skip this command gracefully
-		c.logger.Warning("Skipping %s: PBS credentials not configured. Set PBS_REPOSITORY and PBS_PASSWORD in config or environment to collect namespace information.", description)
-		return nil
-	}
-
-	// Build PBS_REPOSITORY with datastore
-	repoWithDatastore := ""
-	if c.config.PBSRepository != "" {
-		repoWithDatastore = pbsRepositoryWithDatastore(c.config.PBSRepository, datastoreName)
-	} else {
-		// No repository configured but we have password - use root@pam as default user
-		repoWithDatastore = fmt.Sprintf("root@pam@localhost:%s", datastoreName)
-		c.logger.Debug("Using default user root@pam for PBS repository")
-	}
-
-	var extraEnv []string
-	extraEnv = append(extraEnv, fmt.Sprintf("PBS_REPOSITORY=%s", repoWithDatastore))
-	c.logger.Debug("Using PBS_REPOSITORY=%s", repoWithDatastore)
-
-	if c.config.PBSPassword != "" {
-		extraEnv = append(extraEnv, fmt.Sprintf("PBS_PASSWORD=%s", c.config.PBSPassword))
-		c.logger.Debug("Using PBS_PASSWORD (hidden)")
-	}
-	if c.config.PBSFingerprint != "" {
-		extraEnv = append(extraEnv, fmt.Sprintf("PBS_FINGERPRINT=%s", c.config.PBSFingerprint))
-		c.logger.Debug("Using PBS_FINGERPRINT=%s", c.config.PBSFingerprint)
-	}
-
-	cmdString := spec.String()
-	out, stderr, err := c.depRunCommandCaptured(ctx, extraEnv, spec.Name, spec.Args...)
-	if err != nil {
-		summary := summarizeCommandOutputText(mergeCommandStreams(out, stderr))
-		if critical {
-			c.incFilesFailed()
-			return fmt.Errorf("critical command `%s` failed for %s: %w (output: %s)", cmdString, description, err, summary)
-		}
-		c.logger.Warning("Skipping %s: command `%s` failed (%v). Non-critical; backup continues. Ensure the PBS CLI is available and has proper permissions. Output: %s",
-			description,
-			cmdString,
-			err,
-			summary,
-		)
-		return nil // Non-critical failure
-	}
-
-	if len(bytes.TrimSpace(stderr)) > 0 {
-		c.logger.Debug("Command `%s` wrote to stderr while succeeding (%s): %s",
-			cmdString, description, summarizeCommandOutputText(string(stderr)))
-	}
-
-	if err := c.writeReportFile(output, out); err != nil {
-		return err
-	}
-	c.logger.Debug("Successfully collected %s via PBS-authenticated command for datastore %s: %s", description, datastoreName, cmdString)
-
-	return nil
-}
-
-func summarizeCommandOutput(buf *bytes.Buffer) string {
-	return summarizeCommandOutputText(buf.String())
 }
 
 func summarizeCommandOutputText(text string) string {

@@ -289,6 +289,12 @@ var notes = []Note{
 			"If backup.env still uses a legacy variable name, rename it to the current one.",
 		},
 	},
+	{
+		Version: "0.44.1",
+		Lines: []string{
+			"This release includes a collection of fixes and corrections.",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by

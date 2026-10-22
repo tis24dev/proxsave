@@ -49,15 +49,6 @@ func (r *Result) add(sev issueSeverity, msg string) {
 	r.Issues = append(r.Issues, Issue{Severity: sev, Message: msg})
 }
 
-func (r *Result) HasErrors() bool {
-	for _, issue := range r.Issues {
-		if issue.Severity == severityError {
-			return true
-		}
-	}
-	return false
-}
-
 func (r *Result) ErrorCount() int {
 	count := 0
 	for _, issue := range r.Issues {
@@ -76,10 +67,6 @@ func (r *Result) WarningCount() int {
 		}
 	}
 	return count
-}
-
-func (r *Result) TotalIssues() int {
-	return len(r.Issues)
 }
 
 type Checker struct {

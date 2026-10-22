@@ -2,9 +2,6 @@ package config
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,12 +35,6 @@ var (
 		"CUSTOM_BACKUP_PATHS": true,
 		"BACKUP_BLACKLIST":    true,
 	}
-
-	pbsFingerprintCertPaths = []string{
-		"/etc/proxmox-backup/proxy.pem",
-	}
-
-	configHostnameFunc = os.Hostname
 )
 
 // NormalizeEmailDeliveryMethod maps user-facing aliases to the internal delivery
@@ -154,8 +145,7 @@ type Config struct {
 	CloudStartupFailed     bool
 
 	// PBS storage: every backup is also uploaded to the PBS storage PBSTargetStorage
-	// defined in <PVE_CONFIG_PATH>/storage.cfg. Distinct from PBSRepository/PBSPassword/
-	// PBSFingerprint, which the collector uses on a PBS host.
+	// defined in <PVE_CONFIG_PATH>/storage.cfg.
 	PBSTargetEnabled bool
 	PBSTargetStorage string
 
@@ -376,21 +366,11 @@ type Config struct {
 	CustomBackupPaths []string
 	BackupBlacklist   []string
 
-	// PBS Authentication (auto-detected, no manual input required)
-	PBSRepository  string // Auto-detected from environment or generated
-	PBSPassword    string // Auto-detected API token secret
-	PBSFingerprint string // Auto-detected from PBS certificate
-
 	// raw configuration map
 	raw                  map[string]string
 	ignoredBaseDirConfig string
 	ignoredBaseDirEnv    string
 	detectedBaseDir      string
-}
-
-// LoadConfig reads the backup.env configuration file.
-func LoadConfig(configPath string) (*Config, error) {
-	return LoadConfigWithBaseDir(configPath, defaultBaseDir())
 }
 
 // LoadConfigWithBaseDir reads the backup.env configuration file and expands
@@ -515,7 +495,6 @@ func (c *Config) parse() error {
 	if err := c.validatePBSTargetSettings(); err != nil {
 		return err
 	}
-	c.autoDetectPBSAuth()
 	return nil
 }
 
@@ -1550,188 +1529,6 @@ func normalizeList(values []string) []string {
 	return clean
 }
 
-// autoDetectPBSAuth automatically detects PBS authentication credentials
-// from environment variables, config files, or system defaults.
-// This function ensures ZERO manual user input is required.
-func (c *Config) autoDetectPBSAuth() {
-	// Priority 1: Check environment variables (set by systemd or shell)
-	if repo := os.Getenv("PBS_REPOSITORY"); repo != "" {
-		c.PBSRepository = repo
-	}
-	if pass := os.Getenv("PBS_PASSWORD"); pass != "" {
-		c.PBSPassword = pass
-	}
-	if fp := os.Getenv("PBS_FINGERPRINT"); fp != "" {
-		c.PBSFingerprint = fp
-	}
-
-	// Priority 2: Check config file for PBS credentials
-	if c.PBSRepository == "" {
-		c.PBSRepository = c.getString("PBS_REPOSITORY", "")
-	}
-	if c.PBSPassword == "" {
-		c.PBSPassword = c.getString("PBS_PASSWORD", "")
-	}
-	if c.PBSFingerprint == "" {
-		c.PBSFingerprint = c.getString("PBS_FINGERPRINT", "")
-	}
-
-	// Priority 3: Auto-detect from local PBS system files only.
-	// Never infer a local certificate fingerprint for an explicitly remote repository.
-	if c.PBSFingerprint == "" && shouldAutoDetectLocalPBSFingerprint(c.PBSRepository) {
-		c.PBSFingerprint = autoDetectPBSFingerprint()
-	}
-
-	// Priority 4: Try to read API token from secure_account directory
-	if c.PBSPassword == "" && c.PBSRepository == "" {
-		token, secret := autoDetectPBSToken(c.SecureAccount)
-		if token != "" && secret != "" {
-			// Use the detected token
-			c.PBSRepository = fmt.Sprintf("%s@localhost", token)
-			c.PBSPassword = secret
-		}
-	}
-
-	// Note: If all detection fails, PBS client commands will fallback gracefully
-	// (see safeCmdOutputWithPBSAuth in collector.go)
-}
-
-// autoDetectPBSFingerprint tries to extract the SSL fingerprint from PBS certificate
-func autoDetectPBSFingerprint() string {
-	for _, certPath := range pbsFingerprintCertPaths {
-		if fp := extractFingerprintFromCert(certPath); fp != "" {
-			return fp
-		}
-	}
-
-	return ""
-}
-
-// extractFingerprintFromCert extracts SHA256 fingerprint from a certificate file
-func extractFingerprintFromCert(certPath string) string {
-	data, err := os.ReadFile(certPath)
-	if err != nil || len(data) == 0 {
-		return ""
-	}
-
-	var certDER []byte
-	foundCert := false
-	rest := data
-	for len(rest) > 0 {
-		block, remaining := pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		rest = remaining
-		if block.Type == "CERTIFICATE" && len(block.Bytes) > 0 {
-			certDER = block.Bytes
-			foundCert = true
-			break
-		}
-	}
-	if !foundCert {
-		return ""
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return ""
-	}
-
-	sum := sha256.Sum256(cert.Raw)
-	parts := make([]string, 0, len(sum))
-	for _, b := range sum {
-		parts = append(parts, fmt.Sprintf("%02x", b))
-	}
-	return strings.Join(parts, ":")
-}
-
-func shouldAutoDetectLocalPBSFingerprint(repo string) bool {
-	repo = strings.TrimSpace(repo)
-	if repo == "" {
-		return true
-	}
-
-	host := parsePBSRepositoryHost(repo)
-	if host == "" {
-		return false
-	}
-	return isLocalPBSHost(host)
-}
-
-func parsePBSRepositoryHost(repo string) string {
-	repo = strings.TrimSpace(repo)
-	if repo == "" {
-		return ""
-	}
-
-	at := strings.LastIndex(repo, "@")
-	hostPart := repo
-	if at >= 0 {
-		if at == len(repo)-1 {
-			return ""
-		}
-		hostPart = strings.TrimSpace(repo[at+1:])
-	}
-	if hostPart == "" {
-		return ""
-	}
-
-	if strings.HasPrefix(hostPart, "[") {
-		end := strings.Index(hostPart, "]")
-		if end <= 1 {
-			return ""
-		}
-		return normalizePBSHost(hostPart[1:end])
-	}
-
-	if colon := strings.LastIndex(hostPart, ":"); colon >= 0 {
-		hostPart = strings.TrimSpace(hostPart[:colon])
-	}
-	if hostPart == "" {
-		return ""
-	}
-	return normalizePBSHost(hostPart)
-}
-
-func isLocalPBSHost(host string) bool {
-	host = normalizePBSHost(host)
-	switch host {
-	case "", "localhost", "127.0.0.1", "::1":
-		return host != ""
-	}
-
-	currentHost, err := configHostnameFunc()
-	if err != nil {
-		return false
-	}
-	currentHost = normalizePBSHost(currentHost)
-	if currentHost == "" {
-		return false
-	}
-	if host == currentHost {
-		return true
-	}
-
-	currentShort := currentHost
-	if dot := strings.Index(currentShort, "."); dot > 0 {
-		currentShort = currentShort[:dot]
-	}
-	hostShort := host
-	if dot := strings.Index(hostShort, "."); dot > 0 {
-		hostShort = hostShort[:dot]
-	}
-	return hostShort == currentShort &&
-		(!strings.Contains(host, ".") || !strings.Contains(currentHost, "."))
-}
-
-func normalizePBSHost(host string) string {
-	host = strings.TrimSpace(strings.ToLower(host))
-	host = strings.Trim(host, "[]")
-	host = strings.TrimSuffix(host, ".")
-	return host
-}
-
 // BuildWebhookConfig constructs a complete webhook configuration with all endpoints
 func (c *Config) BuildWebhookConfig() *WebhookConfig {
 	endpoints := []WebhookEndpoint{}
@@ -1899,9 +1696,7 @@ type WebhookAuth struct {
 	Secret string
 }
 
-// PBSTokenFiles returns the files autoDetectPBSToken reads a PBS API token from, in the order it
-// tries them. The security check verifies the permissions of this same list, so a file read as a
-// credential is never left unchecked.
+// PBSTokenFiles returns the PBS token files whose permissions the security check verifies, in this order.
 func PBSTokenFiles(secureAccountPath string) []string {
 	if secureAccountPath == "" {
 		secureAccountPath = filepath.Join(defaultBaseDir(), "secure_account")
@@ -1911,39 +1706,6 @@ func PBSTokenFiles(secureAccountPath string) []string {
 		filepath.Join(secureAccountPath, "pbs_api_token"),
 		"/root/.pbs-token", // Alternative location
 	}
-}
-
-// autoDetectPBSToken tries to read API token from secure_account directory
-func autoDetectPBSToken(secureAccountPath string) (token, secret string) {
-	for _, tokenFile := range PBSTokenFiles(secureAccountPath) {
-		if utils.FileExists(tokenFile) {
-			if data, err := os.ReadFile(tokenFile); err == nil {
-				lines := strings.Split(string(data), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if line == "" || strings.HasPrefix(line, "#") {
-						continue
-					}
-					// Format: token_name=token_secret or just token_secret
-					if strings.Contains(line, "=") {
-						parts := strings.SplitN(line, "=", 2)
-						if len(parts) == 2 {
-							token = strings.TrimSpace(parts[0])
-							secret = strings.TrimSpace(parts[1])
-							return
-						}
-					} else {
-						// Just the secret, use default token name
-						secret = line
-						token = "backup@pbs!go-client" // Default token
-						return
-					}
-				}
-			}
-		}
-	}
-
-	return "", ""
 }
 
 // IsGFSRetentionEnabled returns true if GFS retention policy is configured.

@@ -53,7 +53,7 @@ func TestStatusLegacyShimRoundTrip(t *testing.T) {
 
 // TestStatusShimFirstHeartbeatKeepsPriorOutcome is THE data-loss guard: an in-place daemon
 // upgrade whose FIRST write is a heartbeat read-modify-write must NOT drop the last backup
-// outcome + update verdict that a legacy file carried as top-level keys. RecordPing does a
+// outcome + update verdict that a legacy file carried as top-level keys. RecordOutcomePing does a
 // LoadStatus -> mutate -> writeStatus cycle; if UnmarshalJSON did not fold the legacy keys
 // into Records, that reload would return them as nil and the write-back would erase them.
 func TestStatusShimFirstHeartbeatKeepsPriorOutcome(t *testing.T) {
@@ -66,8 +66,8 @@ func TestStatusShimFirstHeartbeatKeepsPriorOutcome(t *testing.T) {
 	}`)
 
 	// The first heartbeat after upgrade: a read-modify-write over the legacy file.
-	if err := RecordPing(base, "self", KindHeartbeat, 999, true, nil); err != nil {
-		t.Fatalf("RecordPing heartbeat: %v", err)
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, 999, true, false, nil); err != nil {
+		t.Fatalf("RecordOutcomePing heartbeat: %v", err)
 	}
 
 	st := mustLoad(t, base)
@@ -82,7 +82,7 @@ func TestStatusShimFirstHeartbeatKeepsPriorOutcome(t *testing.T) {
 	}
 }
 
-// TestStatusNewFormatRoundTrip: RecordPing several kinds, including a dynamic notify-<ch>
+// TestStatusNewFormatRoundTrip: RecordOutcomePing several kinds, including a dynamic notify-<ch>
 // kind, and confirm they all persist into Records (and the file is written in the new
 // "records" shape, not the legacy top-level keys).
 func TestStatusNewFormatRoundTrip(t *testing.T) {
@@ -97,8 +97,8 @@ func TestStatusNewFormatRoundTrip(t *testing.T) {
 		{KindRunFinished, 2},
 		{notifyKind, 3},
 	} {
-		if err := RecordPing(base, "self", step.kind, step.ts, true, nil); err != nil {
-			t.Fatalf("RecordPing %s: %v", step.kind, err)
+		if err := RecordOutcomePing(base, "self", step.kind, step.ts, true, false, nil); err != nil {
+			t.Fatalf("RecordOutcomePing %s: %v", step.kind, err)
 		}
 	}
 
@@ -137,11 +137,11 @@ func TestStatusRecordsWinOverLegacy(t *testing.T) {
 	}
 }
 
-// TestRecordPingDynamicKind: a dynamic notify-<ch> kind is stored into Records without error
+// TestRecordOutcomePingDynamicKind: a dynamic notify-<ch> kind is stored into Records without error
 // (the old code errored on any kind outside a fixed switch; the new code default-stores).
-func TestRecordPingDynamicKind(t *testing.T) {
+func TestRecordOutcomePingDynamicKind(t *testing.T) {
 	base := t.TempDir()
-	if err := RecordPing(base, "self", "notify-email", 5, true, nil); err != nil {
+	if err := RecordOutcomePing(base, "self", "notify-email", 5, true, false, nil); err != nil {
 		t.Fatalf("dynamic kind must not error, got %v", err)
 	}
 	rec := mustLoad(t, base).Record("notify-email")
@@ -150,12 +150,12 @@ func TestRecordPingDynamicKind(t *testing.T) {
 	}
 }
 
-// TestRecordPingEmptyKindRejected: an empty kind is a caller bug -> it returns an error and
+// TestRecordOutcomePingEmptyKindRejected: an empty kind is a caller bug -> it returns an error and
 // must NOT create a fresh file nor mutate an existing one (the guard runs before any write).
-func TestRecordPingEmptyKindRejected(t *testing.T) {
+func TestRecordOutcomePingEmptyKindRejected(t *testing.T) {
 	// Fresh dir: empty kind must not create the file.
 	base := t.TempDir()
-	if err := RecordPing(base, "self", "", 5, true, nil); err == nil {
+	if err := RecordOutcomePing(base, "self", "", 5, true, false, nil); err == nil {
 		t.Fatalf("empty kind should return an error")
 	}
 	if _, statErr := os.Stat(StatusPath(base)); !os.IsNotExist(statErr) {
@@ -163,14 +163,14 @@ func TestRecordPingEmptyKindRejected(t *testing.T) {
 	}
 
 	// Existing file: empty kind must not mutate it.
-	if err := RecordPing(base, "self", KindHeartbeat, 7, true, nil); err != nil {
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, 7, true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 	before, err := os.ReadFile(StatusPath(base))
 	if err != nil {
 		t.Fatalf("read seeded file: %v", err)
 	}
-	if err := RecordPing(base, "self", "", 8, true, nil); err == nil {
+	if err := RecordOutcomePing(base, "self", "", 8, true, false, nil); err == nil {
 		t.Fatalf("empty kind over an existing file should return an error")
 	}
 	after, err := os.ReadFile(StatusPath(base))

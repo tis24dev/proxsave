@@ -29,7 +29,7 @@ func TestApplyInstallDataNotifyLevel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ApplyInstallData: %v", err)
 			}
-			if got := ParseEnvTemplate(result)["NOTIFY_ON"]; got != tc.want {
+			if got := parseEnvTemplate(result)["NOTIFY_ON"]; got != tc.want {
 				t.Fatalf("NOTIFY_ON = %q, want %q", got, tc.want)
 			}
 			if n := strings.Count(result, "\nNOTIFY_ON="); n != 1 {

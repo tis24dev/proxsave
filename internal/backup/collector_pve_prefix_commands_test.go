@@ -51,10 +51,7 @@ func newCommandRecordingCollector(t *testing.T, prefix string, installed bool) (
 		return "", fmt.Errorf("%s not installed", name)
 	}
 	c.deps.RunCommand = func(_ context.Context, name string, _ ...string) ([]byte, error) { return record(name) }
-	c.deps.RunCommandWithEnv = func(_ context.Context, _ []string, name string, _ ...string) ([]byte, error) {
-		return record(name)
-	}
-	c.deps.RunCommandCaptured = func(_ context.Context, _ []string, name string, _ ...string) ([]byte, []byte, error) {
+	c.deps.RunCommandCaptured = func(_ context.Context, name string, _ ...string) ([]byte, []byte, error) {
 		out, err := record(name)
 		return out, nil, err
 	}

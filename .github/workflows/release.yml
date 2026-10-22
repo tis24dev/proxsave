@@ -108,7 +108,7 @@ jobs:
       # INSTALL SYFT (for CycloneDX SBOM via GoReleaser)
       ########################################
       - name: Install Syft (for SBOM generation)
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.19.0
 
@@ -160,7 +160,7 @@ jobs:
       # GORELEASER
       ########################################
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           version: latest
           workdir: ${{ github.workspace }}

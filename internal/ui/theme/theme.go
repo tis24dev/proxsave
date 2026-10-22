@@ -4,8 +4,6 @@
 package theme
 
 import (
-	"image/color"
-
 	"charm.land/lipgloss/v2"
 )
 
@@ -67,35 +65,3 @@ const (
 	SymbolCheck    = "☑"
 	SymbolUncheck  = "☐"
 )
-
-// StatusColor returns the appropriate color for a status keyword.
-func StatusColor(status string) color.Color {
-	switch status {
-	case "success", "ok", "done", "completed":
-		return Green
-	case "error", "failed", "fail":
-		return Red
-	case "warning", "warn":
-		return Yellow
-	case "info", "pending", "running":
-		return Blue
-	default:
-		return Light
-	}
-}
-
-// StatusSymbol returns the appropriate symbol for a status keyword.
-func StatusSymbol(status string) string {
-	switch status {
-	case "success", "ok", "done", "completed":
-		return SymbolSuccess
-	case "error", "failed", "fail":
-		return SymbolError
-	case "warning", "warn":
-		return SymbolWarning
-	case "info", "pending", "running":
-		return SymbolInfo
-	default:
-		return SymbolBullet
-	}
-}

@@ -100,8 +100,7 @@ func newChkLogger() *logging.Logger { return logging.New(types.LogLevelDebug, fa
 // --- tests ---
 
 // The bounded path must produce the exact crypto/sha256 digest for both the
-// timeout=0 (synchronous) and timeout>0 (per-chunk worker) branches, and the
-// legacy wrapper must equal the bounded(0) result.
+// timeout=0 (synchronous) and timeout>0 (per-chunk worker) branches.
 func TestGenerateChecksumBounded_KnownVectors(t *testing.T) {
 	logger := newChkLogger()
 	dir := t.TempDir()
@@ -129,9 +128,6 @@ func TestGenerateChecksumBounded_KnownVectors(t *testing.T) {
 				if got != want {
 					t.Fatalf("timeout=%v: got %s want %s", to, got, want)
 				}
-			}
-			if leg, err := GenerateChecksum(context.Background(), logger, p); err != nil || leg != want {
-				t.Fatalf("legacy wrapper = (%s, %v); want %s", leg, err, want)
 			}
 		})
 	}

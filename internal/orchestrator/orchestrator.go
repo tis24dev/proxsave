@@ -609,10 +609,6 @@ func (o *Orchestrator) collectorDeps() backup.CollectorDeps {
 	}
 }
 
-func (o *Orchestrator) describeTelegramConfig() string {
-	return describeTelegramStatus(o.cfg)
-}
-
 func (o *Orchestrator) ensureTempRegistry() *TempDirRegistry {
 	if o.tempRegistry != nil {
 		return o.tempRegistry
@@ -1359,11 +1355,6 @@ func applyCollectorOverrides(cc *backup.CollectorConfig, cfg *config.Config) {
 	cc.VzdumpConfigPath = cfg.VzdumpConfigPath
 	cc.PBSConfigPath = cfg.PBSConfigPath
 	cc.PBSDatastorePaths = append([]string(nil), cfg.PBSDatastorePaths...)
-
-	// Pass PBS authentication (auto-detected, zero user input)
-	cc.PBSRepository = cfg.PBSRepository
-	cc.PBSPassword = cfg.PBSPassword
-	cc.PBSFingerprint = cfg.PBSFingerprint
 }
 func copyFile(fs FS, src, dest string) error {
 	return copyFileWithPerm(fs, src, dest, 0o640)

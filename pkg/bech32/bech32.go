@@ -60,10 +60,6 @@ func hrpExpand(hrp string) []byte {
 	return ret
 }
 
-func verifyChecksum(hrp string, data []byte) bool {
-	return polymod(append(hrpExpand(hrp), data...)) == 1
-}
-
 func createChecksum(hrp string, data []byte) []byte {
 	values := append(hrpExpand(hrp), data...)
 	values = append(values, []byte{0, 0, 0, 0, 0, 0}...)
@@ -142,37 +138,4 @@ func Encode(hrp string, data []byte) (string, error) {
 		return ret.String(), nil
 	}
 	return strings.ToUpper(ret.String()), nil
-}
-
-// Decode decodes a Bech32 string. If the string is uppercase, the HRP will be uppercase.
-func Decode(s string) (hrp string, data []byte, err error) {
-	if strings.ToLower(s) != s && strings.ToUpper(s) != s {
-		return "", nil, fmt.Errorf("mixed case")
-	}
-	pos := strings.LastIndex(s, "1")
-	if pos < 1 || pos+7 > len(s) {
-		return "", nil, fmt.Errorf("separator '1' at invalid position: pos=%d, len=%d", pos, len(s))
-	}
-	hrp = s[:pos]
-	for p, c := range hrp {
-		if c < 33 || c > 126 {
-			return "", nil, fmt.Errorf("invalid character human-readable part: s[%d]=%d", p, c)
-		}
-	}
-	s = strings.ToLower(s)
-	for p, c := range s[pos+1:] {
-		d := strings.IndexRune(charset, c)
-		if d == -1 {
-			return "", nil, fmt.Errorf("invalid character data part: s[%d]=%v", p, c)
-		}
-		data = append(data, byte(d&0x1f))
-	}
-	if !verifyChecksum(hrp, data) {
-		return "", nil, fmt.Errorf("invalid checksum")
-	}
-	data, err = convertBits(data[:len(data)-6], 5, 8, false)
-	if err != nil {
-		return "", nil, err
-	}
-	return hrp, data, nil
 }

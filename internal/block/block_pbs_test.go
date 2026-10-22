@@ -176,7 +176,7 @@ func wantLines(t *testing.T, got, want []string) {
 
 func TestInitPBSHealthyServer(t *testing.T) {
 	h := newPBSHarness(t, "proxsave-probe", nil, simpleRetention(15), nil)
-	if !h.report.Initialized() || !h.p.Initialized() {
+	if !h.p.Initialized() {
 		t.Fatalf("not initialized: fact=%v cause=%v", h.report.Fact, h.report.Cause)
 	}
 	if len(h.report.Backups) != 2 {
@@ -229,7 +229,7 @@ func TestInitPBSKeyAcceptedThenServer(t *testing.T) {
 	}, simpleRetention(15), func(h *pbsHarness) {
 		h.fake.respond(t, "key-show", 0, string(keyShowJSON("none", testEncKeyFP)), "")
 	})
-	if !h.report.Initialized() {
+	if !h.p.Initialized() {
 		t.Fatalf("not initialized: fact=%v cause=%v", h.report.Fact, h.report.Cause)
 	}
 }
@@ -264,7 +264,7 @@ func TestInitPBSServerCauses(t *testing.T) {
 			h := newPBSHarness(t, "proxsave-probe", nil, simpleRetention(15), func(h *pbsHarness) {
 				h.fake.respond(t, tc.failing, 255, "", tc.stderr)
 			})
-			if h.report.Initialized() || h.report.Cause == nil || !h.report.Contacted {
+			if h.p.Initialized() || h.report.Cause == nil || !h.report.Contacted {
 				t.Fatalf("report = %+v", h.report)
 			}
 			if got := h.report.Cause.Capitalized(); got != tc.want {
@@ -314,7 +314,7 @@ func TestExecuteWithKeyAndOldClient(t *testing.T) {
 		h.fake.respond(t, "snapshot-list", 0, snapshotListJSON(snapshotJSON(testBackupID, testRunTime, "encrypt", false, "proxsave.pxar.didx", "catalog.pcat1.didx")), "")
 		h.fake.respond(t, "backup", 0, "", "Starting backup: [r2-enc]:"+testRunSnapshot+"\n")
 	})
-	if !h.report.Initialized() {
+	if !h.p.Initialized() {
 		t.Fatalf("not initialized: %+v", h.report)
 	}
 	tree := newTree(t)
@@ -578,8 +578,8 @@ func TestRootNamespaceHasNoNsFlag(t *testing.T) {
 	fake.respond(t, "version", 0, versionJSONOutput("4.2", "5", "4.2", "5"), "")
 	fake.respond(t, "status", 0, measuredStatusJSON, "")
 	fake.respond(t, "snapshot-list", 0, "[]", "")
-	_, report := InitPBS(context.Background(), PBSOptions{PVEConfigPath: dir, StorageID: "root-ns", Hostname: testHostname, IsPVEHost: true})
-	if !report.Initialized() {
+	p, report := InitPBS(context.Background(), PBSOptions{PVEConfigPath: dir, StorageID: "root-ns", Hostname: testHostname, IsPVEHost: true})
+	if !p.Initialized() {
 		t.Fatalf("report = %+v", report)
 	}
 	for _, call := range fake.calls(t) {
@@ -675,7 +675,7 @@ func TestApplyStartupFigures(t *testing.T) {
 	h = newPBSHarness(t, "proxsave-probe", nil, simpleRetention(15), func(h *pbsHarness) {
 		h.fake.respond(t, "snapshot-list", 255, "", measuredStderr["namespace"])
 	})
-	if h.report.Initialized() || h.p.status.Total == 0 {
+	if h.p.Initialized() || h.p.status.Total == 0 {
 		t.Fatalf("want a storage not initialized with its space read: report=%+v status=%+v", h.report, h.p.status)
 	}
 	unread := Result{Status: StatusSkipped, Backups: -1}

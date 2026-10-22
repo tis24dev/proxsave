@@ -235,7 +235,7 @@ Completion Summary
 | `internal/orchestrator/categories.go` | Category definitions | `GetAllCategories()`, `PathMatchesCategory()` |
 | `internal/orchestrator/selective.go` | Category selection UI | `ShowRestoreModeMenuWithReader()`, `ShowCategorySelectionMenuWithReader()` |
 | `internal/orchestrator/restore_plan_render.go` | Shared restore-plan body (no chrome) | `buildRestorePlanText()` |
-| `internal/orchestrator/decrypt.go` | Decryption workflow | `prepareDecryptedBackup()` |
+| `internal/orchestrator/decrypt.go` | Decryption workflow | `RunDecryptWorkflow()`, `RunDecryptWorkflowWithDeps()` |
 | `internal/orchestrator/compatibility.go` | System validation | `ValidateCompatibility()` |
 | `internal/orchestrator/backup_safety.go` | Safety backups | `CreateSafetyBackup()` |
 | `internal/orchestrator/directory_recreation.go` | Storage setup | `RecreateDirectoriesFromConfig()` |
@@ -377,8 +377,7 @@ instead of line numbers, which drift on every edit):
 
 9. **pvesh SAFE Apply** (`runClusterSafeApply()` in `restore_workflow_ui_extract.go` ->
    `runSafeClusterApplyWithUI()` in `restore_workflow_ui_cluster_apply.go`, which drives
-   `safeClusterApplyUIFlow.run()`; the standalone `runSafeClusterApply()` in
-   `restore_cluster_apply.go` is the CLI wrapper, not used by this workflow):
+   `safeClusterApplyUIFlow.run()`):
    - If SAFE cluster mode selected
    - Apply VM/CT configs, storage.cfg, datacenter.cfg via API
 
@@ -522,9 +521,9 @@ flowchart TD
 
 **Key Functions**:
 
-1. **`prepareDecryptedBackup()`** (`decrypt.go`):
+1. **`RunDecryptWorkflow()` / `RunDecryptWorkflowWithDeps()`** (`decrypt.go`):
    - Entry point for the CLI decryption workflow
-   - Delegates to selection and decryption
+   - Runs `runDecryptWorkflowWithUI()` (`decrypt_workflow_ui.go`) with the CLI UI, which delegates to selection and decryption
 
 2. **`prepareRestoreBundleWithUI()` / `selectBackupCandidateWithUI()`** (`restore_workflow_ui.go`, `decrypt_workflow_ui.go`):
    - Display configured paths
@@ -773,55 +772,31 @@ the analysis-failure fallback, where export means skipped.
 **File**: `internal/orchestrator/restore_workflow_ui_plan.go` -> `analyzeArchive()`
 
 ```go
-availableCategories, err := AnalyzeBackupCategories(
+availableCategories, decisionInfo, err := AnalyzeRestoreArchive(
     prepared.ArchivePath,
     logger,
 )
 ```
 
-**Implementation** (`AnalyzeBackupCategories()` in `selective.go`, a thin wrapper over
-`AnalyzeRestoreArchive()` in `restore_decision.go`):
+**Implementation** (`AnalyzeRestoreArchive()` in `restore_decision.go`):
 
 ```go
-func AnalyzeBackupCategories(
+func AnalyzeRestoreArchive(
     archivePath string,
     logger *logging.Logger,
-) ([]Category, error) {
-    // 1. Open archive with decompression
-    file, _ := os.Open(archivePath)
-    reader := createDecompressionReader(file, archivePath)
-    tarReader := tar.NewReader(reader)
-
-    // 2. Collect all entry names
-    var allPaths []string
-    for {
-        header, err := tarReader.Next()
-        if err == io.EOF {
-            break
-        }
-        allPaths = append(allPaths, header.Name)
+) ([]Category, *RestoreDecisionInfo, error) {
+    // 1. Open the archive with decompression and read every entry once
+    //    (inspectRestoreArchiveContents -> collectRestoreArchiveFacts): entry
+    //    names plus the decision metadata; a read error is returned, not swallowed.
+    inspection, err := inspectRestoreArchiveContents(archivePath, logger)
+    if err != nil {
+        return nil, nil, err
     }
 
-    // 3. Check each category for matches
-    categories := GetAllCategories()
-    for i := range categories {
-        for _, path := range allPaths {
-            if PathMatchesCategory(path, categories[i]) {
-                categories[i].IsAvailable = true
-                break
-            }
-        }
-    }
-
-    // 4. Filter to available only
-    available := []Category{}
-    for _, cat := range categories {
-        if cat.IsAvailable {
-            available = append(available, cat)
-        }
-    }
-
-    return available, nil
+    // 2. inspection.AvailableCategories: the categories whose paths appear in
+    //    the archive; inspection.Decision: backup type, cluster payload,
+    //    hostname and the source of those facts.
+    return inspection.AvailableCategories, inspection.Decision, nil
 }
 ```
 
@@ -1922,7 +1897,7 @@ func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Ca
 
 ### pvesh SAFE Apply
 
-After extraction in SAFE mode, `runSafeClusterApply()` offers API-based restoration (primarily VM/CT configs). When the user selects the `storage_pve` category, storage.cfg + datacenter.cfg are applied later via the staged restore pipeline and SAFE apply will skip prompting for them.
+After extraction in SAFE mode, `runSafeClusterApplyWithUI()` offers API-based restoration (primarily VM/CT configs). When the user selects the `storage_pve` category, storage.cfg + datacenter.cfg are applied later via the staged restore pipeline and SAFE apply will skip prompting for them.
 
 **Key Functions**:
 - `scanVMConfigs()`: Scans `<export>/etc/pve/nodes/<node>/qemu-server/` and `lxc/`
@@ -1935,7 +1910,7 @@ Guest apply is fail-closed. The inventory is loaded once before the loop; any co
 
 **Flow**:
 ```go
-func runSafeClusterApply(ctx context.Context, reader *bufio.Reader, exportRoot string, logger *logging.Logger) error {
+func runSafeClusterApplyWithUI(ctx context.Context, ui RestoreWorkflowUI, exportRoot string, logger *logging.Logger, plan *RestorePlan) error {
     // 1. Scan and apply VM/CT configs
     vmEntries, _ := scanVMConfigs(exportRoot, currentNode)
     if len(vmEntries) > 0 && promptYesNo("Apply all VM/CT configs via pvesh?") {
@@ -2656,7 +2631,7 @@ func RunRestoreWorkflow(ctx context.Context, ...) error {
 ```go
 func RunRestoreWorkflow(...) error {
     // Prepare backup
-    prepared, err := prepareDecryptedBackup(...)
+    _, prepared, err := prepareRestoreBundleWithUI(...)
     if err != nil {
         return err
     }
@@ -2855,7 +2830,7 @@ Space Complexity: O(n) for path list
 
 **Optimization**: Stop early if all categories found
 ```go
-func AnalyzeBackupCategories(...) ([]Category, error) {
+func AnalyzeRestoreArchive(...) ([]Category, *RestoreDecisionInfo, error) {
     allFound := false
     for {
         header, err := tarReader.Next()

@@ -41,7 +41,7 @@ type CentralizedConfig struct {
 	BackupURL   string `json:"backup_ping_url"`
 	ProjectCode string `json:"project_code"`
 	LoginURL    string `json:"login_url"`
-	// NotifyPolicy is the relay's ack of a contract-1 poll (FetchCentralizedConfigWithPolicy);
+	// NotifyPolicy is the relay's ack of a contract-1 poll (FetchCentralizedConfigPoll);
 	// nil on a legacy poll or an older relay.
 	NotifyPolicy *NotifyPolicyAck `json:"notify_policy,omitempty"`
 	// Schedule is the relay's ack of the backup schedule frequency a poll sent
@@ -109,26 +109,11 @@ type serverError struct {
 // used by the install-time setup screen; the daemon's poll passes false so it
 // never triggers the server-side mint.
 func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
-	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil)
+	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin)
 }
 
-// FetchCentralizedConfigWithChannels is the daemon-only variant that ALSO sends the
-// authoritative enabled-notification set as ?channels so the server provisions one check per
-// enabled channel. channels is the lowercased set (e.g. ["email","telegram"]); an EMPTY
-// (non-nil) slice sends the "none" sentinel (pause all). It is a separate function from
-// FetchCentralizedConfig so the install-wizard/Phase-7 callers structurally CANNOT send
-// ?channels (only the daemon owns the authoritative set).
-func FetchCentralizedConfigWithChannels(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
-	return fetchConfig(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels)
-}
-
-func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string) (CentralizedConfig, error) {
-	return fetchConfigQuery(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels, nil)
-}
-
-// fetchConfigQuery is fetchConfig with extra query parameters (the notify policy contract).
-func fetchConfigQuery(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string, extra url.Values) (CentralizedConfig, error) {
-	cfg, _, err := fetchConfigPoll(ctx, client, serverAPIHost, serverID, secret, includeLogin, channels, extra, PollLog{})
+func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
+	cfg, _, err := fetchConfigPoll(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil, nil, PollLog{})
 	return cfg, err
 }
 
@@ -141,7 +126,8 @@ type PollLog struct {
 	URLDetail string
 }
 
-// fetchConfigPoll is fetchConfigQuery that also returns the HTTP status of the answer: 0 when
+// fetchConfigPoll fetches the config (with extra query parameters, the notify policy contract)
+// and also returns the HTTP status of the answer: 0 when
 // there was none (the error is then the transport's), the relay's status otherwise, whatever the
 // error. With plog.Logger an answer other than 200 adds an excerpt of its body, secret masked.
 func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string, extra url.Values, plog PollLog) (CentralizedConfig, int, error) {
@@ -194,8 +180,8 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 		logging.DebugStep(plog.Logger, plog.Operation, "%s", msg)
 	}
 
-	switch resp.Status {
-	case http.StatusOK:
+	switch {
+	case resp.Status == http.StatusOK:
 		var cfg CentralizedConfig
 		if err := resp.JSON(&cfg); err != nil {
 			return CentralizedConfig{}, resp.Status, fmt.Errorf("healthcheck config: bad JSON: %w", err)
@@ -204,16 +190,16 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 			return CentralizedConfig{}, resp.Status, fmt.Errorf("healthcheck config: incomplete response")
 		}
 		return cfg, resp.Status, nil
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case serverbot.AuthRejected(resp.Status):
 		return CentralizedConfig{}, resp.Status, ErrHCAuth
-	case http.StatusNotFound:
+	case resp.Status == http.StatusNotFound:
 		return CentralizedConfig{}, resp.Status, ErrHCUnknown
-	case http.StatusGone:
+	case resp.Status == http.StatusGone:
 		// 410 SERVER_PARKED: the row was purged but this host still holds the old
 		// token. Treat like a definitive auth rejection so the daemon clears the
 		// stale secret and re-provisions (which re-admits the returning host).
 		return CentralizedConfig{}, resp.Status, ErrHCParked
-	case http.StatusServiceUnavailable:
+	case resp.Status == http.StatusServiceUnavailable:
 		// The server returns HC_DISABLED (feature off) or HC_NOT_READY (provisioning
 		// not done yet). Distinguish so the daemon logs the right thing.
 		var e serverError

@@ -39,7 +39,7 @@ func TestApplyInstallDataHealthcheckMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ApplyInstallData: %v", err)
 			}
-			raw := ParseEnvTemplate(result)
+			raw := parseEnvTemplate(result)
 			if tc.wantEnabled != "" && raw["HEALTHCHECK_ENABLED"] != tc.wantEnabled {
 				t.Errorf("HEALTHCHECK_ENABLED = %q, want %q\n%s", raw["HEALTHCHECK_ENABLED"], tc.wantEnabled, result)
 			}
@@ -66,7 +66,7 @@ func TestApplyInstallDataSelfClearsCentralizedCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyInstallData: %v", err)
 	}
-	raw := ParseEnvTemplate(result)
+	raw := parseEnvTemplate(result)
 	if raw["HEALTHCHECK_MODE"] != "self" || raw["HEALTHCHECK_ENABLED"] != "true" {
 		t.Fatalf("self switch not applied: %+v", raw)
 	}
@@ -106,7 +106,7 @@ func TestApplyInstallDataClearsSelfURLsOnModeSwitch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ApplyInstallData: %v", err)
 			}
-			raw := ParseEnvTemplate(result)
+			raw := parseEnvTemplate(result)
 			if raw["HEALTHCHECK_ENABLED"] != tc.wantEnabled {
 				t.Errorf("HEALTHCHECK_ENABLED = %q, want %q", raw["HEALTHCHECK_ENABLED"], tc.wantEnabled)
 			}
@@ -136,7 +136,7 @@ func TestApplyInstallDataSelfToSelfPreservesURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyInstallData: %v", err)
 	}
-	raw := ParseEnvTemplate(result)
+	raw := parseEnvTemplate(result)
 	if raw["HEALTHCHECK_ALIVE_URL"] != "https://hc-ping.com/self-a" || raw["HEALTHCHECK_BACKUP_URL"] != "https://hc-ping.com/self-b" {
 		t.Fatalf("self->self must preserve URLs: alive=%q backup=%q", raw["HEALTHCHECK_ALIVE_URL"], raw["HEALTHCHECK_BACKUP_URL"])
 	}
@@ -156,7 +156,7 @@ func TestApplyHealthcheckSelfParams(t *testing.T) {
 		// telegram/gotify/webhook intentionally left empty
 	}
 	result := ApplyHealthcheckSelfParams(tmpl, p)
-	raw := ParseEnvTemplate(result)
+	raw := parseEnvTemplate(result)
 	if raw["HEALTHCHECK_ALIVE_URL"] != p.AliveURL {
 		t.Errorf("alive url = %q, want %q", raw["HEALTHCHECK_ALIVE_URL"], p.AliveURL)
 	}

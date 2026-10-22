@@ -11,7 +11,7 @@ import (
 // leaves a pre-existing heartbeat intact (shared file, read-modify-write).
 func TestRecordUpdateRoundTrip(t *testing.T) {
 	base := t.TempDir()
-	if err := RecordPing(base, "self", KindHeartbeat, 500, true, nil); err != nil {
+	if err := RecordOutcomePing(base, "self", KindHeartbeat, 500, true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 	if err := RecordUpdate(base, "self", 1234, true, "v9.9.9", true, nil); err != nil {

@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"archive/tar"
 	"bufio"
 	"context"
 	"errors"
@@ -22,12 +21,6 @@ type SelectiveRestoreConfig struct {
 	SelectedCategories []Category
 	SystemType         SystemType
 	Metadata           *backup.Manifest
-}
-
-// AnalyzeBackupCategories detects which categories are available in the backup
-func AnalyzeBackupCategories(archivePath string, logger *logging.Logger) (categories []Category, err error) {
-	availableCategories, _, err := AnalyzeRestoreArchive(archivePath, logger)
-	return availableCategories, err
 }
 
 // AnalyzeArchivePaths determines available categories from the provided archive entries.
@@ -58,18 +51,6 @@ func AnalyzeArchivePaths(archivePaths []string, allCategories []Category) []Cate
 		}
 	}
 	return availableCategories
-}
-
-func collectArchivePaths(tarReader *tar.Reader) []string {
-	var archivePaths []string
-	for {
-		header, err := tarReader.Next()
-		if err != nil {
-			break // EOF or error
-		}
-		archivePaths = append(archivePaths, header.Name)
-	}
-	return archivePaths
 }
 
 // pathMatchesPattern checks if an archive path matches a category pattern

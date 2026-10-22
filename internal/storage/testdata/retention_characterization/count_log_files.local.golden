@@ -1,0 +1,9 @@
+--- nil receiver ---
+--- no config ---
+--- log folder variable not set ---
+DEBUG    Local logs: no log folder, the log count is unknown
+--- log folder missing ---
+--- log folder ---
+--- log folder with a glob metacharacter ---
+--- log folder that cannot be read ---
+DEBUG    Local logs: failed to count log files: open <ROOT>/not-a-dir: not a directory

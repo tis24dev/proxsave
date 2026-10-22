@@ -842,20 +842,6 @@ func reconcileSchedulerAfterInstall(ctx context.Context, p *installRuntimePrepar
 	return p.result
 }
 
-// readConfiguredSchedulerMode returns "daemon" or "cron" from an existing
-// backup.env (default cron). Used for the keep-existing install path where the
-// wizard did not collect a mode.
-func readConfiguredSchedulerMode(configPath string) string {
-	data, err := safefs.ReadFileUnderRoot(configPath)
-	if err != nil {
-		return "cron"
-	}
-	if strings.EqualFold(strings.TrimSpace(installer.DeriveInstallWizardPrefill(string(data)).SchedulerMode), "daemon") {
-		return "daemon"
-	}
-	return "cron"
-}
-
 // cronCorrectPaths returns the canonical command tokens that identify a proxsave
 // cron line (the /usr/local/bin symlink and the resolved binary), used to drop the
 // entry when switching to the daemon.

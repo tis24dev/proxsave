@@ -376,13 +376,6 @@ func (c *Collector) collectPBSDatastoreNamespaces(ctx context.Context, state *pb
 	return nil
 }
 
-// collectDatastoreNamespaces collects namespace information for a datastore
-// using CLI first, then filesystem fallback.
-func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatastore, datastoreDir string) error {
-	_, err := c.collectDatastoreNamespacesSnapshot(ctx, ds, datastoreDir)
-	return err
-}
-
 func (c *Collector) collectDatastoreNamespacesSnapshot(ctx context.Context, ds pbsDatastore, datastoreDir string) ([]pbs.Namespace, error) {
 	c.logger.Debug("Collecting namespaces for datastore %s (path: %s)", ds.Name, ds.Path)
 	// Write location is deterministic; if excluded, skip the whole operation.
@@ -796,7 +789,7 @@ func (c *Collector) getDatastoreList(ctx context.Context) ([]pbsDatastore, error
 	} else {
 		// stdout only: warnings printed on stderr would otherwise break the JSON parse
 		// below and silently drop the whole datastore list.
-		output, stderr, err := c.depRunCommandCaptured(ctx, nil, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
+		output, stderr, err := c.depRunCommandCaptured(ctx, "proxmox-backup-manager", "datastore", "list", "--output-format=json")
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr

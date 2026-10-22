@@ -69,34 +69,3 @@ func TestValidateOptionalSecondaryLogPath(t *testing.T) {
 		})
 	}
 }
-
-func TestValidateOptionalSecondaryPath(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		path    string
-		wantErr string
-	}{
-		{name: "empty allowed", path: ""},
-		{name: "valid path", path: "/mnt/secondary"},
-		{name: "relative", path: "relative/path", wantErr: "SECONDARY_PATH must be an absolute local filesystem path"},
-		{name: "remote style", path: "remote:/backup", wantErr: "SECONDARY_PATH must be an absolute local filesystem path"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := ValidateOptionalSecondaryPath(tt.path)
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ValidateOptionalSecondaryPath(%q) error = %v", tt.path, err)
-				}
-				return
-			}
-			if err == nil || err.Error() != tt.wantErr {
-				t.Fatalf("ValidateOptionalSecondaryPath(%q) error = %v, want %q", tt.path, err, tt.wantErr)
-			}
-		})
-	}
-}

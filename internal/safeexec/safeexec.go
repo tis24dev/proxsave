@@ -50,6 +50,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"dmidecode": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "dmidecode"), args...)
 	},
+	"dmsetup": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "dmsetup"), args...)
+	},
 	"dpkg": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "dpkg"), args...)
 	},
@@ -64,6 +67,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	},
 	"false": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "false"), args...)
+	},
+	"findmnt": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "findmnt"), args...)
 	},
 	"firewall-cmd": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "firewall-cmd"), args...)
@@ -95,6 +101,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"ip6tables-save": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "ip6tables-save"), args...)
 	},
+	"iscsiadm": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "iscsiadm"), args...)
+	},
 	"journalctl": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "journalctl"), args...)
 	},
@@ -122,11 +131,20 @@ var allowedCommandFactories = map[string]commandFactory{
 	"mailq": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "mailq"), args...)
 	},
+	"mdadm": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "mdadm"), args...)
+	},
 	"mount": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "mount"), args...)
 	},
 	"mountpoint": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "mountpoint"), args...)
+	},
+	"multipath": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "multipath"), args...)
+	},
+	"nfsstat": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "nfsstat"), args...)
 	},
 	"nft": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "nft"), args...)
@@ -245,6 +263,9 @@ var allowedCommandFactories = map[string]commandFactory{
 	"vgs": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "vgs"), args...)
 	},
+	"visudo": func(ctx context.Context, args ...string) *exec.Cmd {
+		return withArgs(exec.CommandContext(ctx, "visudo"), args...)
+	},
 	"which": func(ctx context.Context, args ...string) *exec.Cmd {
 		return withArgs(exec.CommandContext(ctx, "which"), args...)
 	},
@@ -285,24 +306,6 @@ func CommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 		return factory(ctx, args...), nil
 	}
 	return nil, fmt.Errorf("%w: %q", ErrCommandNotAllowed, name)
-}
-
-// CombinedOutput runs an allowed command and returns its combined stdout/stderr.
-func CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd, err := CommandContext(ctx, name, args...)
-	if err != nil {
-		return nil, err
-	}
-	return cmd.CombinedOutput()
-}
-
-// Output runs an allowed command and returns stdout.
-func Output(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd, err := CommandContext(ctx, name, args...)
-	if err != nil {
-		return nil, err
-	}
-	return cmd.Output()
 }
 
 // CommandWaitDelay is the reaping half of the WithTimeout plus WaitDelay pair, and

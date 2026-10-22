@@ -410,11 +410,6 @@ func normalizeSchedulerMode(v string) string {
 	return "cron"
 }
 
-// ValidateSecondaryInstallData validates the secondary-storage fields.
-func ValidateSecondaryInstallData(data *InstallWizardData) error {
-	return validateSecondaryInstallData(data)
-}
-
 func validateSecondaryInstallData(data *InstallWizardData) error {
 	if data == nil {
 		return ErrNilInstallData
@@ -429,11 +424,6 @@ func validateSecondaryInstallData(data *InstallWizardData) error {
 		return err
 	}
 	return nil
-}
-
-// ValidateCloudInstallData validates the cloud-storage fields.
-func ValidateCloudInstallData(data *InstallWizardData) error {
-	return validateCloudInstallData(data)
 }
 
 // validateCloudInstallData mirrors the wizard's own onSubmit checks: when cloud
@@ -454,48 +444,6 @@ func validateCloudInstallData(data *InstallWizardData) error {
 		return errors.New("cloud storage is enabled but the rclone log path is empty")
 	}
 	return nil
-}
-
-// setEnvValue sets or updates an environment variable in the template
-
-// UnsetEnvValueInTemplate removes a key from the template entirely.
-func UnsetEnvValueInTemplate(template, key string) string {
-	return unsetEnvValue(template, key)
-}
-
-func unsetEnvValue(template, key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return template
-	}
-
-	lines := strings.Split(template, "\n")
-	out := make([]string, 0, len(lines))
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if utils.IsComment(trimmed) {
-			out = append(out, line)
-			continue
-		}
-
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) != 2 {
-			out = append(out, line)
-			continue
-		}
-
-		parsedKey := strings.TrimSpace(parts[0])
-		if fields := strings.Fields(parsedKey); len(fields) >= 2 && fields[0] == "export" {
-			parsedKey = fields[1]
-		}
-		if strings.EqualFold(parsedKey, key) {
-			continue
-		}
-		out = append(out, line)
-	}
-
-	return strings.Join(out, "\n")
 }
 
 // DeriveInstallWizardPrefill parses an existing backup.env template into an
@@ -549,11 +497,6 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 	}
 
 	return out
-}
-
-// ParseEnvTemplate parses KEY=VALUE lines from a backup.env template.
-func ParseEnvTemplate(template string) map[string]string {
-	return parseEnvTemplate(template)
 }
 
 func parseEnvTemplate(template string) map[string]string {

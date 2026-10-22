@@ -175,10 +175,6 @@ func (l *operationLimiter) release() {
 	}
 }
 
-func (l *operationLimiter) inflight() int {
-	return len(l.slots)
-}
-
 func runLimited[T any](ctx context.Context, timeout time.Duration, timeoutErr *TimeoutError, run func() (T, error)) (T, error) {
 	return runBounded(ctx, fsOpLimiter, timeout, timeoutErr, run)
 }

@@ -198,7 +198,7 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 		// Fresh, OK heartbeat on disk -> the daemon is alive and transmitting (CheckDaemonState
 		// reads the real status file now, so seed one instead of stubbing the load).
 		base := t.TempDir()
-		if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
+		if err := health.RecordOutcomePing(base, "self", health.KindHeartbeat, now.Unix(), true, false, nil); err != nil {
 			t.Fatalf("seed heartbeat: %v", err)
 		}
 		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", base, time.Minute)
@@ -279,7 +279,7 @@ func TestClassifyHealthcheckDaemonState(t *testing.T) {
 // is driven by the injected DaemonProcStale seam, not the record.
 func seedDaemonInfoFor(t *testing.T, base string, now time.Time) {
 	t.Helper()
-	if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
+	if err := health.RecordOutcomePing(base, "self", health.KindHeartbeat, now.Unix(), true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 	if err := health.WriteDaemonInfo(base, health.DaemonInfo{
@@ -436,7 +436,7 @@ func TestCheckHealthcheckConnectionProcStaleFallback(t *testing.T) {
 	DaemonProcStale = func(pid int) (bool, bool) { return true, true }
 
 	base := t.TempDir()
-	if err := health.RecordPing(base, "self", health.KindHeartbeat, now.Unix(), true, nil); err != nil {
+	if err := health.RecordOutcomePing(base, "self", health.KindHeartbeat, now.Unix(), true, false, nil); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 	// A LIVE pid (this process) so the leaf pidAlive probe reads ProcessAlive=true and the /proc probe

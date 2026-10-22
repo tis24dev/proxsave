@@ -344,7 +344,7 @@ type daemon struct {
 
 	// statusMu serializes writes to the shared healthcheck status file: the
 	// heartbeat loop and runOnce record ping outcomes concurrently, and
-	// health.RecordPing is a read-modify-write, so it needs its own lock. Kept
+	// health.RecordOutcomePing is a read-modify-write, so it needs its own lock. Kept
 	// separate from mu (which guards reporter/fetchWarned across buildReporter) so
 	// a status write never contends with reporter resolution.
 	statusMu sync.Mutex
@@ -609,7 +609,7 @@ func (d *daemon) run(ctx context.Context) int {
 // handed off its outcome and woke the daemon with SIGUSR1. The daemon is the SOLE pinger: a
 // standalone run never builds a Reporter nor writes the status file; it drops a handoff file and
 // signals here. This runs the outcome through the SAME finish machinery a daemon-supervised run
-// uses -- finishPing (nil-guarded like beat) then recordPing under KindRunFinished, serialized by
+// uses -- finishPing (nil-guarded like beat) then recordOutcomePing under KindRunFinished, serialized by
 // statusMu -- so the backup-outcome check updates identically. A stale handoff (older than
 // manualOutcomeStaleWindow) is dropped WITHOUT pinging (never flip the check for a long-past run).
 // A nil/unresolved reporter records a no_url liveness trace (like beat's no-url path) instead of a
@@ -1851,9 +1851,9 @@ func (d *daemon) reportBestEffortBounded(label string, failed bool, recordLimit 
 	}
 }
 
-// recordPing persists one real transmission outcome to the shared status file,
+// recordOutcomePing persists one real transmission outcome to the shared status file,
 // serialized by statusMu because the heartbeat loop and runOnce write it
-// concurrently and health.RecordPing is a read-modify-write. Best effort: a write
+// concurrently and health.RecordOutcomePing is a read-modify-write. Best effort: a write
 // error must not break the daemon, so it is only logged at debug. The ping error
 // text is already redacted by the Reporter, so this never leaks a URL or secret.
 func (d *daemon) recordOutcomePing(kind string, failed bool, pingErr error) {
@@ -2066,7 +2066,7 @@ func (d *daemon) updateTick(ctx context.Context) {
 }
 
 // recordUpdate persists one update-report outcome to the shared status file, serialized by
-// statusMu (like recordPing) because the update loop and the heartbeat/run loops write the
+// statusMu (like recordOutcomePing) because the update loop and the heartbeat/run loops write the
 // same file concurrently and health.RecordUpdate is a read-modify-write. Best effort: a
 // write error must not break the daemon.
 func (d *daemon) recordUpdate(available bool, latest string, pingErr error) {

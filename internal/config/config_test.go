@@ -1,30 +1,15 @@
 package config
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/tis24dev/proxsave/internal/types"
 )
-
-func clearPBSAuthEnvForTest(t *testing.T) {
-	t.Helper()
-	t.Setenv("PBS_FINGERPRINT", "")
-	t.Setenv("PBS_REPOSITORY", "")
-	t.Setenv("PBS_PASSWORD", "")
-}
 
 func setBaseDirEnv(t *testing.T, value string) {
 	t.Helper()
@@ -1292,29 +1277,6 @@ func TestBuildWebhookConfigParsesConfiguredEndpoints(t *testing.T) {
 	}
 }
 
-func TestAutoDetectPBSTokenParsesFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-	tokenFile := filepath.Join(tmpDir, "pbs_token")
-
-	if err := os.WriteFile(tokenFile, []byte("mytoken=mysecret\n"), 0644); err != nil {
-		t.Fatalf("failed to write token file: %v", err)
-	}
-
-	token, secret := autoDetectPBSToken(tmpDir)
-	if token != "mytoken" || secret != "mysecret" {
-		t.Fatalf("autoDetectPBSToken pair = (%q,%q); want (\"mytoken\",\"mysecret\")", token, secret)
-	}
-
-	if err := os.WriteFile(tokenFile, []byte("onlysecret\n"), 0644); err != nil {
-		t.Fatalf("failed to overwrite token file: %v", err)
-	}
-
-	token, secret = autoDetectPBSToken(tmpDir)
-	if token != "backup@pbs!go-client" || secret != "onlysecret" {
-		t.Fatalf("autoDetectPBSToken default name = (%q,%q); want (\"backup@pbs!go-client\",\"onlysecret\")", token, secret)
-	}
-}
-
 func TestPBSTokenFilesOrderAndFallback(t *testing.T) {
 	got := PBSTokenFiles("/srv/secure")
 	want := []string{"/srv/secure/pbs_token", "/srv/secure/pbs_api_token", "/root/.pbs-token"}
@@ -1328,175 +1290,6 @@ func TestPBSTokenFilesOrderAndFallback(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("PBSTokenFiles(\"\") = %v; want %v", got, want)
 	}
-}
-
-func TestAutoDetectPBSAuthEnvAndTokenPriority(t *testing.T) {
-	setBaseDirEnv(t, "/pbs/base")
-
-	tmpDir := t.TempDir()
-	tokenFile := filepath.Join(tmpDir, "pbs_token")
-	if err := os.WriteFile(tokenFile, []byte("envtoken=envsecret\n"), 0644); err != nil {
-		t.Fatalf("failed to write token file: %v", err)
-	}
-
-	// Case 1: environment variables have highest priority
-	t.Setenv("PBS_REPOSITORY", "envrepo")
-	t.Setenv("PBS_PASSWORD", "envpass")
-	t.Setenv("PBS_FINGERPRINT", "envfp")
-
-	cfg := &Config{
-		SecureAccount: tmpDir,
-		raw: map[string]string{
-			"PBS_REPOSITORY":  "filerepo",
-			"PBS_PASSWORD":    "filepass",
-			"PBS_FINGERPRINT": "filefp",
-		},
-	}
-	cfg.autoDetectPBSAuth()
-	if cfg.PBSRepository != "envrepo" || cfg.PBSPassword != "envpass" || cfg.PBSFingerprint != "envfp" {
-		t.Fatalf("autoDetectPBSAuth env priority failed: repo=%q pass=%q fp=%q", cfg.PBSRepository, cfg.PBSPassword, cfg.PBSFingerprint)
-	}
-
-	// Case 2: no env, use raw config values
-	t.Setenv("PBS_REPOSITORY", "")
-	t.Setenv("PBS_PASSWORD", "")
-	t.Setenv("PBS_FINGERPRINT", "")
-
-	cfg2 := &Config{
-		SecureAccount: tmpDir,
-		raw: map[string]string{
-			"PBS_REPOSITORY": "filerepo2",
-			"PBS_PASSWORD":   "filepass2",
-		},
-	}
-	cfg2.autoDetectPBSAuth()
-	if cfg2.PBSRepository != "filerepo2" || cfg2.PBSPassword != "filepass2" {
-		t.Fatalf("autoDetectPBSAuth file priority failed: repo=%q pass=%q", cfg2.PBSRepository, cfg2.PBSPassword)
-	}
-
-	// Case 3: no env and no raw -> token file detection
-	cfg3 := &Config{
-		SecureAccount: tmpDir,
-		raw:           map[string]string{},
-	}
-	cfg3.autoDetectPBSAuth()
-	if cfg3.PBSRepository == "" || cfg3.PBSPassword == "" {
-		t.Fatalf("autoDetectPBSAuth should populate from token file, got repo=%q pass=%q", cfg3.PBSRepository, cfg3.PBSPassword)
-	}
-}
-
-func TestExtractFingerprintFromCert(t *testing.T) {
-	certPath, expected := writeTestPBSCertificate(t)
-	got := extractFingerprintFromCert(certPath)
-	if got != expected {
-		t.Fatalf("extractFingerprintFromCert() = %q, want %q", got, expected)
-	}
-}
-
-func TestExtractFingerprintFromCertInvalid(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "invalid.pem")
-	if err := os.WriteFile(path, []byte("not-a-certificate"), 0o600); err != nil {
-		t.Fatalf("failed to write invalid cert file: %v", err)
-	}
-	if got := extractFingerprintFromCert(path); got != "" {
-		t.Fatalf("extractFingerprintFromCert() = %q, want empty", got)
-	}
-}
-
-func TestAutoDetectPBSAuthLocalRepositoryAutoDetectsFingerprint(t *testing.T) {
-	clearPBSAuthEnvForTest(t)
-	setBaseDirEnv(t, "/pbs/base")
-	certPath, expected := writeTestPBSCertificate(t)
-	setPBSFingerprintCertPathsForTest(t, []string{certPath})
-
-	cfg := &Config{
-		raw: map[string]string{
-			"PBS_REPOSITORY": "backup@pbs!token@localhost:store1",
-		},
-	}
-	cfg.autoDetectPBSAuth()
-	if cfg.PBSFingerprint != expected {
-		t.Fatalf("PBSFingerprint = %q, want %q", cfg.PBSFingerprint, expected)
-	}
-}
-
-func TestAutoDetectPBSAuthRemoteRepositorySkipsLocalFingerprint(t *testing.T) {
-	clearPBSAuthEnvForTest(t)
-	setBaseDirEnv(t, "/pbs/base")
-	certPath, _ := writeTestPBSCertificate(t)
-	setPBSFingerprintCertPathsForTest(t, []string{certPath})
-
-	cfg := &Config{
-		raw: map[string]string{
-			"PBS_REPOSITORY": "backup@pbs!token@remote.example.com:store1",
-		},
-	}
-	cfg.autoDetectPBSAuth()
-	if cfg.PBSFingerprint != "" {
-		t.Fatalf("PBSFingerprint = %q, want empty for remote repository", cfg.PBSFingerprint)
-	}
-}
-
-func TestAutoDetectPBSAuthEmptyRepositoryAutoDetectsFingerprint(t *testing.T) {
-	clearPBSAuthEnvForTest(t)
-	setBaseDirEnv(t, "/pbs/base")
-	certPath, expected := writeTestPBSCertificate(t)
-	setPBSFingerprintCertPathsForTest(t, []string{certPath})
-
-	cfg := &Config{raw: map[string]string{}}
-	cfg.autoDetectPBSAuth()
-	if cfg.PBSFingerprint != expected {
-		t.Fatalf("PBSFingerprint = %q, want %q", cfg.PBSFingerprint, expected)
-	}
-}
-
-func setPBSFingerprintCertPathsForTest(t *testing.T, paths []string) {
-	t.Helper()
-	orig := pbsFingerprintCertPaths
-	pbsFingerprintCertPaths = append([]string(nil), paths...)
-	t.Cleanup(func() {
-		pbsFingerprintCertPaths = orig
-	})
-}
-
-func writeTestPBSCertificate(t *testing.T) (string, string) {
-	t.Helper()
-
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate rsa key: %v", err)
-	}
-
-	tpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "proxsave-test-pbs",
-		},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("create certificate: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "proxy.pem")
-	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	if err := os.WriteFile(path, pemData, 0o600); err != nil {
-		t.Fatalf("write certificate: %v", err)
-	}
-
-	sum := sha256.Sum256(der)
-	parts := make([]string, 0, len(sum))
-	for _, b := range sum {
-		parts = append(parts, fmt.Sprintf("%02x", b))
-	}
-	return path, strings.Join(parts, ":")
 }
 
 func TestParseSecuritySettingsParsesSafeProcesses(t *testing.T) {
@@ -1770,6 +1563,37 @@ func TestBackupFirewallRulesHonoursAnExplicitValue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := loadEnvForTest(t, "firewall.env", tc.content).BackupFirewallRules; got != tc.want {
 				t.Fatalf("BackupFirewallRules = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A value the collection or cloud settings cannot use stops the load: parse returns the
+// error of the step that rejected it instead of carrying on with the remaining steps.
+func TestParseRejectsInvalidCollectionAndCloudSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "unparsable PVE backup size",
+			content: "MAX_PVE_BACKUP_SIZE=abc\n",
+			want:    "invalid MAX_PVE_BACKUP_SIZE",
+		},
+		{
+			name:    "cloud remote starting with a dash",
+			content: "CLOUD_ENABLED=true\nCLOUD_REMOTE=-remote:backups\n",
+			want:    "CLOUD_REMOTE invalid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := loadEnvErrForTest(t, "invalid.env", tc.content)
+			if err == nil {
+				t.Fatal("expected the configuration to be rejected")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tc.want)
 			}
 		})
 	}

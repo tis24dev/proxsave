@@ -9,8 +9,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
-var compatFS FS = osFS{}
-
 // SystemType represents the type of Proxmox system
 type SystemType string
 
@@ -45,7 +43,7 @@ func (s SystemType) Overlaps(other SystemType) bool {
 }
 
 // detectEnvironment is the seam that lets a test drive DetectCurrentSystem without a
-// Proxmox host, the way compatFS does for the file probes in this file.
+// Proxmox host.
 var detectEnvironment = environment.Detect
 
 // DetectCurrentSystem reports what this host is, for the restore side.
@@ -235,86 +233,4 @@ func GetSystemTypeString(st SystemType) string {
 	default:
 		return "Unknown System"
 	}
-}
-
-// fileExists checks if a file or directory exists
-func fileExists(path string) bool {
-	_, err := compatFS.Stat(path)
-	return err == nil
-}
-
-// GetSystemInfo returns detailed information about the current system
-func GetSystemInfo() map[string]string {
-	info := make(map[string]string)
-
-	systemType := DetectCurrentSystem()
-	info["type"] = string(systemType)
-	info["type_name"] = GetSystemTypeString(systemType)
-
-	// Get version information
-	switch systemType {
-	case SystemTypeDual:
-		if pveContent, err := compatFS.ReadFile("/etc/pve-release"); err == nil {
-			info["pve_version"] = strings.TrimSpace(string(pveContent))
-		}
-		if pbsContent, err := compatFS.ReadFile("/etc/proxmox-backup-release"); err == nil {
-			info["pbs_version"] = strings.TrimSpace(string(pbsContent))
-		}
-	case SystemTypePVE:
-		if content, err := compatFS.ReadFile("/etc/pve-release"); err == nil {
-			info["version"] = strings.TrimSpace(string(content))
-		}
-	case SystemTypePBS:
-		if content, err := compatFS.ReadFile("/etc/proxmox-backup-release"); err == nil {
-			info["version"] = strings.TrimSpace(string(content))
-		}
-	}
-
-	// Get hostname
-	if content, err := compatFS.ReadFile("/etc/hostname"); err == nil {
-		info["hostname"] = strings.TrimSpace(string(content))
-	}
-
-	return info
-}
-
-// CheckSystemRequirements checks if the system meets requirements for restore
-func CheckSystemRequirements(manifest *backup.Manifest) []string {
-	var warnings []string
-
-	currentSystem := DetectCurrentSystem()
-	backupType := DetectBackupType(manifest)
-
-	// Check system type compatibility
-	if currentSystem != SystemTypeUnknown && backupType != SystemTypeUnknown {
-		if !currentSystem.Overlaps(backupType) {
-			warnings = append(warnings, fmt.Sprintf(
-				"System type mismatch: backup is from %s but current system is %s",
-				strings.ToUpper(string(backupType)),
-				strings.ToUpper(string(currentSystem)),
-			))
-		} else if currentSystem != backupType {
-			warnings = append(warnings, fmt.Sprintf(
-				"Partial system type match: backup targets %s while current system is %s; only compatible categories can be restored",
-				strings.ToUpper(strings.Join(backupType.Targets(), "+")),
-				strings.ToUpper(strings.Join(currentSystem.Targets(), "+")),
-			))
-		}
-	}
-
-	// Check for required directories
-	requiredDirs := []string{"/etc", "/var", "/usr"}
-	for _, dir := range requiredDirs {
-		if !fileExists(dir) {
-			warnings = append(warnings, fmt.Sprintf("Required directory missing: %s", dir))
-		}
-	}
-
-	// Check disk space (basic check)
-	// This is a simplified check - in production you'd want more sophisticated checks
-	if _, err := compatFS.Stat("/"); err != nil {
-		warnings = append(warnings, "Cannot access root filesystem - may lack permissions")
-	}
-
-	return warnings
 }

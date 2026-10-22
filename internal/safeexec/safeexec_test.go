@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -42,6 +41,46 @@ func TestCommandContextAllowlist(t *testing.T) {
 	}
 }
 
+// The commands the PBS datastore inventory runs, with its arguments
+// (internal/backup/collector_pbs_datastore_inventory.go). Missing from the
+// allowlist, each one was recorded as "command not allowed" in every backup and
+// its mount, device-mapper, RAID, multipath, iSCSI or NFS data never collected.
+func TestCommandContextAllowsThePBSInventoryCommands(t *testing.T) {
+	for _, args := range [][]string{
+		{"findmnt", "-J"},
+		{"findmnt", "-J", "-T", "/mnt/datastore"},
+		{"dmsetup", "ls", "--tree"},
+		{"mdadm", "--detail", "--scan"},
+		{"multipath", "-ll"},
+		{"iscsiadm", "-m", "session"},
+		{"iscsiadm", "-m", "node"},
+		{"iscsiadm", "-m", "iface"},
+		{"nfsstat", "-m"},
+	} {
+		cmd, err := CommandContext(context.Background(), args[0], args[1:]...)
+		if err != nil {
+			t.Fatalf("CommandContext(%q) error = %v", args, err)
+		}
+		if got := cmd.Args; !reflect.DeepEqual(got, args) {
+			t.Fatalf("CommandContext(%q) args = %q", args, got)
+		}
+	}
+}
+
+// The restore validates the staged /etc/sudoers with "visudo -c -f <file>"
+// (internal/orchestrator/restore_accounts.go). Missing from the allowlist, the
+// validation always failed and /etc/sudoers was never restored.
+func TestCommandContextAllowsVisudoCheck(t *testing.T) {
+	args := []string{"visudo", "-c", "-f", "/tmp/stage/etc/sudoers"}
+	cmd, err := CommandContext(context.Background(), args[0], args[1:]...)
+	if err != nil {
+		t.Fatalf("CommandContext(visudo) error = %v", err)
+	}
+	if got := cmd.Args; !reflect.DeepEqual(got, args) {
+		t.Fatalf("CommandContext(visudo) args = %q", got)
+	}
+}
+
 func TestCommandContextAllowsSQLiteSnapshot(t *testing.T) {
 	args := []string{
 		"-cmd",
@@ -56,36 +95,6 @@ func TestCommandContextAllowsSQLiteSnapshot(t *testing.T) {
 	want := append([]string{"sqlite3"}, args...)
 	if got := cmd.Args; !reflect.DeepEqual(got, want) {
 		t.Fatalf("CommandContext(sqlite3) args = %q, want %q", got, want)
-	}
-}
-
-func TestCommandWrappers(t *testing.T) {
-	ctx := context.Background()
-
-	out, err := Output(ctx, "echo", "safeexec-output")
-	if err != nil {
-		t.Fatalf("Output valid command error: %v", err)
-	}
-	if got := strings.TrimSpace(string(out)); got != "safeexec-output" {
-		t.Fatalf("Output()=%q; want %q", got, "safeexec-output")
-	}
-
-	combined, err := CombinedOutput(ctx, "echo", "safeexec-combined")
-	if err != nil {
-		t.Fatalf("CombinedOutput valid command error: %v", err)
-	}
-	if got := strings.TrimSpace(string(combined)); got != "safeexec-combined" {
-		t.Fatalf("CombinedOutput()=%q; want %q", got, "safeexec-combined")
-	}
-
-	if _, err := Output(ctx, "false"); err == nil {
-		t.Fatalf("Output(false) expected exit error")
-	}
-	if _, err := Output(ctx, "not-allowed-command"); !errors.Is(err, ErrCommandNotAllowed) {
-		t.Fatalf("Output disallowed command error = %v, want ErrCommandNotAllowed", err)
-	}
-	if _, err := CombinedOutput(ctx, "not-allowed-command"); !errors.Is(err, ErrCommandNotAllowed) {
-		t.Fatalf("CombinedOutput disallowed command error = %v, want ErrCommandNotAllowed", err)
 	}
 }
 
