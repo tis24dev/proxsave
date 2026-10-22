@@ -71,7 +71,7 @@ jobs:
       # silently emit an empty SARIF. Keep gosec current with the Go toolchain.
       ########################################
       - name: Install GoSec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
       - name: Run GoSec
         run: |
