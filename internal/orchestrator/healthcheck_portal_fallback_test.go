@@ -14,8 +14,6 @@ const (
 	hcPortalLogin = "5917204836150297@proxsave.dev"
 )
 
-func boolPtr(v bool) *bool { return &v }
-
 // TestHealthchecksSectionPortalFallback pins WHEN the section is allowed to carry the
 // portal address + sign-in identity to the epilogue. The rule is narrow on purpose: only
 // an explicit password_set=true from the server. An absent flag means the server could not
@@ -28,8 +26,8 @@ func TestHealthchecksSectionPortalFallback(t *testing.T) {
 		passwordSet *bool
 		wantCarried bool
 	}{
-		{"password confirmed set", boolPtr(true), true},
-		{"password explicitly not set", boolPtr(false), false},
+		{"password confirmed set", new(true), true},
+		{"password explicitly not set", new(false), false},
 		{"server could not confirm", nil, false},
 	}
 	for _, tc := range cases {
@@ -81,7 +79,7 @@ func TestHealthchecksSectionPortalFallbackGates(t *testing.T) {
 			return health.CentralizedConfig{
 				PortalURL:   "https://hc.evil.example/accounts/login/",
 				PortalLogin: hcPortalLogin,
-				PasswordSet: boolPtr(true),
+				PasswordSet: new(true),
 			}, nil
 		}
 
@@ -104,7 +102,7 @@ func TestHealthchecksSectionPortalFallbackGates(t *testing.T) {
 			return health.CentralizedConfig{
 				PortalURL:   hcPortalURL,
 				PortalLogin: "ops@example.com\x1b[2K",
-				PasswordSet: boolPtr(true),
+				PasswordSet: new(true),
 			}, nil
 		}
 
@@ -153,7 +151,7 @@ func TestClassifyHealthcheckSetupPortalFallback(t *testing.T) {
 		st := ClassifyHealthcheckSetupResult(HealthcheckCheckResult{
 			PortalURL:   hcPortalURL,
 			PortalLogin: hcPortalLogin,
-			PasswordSet: boolPtr(true),
+			PasswordSet: new(true),
 			Reachable:   true,
 		})
 		if st.PortalURL != hcPortalURL || st.PortalLogin != hcPortalLogin {
@@ -165,7 +163,7 @@ func TestClassifyHealthcheckSetupPortalFallback(t *testing.T) {
 		name        string
 		passwordSet *bool
 	}{
-		{"not set", boolPtr(false)},
+		{"not set", new(false)},
 		{"unconfirmed", nil},
 	} {
 		t.Run("suppressed when "+tc.name, func(t *testing.T) {
@@ -185,7 +183,7 @@ func TestClassifyHealthcheckSetupPortalFallback(t *testing.T) {
 		st := ClassifyHealthcheckSelfResult(HealthcheckCheckResult{
 			PortalURL:   hcPortalURL,
 			PortalLogin: hcPortalLogin,
-			PasswordSet: boolPtr(true),
+			PasswordSet: new(true),
 			Reachable:   true,
 		})
 		if st.PortalURL != "" || st.PortalLogin != "" {

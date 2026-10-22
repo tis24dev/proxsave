@@ -47,15 +47,13 @@ type backupOutcomeGoldenInput struct {
 // backupOutcomeGoldenEnvs are the environments the output must not depend on. A nil
 // value unsets the variable.
 var backupOutcomeGoldenEnvs = []map[string]*string{
-	{"TERM": strPtr("dumb")},
-	{"NO_COLOR": strPtr("1")},
-	{"CI": strPtr("true")},
+	{"TERM": new("dumb")},
+	{"NO_COLOR": new("1")},
+	{"CI": new("true")},
 	{"COLORTERM": nil},
-	{"TERM": strPtr("dumb"), "NO_COLOR": strPtr("1"), "CI": strPtr("true"), "COLORTERM": nil},
-	{"TERM": strPtr("xterm-256color"), "COLORTERM": strPtr("truecolor")},
+	{"TERM": new("dumb"), "NO_COLOR": new("1"), "CI": new("true"), "COLORTERM": nil},
+	{"TERM": new("xterm-256color"), "COLORTERM": new("truecolor")},
 }
-
-func strPtr(s string) *string { return &s }
 
 func readBackupOutcomeGoldenJSON(t *testing.T, path string, v any) {
 	t.Helper()
