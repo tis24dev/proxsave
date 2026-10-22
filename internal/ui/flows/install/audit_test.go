@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,5 +148,14 @@ func TestRunPostInstallAuditApplyFailure(t *testing.T) {
 	}
 	if len(res.res.AppliedKeys) != 0 {
 		t.Fatalf("benign path must apply no keys, got %v", res.res.AppliedKeys)
+	}
+}
+
+// The applied variables come back upper-cased and sorted: the UPDATED summary and the
+// install log list them in that order.
+func TestNormalizeAuditKeysSortsTheVariables(t *testing.T) {
+	got := normalizeAuditKeys([]string{" backup_zfs_config", "", "BACKUP_CLUSTER_CONFIG"})
+	if want := []string{"BACKUP_CLUSTER_CONFIG", "BACKUP_ZFS_CONFIG"}; !slices.Equal(got, want) {
+		t.Fatalf("normalizeAuditKeys = %v, want %v", got, want)
 	}
 }
