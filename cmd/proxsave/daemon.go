@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2546,7 +2546,7 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 	for name := range nr.Results {
 		names = append(names, name)
 	}
-	sort.Strings(names) // deterministic ping/record order
+	slices.Sort(names) // deterministic ping/record order
 	keep := make([]string, 0, len(names))
 	for _, name := range names {
 		key := health.CheckKeyNotify(name)

@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/installer"
@@ -46,7 +46,7 @@ func newInstallPreservedEntries() []string {
 	// safety backup, rollback archives and logs of past restores. daemon_state is the
 	// daemon's lock, pid and status files, which lived in identity/ before 0.41.0.
 	preserved := []string{"env", "identity", "daemon_state", "build", "guards", "restore"}
-	sort.Strings(preserved)
+	slices.Sort(preserved)
 	return preserved
 }
 
