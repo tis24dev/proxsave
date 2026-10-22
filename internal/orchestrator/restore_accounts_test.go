@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -750,4 +751,12 @@ func readFake(t *testing.T, fs *FakeFS, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+// sortedKeys returns the map keys sorted.
+func TestSortedKeysReturnsSortedKeys(t *testing.T) {
+	got := sortedKeys(map[string]bool{"zeta": true, "alpha": false, "mid": true})
+	if want := []string{"alpha", "mid", "zeta"}; !slices.Equal(got, want) {
+		t.Fatalf("sortedKeys = %v, want %v", got, want)
+	}
 }
