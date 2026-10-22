@@ -459,3 +459,14 @@ func TestAuditReadsTheFileTheLoaderReadsThroughALink(t *testing.T) {
 		t.Fatalf("loader read %q, audit found %d duplicated: they read different files", raw["COMPRESSION_TYPE"], len(report.Duplicated))
 	}
 }
+
+// The skipped multi-value variables come back sorted.
+func TestSkippedMultiValueVariablesSorted(t *testing.T) {
+	names := skippedMultiValueVariables()
+	if len(names) < 2 {
+		t.Fatalf("want at least 2 skipped variables to compare, got %v", names)
+	}
+	if !slices.IsSorted(names) {
+		t.Fatalf("skippedMultiValueVariables() = %v, want sorted", names)
+	}
+}
