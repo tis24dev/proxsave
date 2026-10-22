@@ -151,20 +151,21 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 	// Add log categories if present
 	if len(data.LogCategories) > 0 {
 		logger.Debug("Adding %d log categories to embed", len(data.LogCategories))
-		categoriesText := "```\n"
+		var categoriesText strings.Builder
+		categoriesText.WriteString("```\n")
 		for i, cat := range data.LogCategories {
 			if i >= 5 { // Limit to first 5 categories
-				categoriesText += fmt.Sprintf("... and %d more\n", len(data.LogCategories)-5)
+				fmt.Fprintf(&categoriesText, "... and %d more\n", len(data.LogCategories)-5)
 				break
 			}
-			categoriesText += fmt.Sprintf("[%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count)
+			fmt.Fprintf(&categoriesText, "[%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count)
 		}
-		categoriesText += "```"
+		categoriesText.WriteString("```")
 
 		// Insert after issues field
 		fields = append(fields, map[string]any{
 			"name":   "Top Issues",
-			"value":  categoriesText,
+			"value":  categoriesText.String(),
 			"inline": false,
 		})
 		embed["fields"] = fields
@@ -294,16 +295,17 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 			"type": "divider",
 		})
 
-		issuesText := fmt.Sprintf("*Errors:* %d | *Warnings:* %d", data.ErrorCount, data.WarningCount)
+		var issuesText strings.Builder
+		fmt.Fprintf(&issuesText, "*Errors:* %d | *Warnings:* %d", data.ErrorCount, data.WarningCount)
 
 		if len(data.LogCategories) > 0 {
-			issuesText += "\n\n*Top Issues:*\n"
+			issuesText.WriteString("\n\n*Top Issues:*\n")
 			for i, cat := range data.LogCategories {
 				if i >= 5 { // Limit to first 5
-					issuesText += fmt.Sprintf("_... and %d more_\n", len(data.LogCategories)-5)
+					fmt.Fprintf(&issuesText, "_... and %d more_\n", len(data.LogCategories)-5)
 					break
 				}
-				issuesText += fmt.Sprintf("• [%s] %s (×%d)\n", cat.Type, cat.Label, cat.Count)
+				fmt.Fprintf(&issuesText, "• [%s] %s (×%d)\n", cat.Type, cat.Label, cat.Count)
 			}
 		}
 
@@ -311,7 +313,7 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 			"type": "section",
 			"text": map[string]any{
 				"type": "mrkdwn",
-				"text": issuesText,
+				"text": issuesText.String(),
 			},
 		})
 	}
@@ -442,18 +444,19 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	// Add log categories if present
 	if len(data.LogCategories) > 0 {
 		logger.Debug("Adding %d log categories to Teams card", len(data.LogCategories))
-		categoriesText := "**Top Issues:**\n\n"
+		var categoriesText strings.Builder
+		categoriesText.WriteString("**Top Issues:**\n\n")
 		for i, cat := range data.LogCategories {
 			if i >= 5 { // Limit to first 5
-				categoriesText += fmt.Sprintf("_... and %d more_", len(data.LogCategories)-5)
+				fmt.Fprintf(&categoriesText, "_... and %d more_", len(data.LogCategories)-5)
 				break
 			}
-			categoriesText += fmt.Sprintf("• [%s] %s (×%d)\n\n", cat.Type, cat.Label, cat.Count)
+			fmt.Fprintf(&categoriesText, "• [%s] %s (×%d)\n\n", cat.Type, cat.Label, cat.Count)
 		}
 
 		body = append(body, map[string]any{
 			"type": "TextBlock",
-			"text": categoriesText,
+			"text": categoriesText.String(),
 			"wrap": true,
 		})
 	}

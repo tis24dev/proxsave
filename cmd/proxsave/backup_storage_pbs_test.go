@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,20 +34,21 @@ func pbsInitFixture(t *testing.T, versionAnswer string, snapshots ...int64) *con
 	if err := os.WriteFile(filepath.Join(priv, "pbs-main.pw"), []byte("secret-pbs-0000\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	list := "["
+	var list strings.Builder
+	list.WriteString("[")
 	for i, at := range snapshots {
 		if i > 0 {
-			list += ","
+			list.WriteString(",")
 		}
-		list += fmt.Sprintf(`{"backup-id":"proxsave-node.lan","backup-time":%d,"backup-type":"host","files":[],"protected":false}`, at)
+		fmt.Fprintf(&list, `{"backup-id":"proxsave-node.lan","backup-time":%d,"backup-type":"host","files":[],"protected":false}`, at)
 	}
-	list += "]"
+	list.WriteString("]")
 	if versionAnswer == "" {
 		versionAnswer = `echo '{"client":{"release":"5","version":"4.2"},"server":{"release":"5","version":"4.2"}}'`
 	}
 	script := "#!/bin/sh\ncase \"$1\" in\nversion) " + versionAnswer + " ;;\n" +
 		"status) echo '{\"avail\":2147483648,\"total\":4294967296,\"used\":2147483648}' ;;\n" +
-		"snapshot) echo '" + list + "' ;;\nesac\nexit 0\n"
+		"snapshot) echo '" + list.String() + "' ;;\nesac\nexit 0\n"
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "proxmox-backup-client"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
