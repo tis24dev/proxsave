@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
 
       ########################################
-      # GO 1.25 - MAIN TOOLCHAIN
+      # GO FROM go.mod - MAIN TOOLCHAIN
       ########################################
       - name: Set up Go (from go.mod)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -64,7 +64,7 @@ jobs:
         run: govulncheck ./...
 
       ########################################
-      # GOSEC - runs under the project's Go (from go.mod, currently 1.25).
+      # GOSEC - runs under the project's Go (from go.mod).
       # gosec must be a version that supports the project's Go: support for Go
       # 1.25 landed in gosec v2.25.0, so the old v2.20.0 (built for Go ≤1.22)
       # could not type-check this code - combined with -no-fail/|| true it would
