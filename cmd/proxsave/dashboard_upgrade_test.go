@@ -470,3 +470,45 @@ func TestDashboardUpgradeRestartFailureStillReloads(t *testing.T) {
 		t.Fatal("failed restart did not request dashboard reload")
 	}
 }
+
+// A new release whose version scrubs to nothing is announced as UPDATE AVAILABLE.
+func TestDashboardUpgradeDefaultsAnUnusableLatestVersion(t *testing.T) {
+	origVer, origChk := dashboardUpgradeVersion, dashboardUpgradeCheck
+	t.Cleanup(func() { dashboardUpgradeVersion, dashboardUpgradeCheck = origVer, origChk })
+	dashboardUpgradeVersion = func() string { return "1.0.0" }
+	dashboardUpgradeCheck = func(_ context.Context, _ *logging.Logger, current string) *UpdateInfo {
+		return &UpdateInfo{NewVersion: true, Current: current, Latest: "!!!"}
+	}
+
+	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
+		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
+
+	done := make(chan dashboardActionDisposition, 1)
+	go func() {
+		done <- runDashboardUpgrade(ctx, driver.session, "/tmp/backup.env")
+	}()
+
+	driver.waitScreen("Upgrade")
+	deadline := time.After(uitest.Deadline(15 * time.Second))
+	for {
+		out := ansi.Strip(driver.buf.String())
+		if strings.Contains(out, "UPDATE AVAILABLE") {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for UPDATE AVAILABLE, tail:\n%s", tailStr(out))
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(uitest.Deadline(60 * time.Second)):
+		t.Fatal("upgrade screen did not return after the context was canceled")
+	}
+}
