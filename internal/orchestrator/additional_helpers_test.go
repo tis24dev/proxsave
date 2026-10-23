@@ -1764,3 +1764,12 @@ func TestDispatchNotificationsNamesTheDefaultEmailMethod(t *testing.T) {
 		t.Fatalf("log missing %q:\n%s", want, buf.String())
 	}
 }
+
+// A blank compression mode is stored as "standard".
+func TestSetBackupConfigDefaultsABlankCompressionMode(t *testing.T) {
+	o := &Orchestrator{}
+	o.SetBackupConfig(t.TempDir(), t.TempDir(), types.CompressionNone, 0, 0, " ", nil)
+	if o.compressionMode != "standard" {
+		t.Fatalf("compressionMode = %q, want %q", o.compressionMode, "standard")
+	}
+}
