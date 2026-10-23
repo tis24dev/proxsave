@@ -2,13 +2,14 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -301,8 +302,8 @@ func sortByLengthDesc(items []string) {
 	if len(items) < 2 {
 		return
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return len(items[i]) > len(items[j])
+	slices.SortFunc(items, func(a, b string) int {
+		return cmp.Compare(len(b), len(a))
 	})
 }
 

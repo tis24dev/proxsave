@@ -9,7 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -86,8 +86,8 @@ func (r nicMappingResult) Details() string {
 	var b strings.Builder
 	b.WriteString("NIC mapping (backup -> current):\n")
 	entries := append([]nicMappingEntry(nil), r.Entries...)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].OldName < entries[j].OldName
+	slices.SortFunc(entries, func(a, b nicMappingEntry) int {
+		return strings.Compare(a.OldName, b.OldName)
 	})
 	for _, e := range entries {
 		line := fmt.Sprintf("- %s -> %s (%s=%s)\n", e.OldName, e.NewName, e.Method, e.Identifier)
@@ -444,8 +444,8 @@ func collectCurrentNetworkInventory(ctx context.Context) (*archivedNetworkInvent
 		inv.Interfaces = append(inv.Interfaces, profile)
 	}
 
-	sort.Slice(inv.Interfaces, func(i, j int) bool {
-		return inv.Interfaces[i].Name < inv.Interfaces[j].Name
+	slices.SortFunc(inv.Interfaces, func(a, b archivedNetworkInterface) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 	return inv, nil
 }
@@ -707,7 +707,7 @@ func rewriteIfupdownConfigFiles(logger *logging.Logger, renameMap map[string]str
 		logging.DebugStep(logger, "NIC repair rewrite", "interfaces.d not readable; scanning only /etc/network/interfaces (error=%v)", err)
 	}
 
-	sort.Strings(paths)
+	slices.Sort(paths)
 	logging.DebugStep(logger, "NIC repair rewrite", "Scan %d file(s) for interface renames", len(paths))
 
 	type fileSnapshot struct {
@@ -806,8 +806,8 @@ func mapToEntries(renameMap map[string]string) []nicMappingEntry {
 			Method:  "text_replace",
 		})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].OldName < entries[j].OldName
+	slices.SortFunc(entries, func(a, b nicMappingEntry) int {
+		return strings.Compare(a.OldName, b.OldName)
 	})
 	return entries
 }

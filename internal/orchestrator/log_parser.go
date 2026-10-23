@@ -2,8 +2,9 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -112,22 +113,14 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 // lowercase against 645 uppercase), and without the symbol rank a "✗ ... backup not
 // saved" sorted after every plain label, at the bottom of a long list.
 func sortLogCategories(list []notify.LogCategory) {
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		if a.Type != b.Type {
-			// "ERROR" < "WARNING" lexicographically.
-			return a.Type < b.Type
-		}
-		if ra, rb := logCategorySymbolRank(a.Label), logCategorySymbolRank(b.Label); ra != rb {
-			return ra < rb
-		}
-		if a.Count != b.Count {
-			return a.Count > b.Count
-		}
-		if la, lb := strings.ToLower(a.Label), strings.ToLower(b.Label); la != lb {
-			return la < lb
-		}
-		return a.Label < b.Label
+	slices.SortStableFunc(list, func(a, b notify.LogCategory) int {
+		return cmp.Or(
+			strings.Compare(a.Type, b.Type), // "ERROR" < "WARNING" lexicographically.
+			cmp.Compare(logCategorySymbolRank(a.Label), logCategorySymbolRank(b.Label)),
+			cmp.Compare(b.Count, a.Count),
+			strings.Compare(strings.ToLower(a.Label), strings.ToLower(b.Label)),
+			strings.Compare(a.Label, b.Label),
+		)
 	})
 }
 

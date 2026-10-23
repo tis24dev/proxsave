@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -305,7 +306,7 @@ func parseSystemdLinkNamingOverrides(source, content string) []nicNamingOverride
 		return nil
 	}
 
-	sort.Strings(macs)
+	slices.Sort(macs)
 	unique := make([]string, 0, len(macs))
 	seen := make(map[string]struct{}, len(macs))
 	for _, m := range macs {

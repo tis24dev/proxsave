@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -212,7 +212,7 @@ func cleanupMountGuards(ctx context.Context, logger *logging.Logger, dryRun bool
 		dedup[mp] = struct{}{}
 		targets = append(targets, mp)
 	}
-	sort.Strings(targets)
+	slices.Sort(targets)
 	for _, mp := range hiddenMountpoints {
 		mp = filepath.Clean(strings.TrimSpace(mp))
 		if mp == "" || mp == "." || mp == string(os.PathSeparator) {
@@ -438,8 +438,8 @@ func guardMountpointsFromMountinfo(mountinfo string, matchers []guardRootMatcher
 			hidden = append(hidden, mp)
 		}
 	}
-	sort.Strings(visible)
-	sort.Strings(hidden)
+	slices.Sort(visible)
+	slices.Sort(hidden)
 	return visible, hidden, mountsIn
 }
 

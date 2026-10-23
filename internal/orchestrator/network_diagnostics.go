@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -211,7 +211,7 @@ func appendDirSnapshot(logger *logging.Logger, label string, b *strings.Builder,
 		}
 		list = append(list, entryInfo{name: e.Name(), mode: info.Mode()})
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+	slices.SortFunc(list, func(a, b entryInfo) int { return strings.Compare(a.name, b.name) })
 	if logger != nil {
 		names := make([]string, 0, len(list))
 		for _, e := range list {

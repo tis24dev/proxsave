@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -102,7 +102,7 @@ func targetNetworkEndpointFromConfig(iface string) (networkEndpoint, error) {
 		}
 	}
 	ep.Addresses = uniqueStrings(ep.Addresses)
-	sort.Strings(ep.Addresses)
+	slices.Sort(ep.Addresses)
 	return ep, nil
 }
 
@@ -121,7 +121,7 @@ func collectIfupdownConfigPaths() ([]string, error) {
 			paths = append(paths, filepath.Join("/etc/network/interfaces.d", name))
 		}
 	}
-	sort.Strings(paths)
+	slices.Sort(paths)
 	return paths, nil
 }
 

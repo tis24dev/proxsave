@@ -5,7 +5,7 @@ import (
 	"bufio"
 	"context"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -151,7 +151,7 @@ func sortedPoolNames(pools map[string]struct{}) []string {
 	for pool := range pools {
 		poolNames = append(poolNames, pool)
 	}
-	sort.Strings(poolNames)
+	slices.Sort(poolNames)
 	return poolNames
 }
 

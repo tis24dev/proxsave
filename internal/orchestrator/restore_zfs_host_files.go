@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -55,7 +55,7 @@ func hostidRestoreDecision(backup, live []byte, pools []string, listErr error) (
 		return true, ""
 	}
 	sorted := append([]string{}, pools...)
-	sort.Strings(sorted)
+	slices.Sort(sorted)
 	return false, fmt.Sprintf("pools %s use this host's hostid %s, and an initramfs rebuilt with another one refuses to import them",
 		strings.Join(sorted, ", "), formatHostid(live))
 }
@@ -164,7 +164,7 @@ func zfsCacheRestoreDecision(pools []string, listErr error) (write bool, reason 
 		return true, ""
 	}
 	sorted := append([]string{}, pools...)
-	sort.Strings(sorted)
+	slices.Sort(sorted)
 	return false, fmt.Sprintf("pools %s are imported on this host, and at boot zfs-import-cache stops on another host's list",
 		strings.Join(sorted, ", "))
 }

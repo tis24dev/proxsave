@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -1155,7 +1155,7 @@ func extractWebAuthnUsersFromPVETFA(sections []proxmoxNotificationSection) []str
 		seen[userID] = struct{}{}
 		out = append(out, userID)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -1181,7 +1181,7 @@ func extractWebAuthnUsersFromPBSTFAUsers(users map[string]json.RawMessage) []str
 			out = append(out, userID)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

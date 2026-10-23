@@ -3,13 +3,14 @@ package orchestrator
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -371,19 +372,20 @@ func discoverRcloneBackups(ctx context.Context, cfg *config.Config, remotePath s
 		}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		a := candidates[i]
-		b := candidates[j]
+	slices.SortStableFunc(candidates, func(a, b *backupCandidate) int {
 		if a == nil || a.Manifest == nil {
-			return false
+			if b == nil || b.Manifest == nil {
+				return 0
+			}
+			return 1
 		}
 		if b == nil || b.Manifest == nil {
-			return true
+			return -1
 		}
-		if !a.Manifest.CreatedAt.Equal(b.Manifest.CreatedAt) {
-			return a.Manifest.CreatedAt.After(b.Manifest.CreatedAt)
-		}
-		return a.DisplayBase < b.DisplayBase
+		return cmp.Or(
+			b.Manifest.CreatedAt.Compare(a.Manifest.CreatedAt),
+			strings.Compare(a.DisplayBase, b.DisplayBase),
+		)
 	})
 
 	logging.DebugStep(
@@ -527,8 +529,8 @@ func discoverBackupCandidates(logger *logging.Logger, root string) (candidates [
 		}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return candidates[i].Manifest.CreatedAt.After(candidates[j].Manifest.CreatedAt)
+	slices.SortStableFunc(candidates, func(a, b *backupCandidate) int {
+		return b.Manifest.CreatedAt.Compare(a.Manifest.CreatedAt)
 	})
 
 	logging.DebugStep(

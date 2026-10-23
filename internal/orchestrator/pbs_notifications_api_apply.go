@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -305,7 +304,7 @@ func sortedPBSMatcherNames(matchers map[string]proxmoxNotificationSection) []str
 	for name := range matchers {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 
@@ -408,7 +407,7 @@ func sortedPBSEndpointNames(desired map[string]pbsNotificationEndpointSection) [
 	for name := range desired {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 

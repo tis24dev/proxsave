@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -517,7 +517,7 @@ func grubDropInSettingCmdlineDefault(destRoot string) string {
 			names = append(names, e.Name())
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		data, err := restoreFS.ReadFile(path)

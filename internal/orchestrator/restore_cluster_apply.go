@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/input"
@@ -89,7 +88,7 @@ func listExportNodeDirs(exportRoot string) ([]string, error) {
 		}
 		nodes = append(nodes, name)
 	}
-	sort.Strings(nodes)
+	slices.Sort(nodes)
 	return nodes, nil
 }
 

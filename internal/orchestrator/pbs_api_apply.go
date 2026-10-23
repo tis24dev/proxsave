@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -181,7 +180,7 @@ func parsePBSListIDs(raw []byte, candidateKeys ...string) ([]string, error) {
 			for k := range row {
 				available = append(available, k)
 			}
-			sort.Strings(available)
+			slices.Sort(available)
 			return nil, fmt.Errorf("failed to parse PBS list row %d: none of %v present as non-empty string (available keys: %v)", idx, keys, available)
 		}
 		if _, ok := seen[id]; ok {
@@ -190,7 +189,7 @@ func parsePBSListIDs(raw []byte, candidateKeys ...string) ([]string, error) {
 		seen[id] = struct{}{}
 		out = append(out, id)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out, nil
 }
 
@@ -665,7 +664,7 @@ func pbsSyncJobsByRemote(path string) (byRemote map[string][]string, jobs int, e
 		}
 	}
 	for remote := range byRemote {
-		sort.Strings(byRemote[remote])
+		slices.Sort(byRemote[remote])
 	}
 	return byRemote, jobs, nil
 }
@@ -1566,7 +1565,7 @@ func pbsSortedNames[V any](m map[string]V) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
 
