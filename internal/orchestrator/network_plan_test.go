@@ -50,3 +50,10 @@ func TestTargetNetworkEndpointFromConfigSortsAddresses(t *testing.T) {
 		t.Fatalf("addresses = %v, want %v", ep.Addresses, want)
 	}
 }
+
+// An endpoint with no interface, address or gateway reads n/a for each.
+func TestNetworkEndpointSummaryDefaultsBlankFields(t *testing.T) {
+	if got, want := (networkEndpoint{}).summary(), "iface=n/a ip=n/a gw=n/a"; got != want {
+		t.Fatalf("summary() = %q, want %q", got, want)
+	}
+}
