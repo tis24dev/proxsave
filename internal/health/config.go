@@ -1,6 +1,7 @@
 package health
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -142,9 +143,7 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 	// value, which a proxy could drop and silently turn into "leave alone").
 	if channels != nil {
 		v := strings.Join(channels, ",")
-		if v == "" {
-			v = "none"
-		}
+		v = cmp.Or(v, "none")
 		q.Set("channels", v)
 	}
 	// Transport + auth (host normalize, X-Server-Auth, X-Proxsave-Version, timeout,
