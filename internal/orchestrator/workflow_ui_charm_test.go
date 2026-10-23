@@ -268,3 +268,19 @@ func TestCharmWorkflowUIRunTaskAndNotices(t *testing.T) {
 		t.Fatalf("ShowError error: %v", err)
 	}
 }
+
+// An existing path without a description is called a file.
+func TestCharmWorkflowUIResolveExistingPathDefaultsABlankDescription(t *testing.T) {
+	d, ui := newCharmUITestHarness(t)
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := ui.ResolveExistingPath(context.Background(), "/tmp/out.tar", " ", "")
+		errCh <- err
+	}()
+	d.waitScreen("Existing file")
+	d.waitOutput("The file /tmp/out.tar already exists.")
+	d.keys("esc")
+	if err := <-errCh; !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("expected ErrDecryptAborted on esc, got %v", err)
+	}
+}
