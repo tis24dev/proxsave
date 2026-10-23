@@ -3088,3 +3088,16 @@ func TestCollectBestEffortProbeDefaultsABlankSkipReason(t *testing.T) {
 		t.Fatalf("log missing %q:\n%s", want, log.String())
 	}
 }
+
+// An empty PATH starts from the standard system PATH, so the bin directories
+// survive next to the sbin ones ensureSystemPath always adds.
+func TestEnsureSystemPathDefaultsAnEmptyPATH(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	ensureSystemPath()
+
+	want := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if got := os.Getenv("PATH"); got != want {
+		t.Fatalf("PATH = %q, want %q", got, want)
+	}
+}
