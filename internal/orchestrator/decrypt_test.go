@@ -4666,3 +4666,11 @@ func TestCreateUniquePreparedArchivePathDefaultsABlankBaseName(t *testing.T) {
 		t.Fatalf("output name = %q, want an archive.decrypted-* name", base)
 	}
 }
+
+// An .age archive with no encryption mode set names the mode as plain.
+func TestResolvePreparedArchivePathNamesAMissingModePlain(t *testing.T) {
+	_, err := resolvePreparedArchivePath(t.TempDir(), "/staging/backup.tar.age", "")
+	if err == nil || !strings.HasSuffix(err.Error(), "but encryption mode is plain") {
+		t.Fatalf("resolvePreparedArchivePath() error = %v; want it to name the plain mode", err)
+	}
+}
