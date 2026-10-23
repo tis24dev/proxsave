@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -657,9 +658,7 @@ func dpkgPackageInstalledIn(data []byte, pkg string) (string, bool) {
 			return "", false
 		}
 		version := dpkgStanzaField(stanza, "Version")
-		if version == "" {
-			version = "unknown"
-		}
+		version = cmp.Or(version, "unknown")
 		return version, true
 	}
 	return "", false
