@@ -1,6 +1,7 @@
 package components
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -441,9 +442,7 @@ func (g *FormGrid) renderControl(f *FormField, focused bool, width int) string {
 		if f.Secret && val != "" {
 			val = strings.Repeat("*", len([]rune(val)))
 		}
-		if val == "" {
-			val = "-"
-		}
+		val = cmp.Or(val, "-")
 		val = ansi.Truncate(val, max(width, 10), "…")
 		if dim {
 			return theme.Subtle.Render(val)
