@@ -263,7 +263,7 @@ func TestReadLineWithContext_CancelledReturnsAborted(t *testing.T) {
 	defer func() { _ = pw.Close() }()
 
 	reader := bufio.NewReader(pr)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan struct{})
 	var err error
@@ -292,7 +292,7 @@ func TestReadLineWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
 	defer func() { _ = pw.Close() }()
 
 	reader := bufio.NewReader(pr)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	done := make(chan struct{})
@@ -324,7 +324,7 @@ func TestReadLineWithContext_ConcurrentCancelledCallerReturnsWhileReadPending(t 
 
 	firstResultCh := make(chan lineCallResult, 1)
 	go func() {
-		line, err := ReadLineWithContext(context.Background(), reader)
+		line, err := ReadLineWithContext(t.Context(), reader)
 		firstResultCh <- lineCallResult{line: line, err: err}
 	}()
 
@@ -332,7 +332,7 @@ func TestReadLineWithContext_ConcurrentCancelledCallerReturnsWhileReadPending(t 
 		return src.calls.Load() == 1
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	secondResultCh := make(chan lineCallResult, 1)
@@ -455,7 +455,7 @@ func TestReadPasswordWithContext_ConcurrentCancelledCallerReturnsWhileReadPendin
 
 	firstResultCh := make(chan passwordCallResult, 1)
 	go func() {
-		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
+		got, err := ReadPasswordWithContext(t.Context(), readPassword, 42)
 		firstResultCh <- passwordCallResult{b: got, err: err}
 	}()
 
@@ -463,7 +463,7 @@ func TestReadPasswordWithContext_ConcurrentCancelledCallerReturnsWhileReadPendin
 		return calls.Load() == 1
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	secondResultCh := make(chan passwordCallResult, 1)
@@ -528,7 +528,7 @@ func TestReadLineWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *testi
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		line, err := ReadLineWithContext(context.Background(), reader)
+		line, err := ReadLineWithContext(t.Context(), reader)
 		resultCh <- lineCallResult{line: line, err: err}
 	}()
 	waitForSignal(t, started, "line retry start")
@@ -624,7 +624,7 @@ func TestReadPasswordWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *t
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
+		got, err := ReadPasswordWithContext(t.Context(), readPassword, 42)
 		resultCh <- passwordCallResult{b: got, err: err}
 	}()
 	waitForSignal(t, started, "password retry start")
