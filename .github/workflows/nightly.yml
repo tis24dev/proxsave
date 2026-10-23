@@ -1,0 +1,57 @@
+name: Nightly
+
+run-name: Nightly - ${{ github.ref_name }}
+
+# Scheduled checks that never gate a merge: no pull_request or push trigger.
+"on":
+  schedule:
+    # Daily at 04:37 UTC: off the top of the hour and clear of the Monday
+    # 02:00-03:00 Dependabot, CodeQL and security runs.
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  next-go:
+    name: Next Go (latest stable)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The newest stable Go instead of the go.mod version, so a break from the
+      # next toolchain shows here before go.mod moves. setup-go exports
+      # GOTOOLCHAIN=local, so the go commands below run this toolchain.
+      - name: Setup Go (latest stable)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Show Go version
+        run: go version
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race)
+        run: go test -race ./...
