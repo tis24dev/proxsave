@@ -93,3 +93,18 @@ func TestAssignUniquePBSOutputKeysWalksBaseKeysInOrder(t *testing.T) {
 		}
 	}
 }
+
+// An entry whose base key is blank gets the "entry" output key.
+func TestAssignUniquePBSOutputKeysDefaultsABlankBaseKey(t *testing.T) {
+	type item struct{ identity, base, key string }
+	items := []item{{identity: "name:store", base: "  "}}
+	assignUniquePBSOutputKeys(items,
+		func(it item) string { return it.identity },
+		func(it item) string { return it.base },
+		func(item) int { return 0 },
+		func(it *item, key string) { it.key = key })
+
+	if items[0].key != "entry" {
+		t.Fatalf("items[0].key = %q, want %q", items[0].key, "entry")
+	}
+}
