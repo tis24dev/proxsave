@@ -27,3 +27,18 @@ func TestAppendDirSnapshotListsEntriesByName(t *testing.T) {
 		t.Fatalf("want a.cfg listed before b.cfg, got:\n%s", out)
 	}
 }
+
+// A blank file name writes the health report as health.txt.
+func TestWriteNetworkHealthReportFileNamedDefaultsABlankName(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	path, err := writeNetworkHealthReportFileNamed(t.TempDir(), " ", networkHealthReport{})
+	if err != nil {
+		t.Fatalf("writeNetworkHealthReportFileNamed error: %v", err)
+	}
+	if filepath.Base(path) != "health.txt" {
+		t.Fatalf("report written to %s, want health.txt", path)
+	}
+}
