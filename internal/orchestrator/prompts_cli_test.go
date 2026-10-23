@@ -138,3 +138,19 @@ func TestPromptYesNoWithCountdown_CopyShowsTimeoutOutcome(test *testing.T) {
 		test.Fatalf("Enter default must stay advertised via the [Y/n] hint, got %q", got)
 	}
 }
+
+// A blank question is asked as "Proceed?".
+func TestPromptYesNoWithCountdownDefaultsABlankQuestion(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n"))
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(io.Discard)
+
+	out := captureCLIStdout(t, func() {
+		if _, err := promptYesNoWithCountdown(context.Background(), reader, logger, " ", 0, false); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Proceed? [y/N]") {
+		t.Fatalf("prompt = %q, want it to ask Proceed? [y/N]", out)
+	}
+}
