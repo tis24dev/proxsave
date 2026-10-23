@@ -526,3 +526,23 @@ func TestFindNearestExistingDirMetaDefaultsAZeroMode(t *testing.T) {
 		t.Fatalf("inherited mode = %o, want 755", mode)
 	}
 }
+
+// A zero permission argument prepares the temp file as 0644.
+func TestPrepareAtomicTempFileDefaultsAZeroPerm(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+	path := filepath.Join(t.TempDir(), "hosts")
+
+	tmpPath, _, _, err := prepareAtomicTempFile(path, []byte("127.0.0.1 localhost\n"), 0)
+	if err != nil {
+		t.Fatalf("prepareAtomicTempFile error: %v", err)
+	}
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("temp file mode = %o, want 644", perm)
+	}
+}
