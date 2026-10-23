@@ -245,3 +245,39 @@ func deriveDeterministicIdentityFromPassphrase(passphrase string) (age.Identity,
 func deriveDeterministicIdentitiesFromPassphrase(passphrase string) ([]age.Identity, error) {
 	return deriveDeterministicIdentitiesFromPassphraseWithExtraSalts(passphrase, nil)
 }
+
+// zeroModeFS reports every path with no permission bits, the shape the backup's
+// 0600 fallback exists for.
+type zeroModeFS struct{ osFS }
+
+type zeroModeInfo struct{ os.FileInfo }
+
+func (zeroModeInfo) Mode() os.FileMode { return 0 }
+
+func (zeroModeFS) Stat(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	return zeroModeInfo{info}, nil
+}
+
+// A recipient file whose mode reads as zero is backed up as 0600.
+func TestBackupExistingRecipientFileWithDepsDefaultsAZeroMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recipient.txt")
+	if err := os.WriteFile(path, []byte("age1example\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath, err := backupExistingRecipientFileWithDeps(zeroModeFS{}, realTimeProvider{}, path)
+	if err != nil {
+		t.Fatalf("backupExistingRecipientFileWithDeps error: %v", err)
+	}
+	info, err := os.Stat(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("backup mode = %o, want 600", perm)
+	}
+}
