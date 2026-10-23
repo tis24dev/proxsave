@@ -1773,3 +1773,20 @@ func TestSetBackupConfigDefaultsABlankCompressionMode(t *testing.T) {
 		t.Fatalf("compressionMode = %q, want %q", o.compressionMode, "standard")
 	}
 }
+
+// Stats without a version record the placeholder version 0.0.0.
+func TestWriteBackupMetadataDefaultsABlankVersion(t *testing.T) {
+	o := &Orchestrator{logger: logging.New(types.LogLevelError, false)}
+	tempDir := t.TempDir()
+
+	if err := o.writeBackupMetadata(tempDir, &BackupStats{ProxmoxType: types.ProxmoxVE, Hostname: "host1"}); err != nil {
+		t.Fatalf("writeBackupMetadata error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tempDir, "var/lib/proxsave-info/backup_metadata.txt"))
+	if err != nil {
+		t.Fatalf("failed reading metadata: %v", err)
+	}
+	if !strings.Contains(string(data), "VERSION=0.0.0\n") {
+		t.Fatalf("metadata missing VERSION=0.0.0:\n%s", data)
+	}
+}
