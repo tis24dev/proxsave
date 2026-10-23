@@ -809,3 +809,11 @@ func TestCollectWizardDataScheduleWeekly(t *testing.T) {
 		t.Fatalf("schedule = %q %q %q; want weekly fri 1", res.data.ScheduleFrequency, res.data.ScheduleWeekday, res.data.ScheduleMonthDay)
 	}
 }
+
+// A colored status without a label renders the generic "STATUS" keyword.
+func TestBuildTelegramPromptDefaultsABlankStatusLabel(t *testing.T) {
+	v := ansi.Strip(buildTelegramPrompt("1", "", false, "", "", orchestrator.TelegramSeveritySuccess, 0))
+	if !strings.Contains(v, "✓ STATUS") {
+		t.Fatalf("blank label must render as STATUS: %q", v)
+	}
+}
