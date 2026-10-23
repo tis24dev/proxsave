@@ -52,7 +52,7 @@ func TestRunTaskPropagatesError(t *testing.T) {
 
 func TestRunTaskContextCancelDrains(t *testing.T) {
 	s := testSession(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	started := make(chan struct{})
 	drained := false
 	done := make(chan error, 1)
@@ -87,7 +87,7 @@ func TestRunTaskUserCancelViaEsc(t *testing.T) {
 	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- RunTask(context.Background(), s, "Scanning", "Starting...", func(taskCtx context.Context, report func(string)) error {
+		done <- RunTask(t.Context(), s, "Scanning", "Starting...", func(taskCtx context.Context, report func(string)) error {
 			close(started)
 			<-taskCtx.Done()
 			return taskCtx.Err()
