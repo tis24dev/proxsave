@@ -1182,3 +1182,20 @@ func TestCreateSafetyBackupDefaultsABlankSpec(t *testing.T) {
 		t.Fatalf("log missing %q:\n%s", want, log.String())
 	}
 }
+
+// A relative pattern whose first element is a glob lists the working directory.
+func TestGlobFSExpandsARelativeTopLevelGlob(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.conf"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	got, err := globFS(osFS{}, "*.conf")
+	if err != nil {
+		t.Fatalf("globFS error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "a.conf" {
+		t.Fatalf("globFS(*.conf) = %v, want [a.conf]", got)
+	}
+}
