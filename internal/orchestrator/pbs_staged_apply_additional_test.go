@@ -991,3 +991,29 @@ func TestRemoveIfExists_PropagatesNonExistErrors(t *testing.T) {
 		t.Fatalf("expected error, got nil")
 	}
 }
+
+// A section config block with no mode set is written as 0640.
+func TestApplyPBSConfigFileBlockDefaultsAZeroPerm(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	stageRoot := "/stage"
+	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/tape.cfg", []byte("drive: d1\n    path /dev/nst0\n"), 0o600); err != nil {
+		t.Fatalf("write staged tape.cfg: %v", err)
+	}
+	f := pbsConfigFileBlock{rel: "etc/proxmox-backup/tape.cfg", config: "The tape configuration", outcome: "Tape configuration"}
+	if err := applyPBSConfigFileBlock(newTestLogger(), stageRoot, f); err != nil {
+		t.Fatalf("applyPBSConfigFileBlock: %v", err)
+	}
+
+	info, err := fakeFS.Stat("/etc/proxmox-backup/tape.cfg")
+	if err != nil {
+		t.Fatalf("stat tape.cfg: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("tape.cfg mode=%#o want %#o", info.Mode().Perm(), 0o640)
+	}
+}
