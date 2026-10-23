@@ -144,7 +144,7 @@ func TestCharmPromptNetworkCommit_AdapterSemantics(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		ok, err := ui.PromptNetworkCommit(context.Background(), 30*time.Second, auditNetcommitHealth(), nil, "/tmp/diag")
+		ok, err := ui.PromptNetworkCommit(t.Context(), 30*time.Second, auditNetcommitHealth(), nil, "/tmp/diag")
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Network apply")

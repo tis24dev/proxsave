@@ -43,7 +43,7 @@ func TestVerifyStagedArchiveIntegrityThreadsTimeout(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := verifyStagedArchiveIntegrity(
-			context.Background(),
+			t.Context(),
 			logging.New(types.LogLevelError, false),
 			stagedFiles{ArchivePath: fifo},
 			cand,
@@ -83,7 +83,7 @@ func TestCopyRawArtifactsToWorkdirBoundsLocalSourceOpen(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := copyRawArtifactsToWorkdirWithLogger(context.Background(), cand, workDir, logger, time.Second)
+		_, err := copyRawArtifactsToWorkdirWithLogger(t.Context(), cand, workDir, logger, time.Second)
 		done <- err
 	}()
 
@@ -154,7 +154,7 @@ func TestPreparePlainBundleCommon_ThreadsTimeoutIntoPlainChecksum(t *testing.T) 
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := preparePlainBundleCommon(context.Background(), cand, "1.0.0", logger, decrypt, time.Second)
+		_, err := preparePlainBundleCommon(t.Context(), cand, "1.0.0", logger, decrypt, time.Second)
 		done <- err
 	}()
 
