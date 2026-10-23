@@ -384,3 +384,10 @@ func TestTruncateString(t *testing.T) {
 		t.Fatalf("truncateString with max=0 = %q; want 'test'", got)
 	}
 }
+
+// A message that starts with the separator keeps the whole message as its label.
+func TestSplitCategoryAndExampleKeepsTheMessageForABlankLabel(t *testing.T) {
+	if label, _ := splitCategoryAndExample(" - disk almost full"); label != " - disk almost full" {
+		t.Fatalf("label = %q, want the whole message", label)
+	}
+}
