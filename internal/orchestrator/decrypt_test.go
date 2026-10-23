@@ -4651,3 +4651,18 @@ func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, descrip
 	ui := newCLIWorkflowUI(reader, nil)
 	return ensureWritablePathWithUI(ctx, ui, path, description)
 }
+
+// A blank base name still yields a named output, "archive.decrypted-*".
+func TestCreateUniquePreparedArchivePathDefaultsABlankBaseName(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	path, err := createUniquePreparedArchivePath(t.TempDir(), " ")
+	if err != nil {
+		t.Fatalf("createUniquePreparedArchivePath error: %v", err)
+	}
+	if base := filepath.Base(path); !strings.HasPrefix(base, "archive.decrypted-") {
+		t.Fatalf("output name = %q, want an archive.decrypted-* name", base)
+	}
+}
