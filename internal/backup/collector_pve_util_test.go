@@ -839,3 +839,16 @@ func TestEffectivePVEConfigPathDetailed(t *testing.T) {
 		})
 	}
 }
+
+// A blank PVEConfigPath still looks for ceph under /etc/pve.
+func TestCephConfigPathsDefaultsABlankPVEConfigPath(t *testing.T) {
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = "  "
+	cfg.CephConfigPath = ""
+	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), "pve", false)
+
+	paths := collector.cephConfigPaths()
+	if !slices.Contains(paths, "/etc/pve/ceph") {
+		t.Fatalf("cephConfigPaths() = %v, want it to contain %q", paths, "/etc/pve/ceph")
+	}
+}
