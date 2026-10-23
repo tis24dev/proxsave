@@ -1604,3 +1604,14 @@ func TestParseCompressionSettingsDefaultsABlankMode(t *testing.T) {
 		t.Fatalf("CompressionMode = %q; want %q", cfg.CompressionMode, "standard")
 	}
 }
+
+// RCLONE_VERIFY_METHOD assigned an empty value falls back to "primary".
+func TestParseStorageSettingsDefaultsABlankRcloneVerifyMethod(t *testing.T) {
+	cfg := &Config{raw: map[string]string{"RCLONE_VERIFY_METHOD": ""}}
+
+	cfg.parseStorageSettings()
+
+	if cfg.RcloneVerifyMethod != "primary" {
+		t.Fatalf("RcloneVerifyMethod = %q; want %q", cfg.RcloneVerifyMethod, "primary")
+	}
+}
