@@ -246,7 +246,7 @@ func TestWhatsnewHungLogPathIsSilent(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			maybeShowWhatsnew(context.Background(), nil, loc, "0.40.0")
+			maybeShowWhatsnew(t.Context(), nil, loc, "0.40.0")
 		}()
 		select {
 		case <-done:

@@ -812,7 +812,7 @@ func TestScheduleBlockPrecedesTheBackgroundLoops(t *testing.T) {
 	})
 
 	d := scheduleDaemon(t, "weekly", "mon", "1", "02:00", true, config.HealthcheckModeSelf)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan int, 1)
 	go func() { done <- d.run(ctx) }()

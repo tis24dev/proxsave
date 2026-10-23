@@ -534,7 +534,7 @@ func TestScheduleHeartbeatConfirmationReArmsTheWait(t *testing.T) {
 	d := negotiationDaemon(t, relay.server.URL, "weekly", "mon", "1", "02:00")
 	logs := captureDaemonLog(t)
 	d.logScheduleStart(context.Background())
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan bool, 1)
 	go func() { done <- d.scheduleLoop(ctx) }()
@@ -731,7 +731,7 @@ func TestScheduleCentralizedRunPrintsTheBlocksInOrder(t *testing.T) {
 	})
 	d := negotiationDaemon(t, closedRelayURL(), "weekly", "mon", "1", "02:00")
 	d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL = "", ""
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan int, 1)
 	go func() { done <- d.run(ctx) }()

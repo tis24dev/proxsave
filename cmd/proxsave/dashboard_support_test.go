@@ -43,7 +43,7 @@ func TestHandleSupportIntroSkipsWhenMetaProvided(t *testing.T) {
 // consent note, BOTH input fields and the Start confirm together (not a sequence of screens).
 func TestSupportFormIsOneScreen(t *testing.T) {
 	driver := &newkeyUIDriver{t: t, buf: &shell.SyncBuffer{}, pushes: make(chan screenPush, 8)}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	driver.session = shell.StartObservedForTest(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Dashboard"},
 		driver.buf, func(title string) { driver.pushes <- screenPush{title: title, at: driver.buf.Len()} })
