@@ -39,6 +39,8 @@ jobs:
         uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
         with:
           languages: go
+          # The default suite plus lower-precision security queries.
+          queries: security-extended
 
       # Build the module so CodeQL can trace it (the project's known-good build).
       - name: Build
