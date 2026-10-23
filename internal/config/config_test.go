@@ -1593,3 +1593,14 @@ func TestParseRejectsInvalidCollectionAndCloudSettings(t *testing.T) {
 		})
 	}
 }
+
+// COMPRESSION_MODE assigned an empty value falls back to "standard".
+func TestParseCompressionSettingsDefaultsABlankMode(t *testing.T) {
+	cfg := &Config{raw: map[string]string{"COMPRESSION_MODE": ""}}
+
+	cfg.parseCompressionSettings()
+
+	if cfg.CompressionMode != "standard" {
+		t.Fatalf("CompressionMode = %q; want %q", cfg.CompressionMode, "standard")
+	}
+}
