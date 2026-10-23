@@ -498,3 +498,16 @@ func TestCharmConfirmDangerIgnoresShortcutKeys(t *testing.T) {
 		t.Fatalf("danger prompt accepted a shortcut or wrong default: %+v", res)
 	}
 }
+
+// A confirmation without a title is shown on a "Confirm" screen.
+func TestCharmWorkflowUIConfirmActionDefaultsABlankTitle(t *testing.T) {
+	d, ui := newCharmRestoreUITestHarness(t)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ui.ConfirmAction(context.Background(), " ", "Apply the change?", "Apply", "Skip", 0, false)
+		errCh <- err
+	}()
+	d.waitScreen("Confirm")
+	d.keys("esc")
+	<-errCh
+}
