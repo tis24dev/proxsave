@@ -3067,3 +3067,24 @@ func TestSafeCopyDirSkipsStagingWorkspace(t *testing.T) {
 		t.Fatalf("staging workspace must not be copied into itself (#56), stat err=%v", err)
 	}
 }
+
+// An unavailable probe that gives no reason is logged with the default reason.
+func TestCollectBestEffortProbeDefaultsABlankSkipReason(t *testing.T) {
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+	collector := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxUnknown, false, CollectorDeps{
+		LookPath:                    func(string) (string, error) { return "/bin/tool", nil },
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+
+	err := collector.collectBestEffortProbe(context.Background(), commandSpec("tool"), filepath.Join(t.TempDir(), "out.txt"), "tool", func() (bool, string) {
+		return false, ""
+	})
+	if err != nil {
+		t.Fatalf("collectBestEffortProbe unavailable = %v", err)
+	}
+	if want := "Skipping tool: required capability not detected"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
+	}
+}
