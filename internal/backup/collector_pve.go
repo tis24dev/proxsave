@@ -688,7 +688,9 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 	}
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
-	nodeName = cmp.Or(nodeName, hostname)
+	if nodeName == "" {
+		nodeName = hostname
+	}
 
 	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/disks/list", nodeName), "--output-format=json"),
@@ -852,7 +854,9 @@ func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
 
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
-	nodeName = cmp.Or(nodeName, hostname)
+	if nodeName == "" {
+		nodeName = hostname
+	}
 
 	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/qemu", nodeName), "--output-format=json"),

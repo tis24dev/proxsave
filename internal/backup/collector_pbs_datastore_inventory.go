@@ -706,7 +706,9 @@ func mergePBSDatastoreDefinitions(cli, config []pbsDatastore) []pbsDatastoreDefi
 		case entry.Origin == "":
 			entry.Origin = origin
 		case entry.Origin == pbsDatastoreSourceOverride || origin == pbsDatastoreSourceOverride:
-			entry.Origin = cmp.Or(entry.Origin, pbsDatastoreSourceOverride)
+			if entry.Origin == "" {
+				entry.Origin = pbsDatastoreSourceOverride
+			}
 		case entry.Origin != origin:
 			entry.Origin = pbsDatastoreOriginMerged
 		}

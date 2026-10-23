@@ -2,7 +2,6 @@
 package orchestrator
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -27,7 +26,9 @@ func (c *cliWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLa
 		fmt.Println()
 	}
 	question := components.SanitizeLine(title)
-	question = cmp.Or(question, "Proceed?")
+	if question == "" {
+		question = "Proceed?"
+	}
 	return promptYesNoWithCountdown(ctx, c.reader, c.logger, question, timeout, defaultYes)
 }
 

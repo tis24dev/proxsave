@@ -98,7 +98,9 @@ func ensureDirExistsWithInheritedMeta(dir string) error {
 		}
 		candidate = parent
 	}
-	existing = cmp.Or(existing, ".")
+	if existing == "" {
+		existing = "."
+	}
 
 	var toCreate []string
 	cur := dir
@@ -185,7 +187,9 @@ func desiredOwnershipForAtomicWrite(destPath string) uidGid {
 // that do not support directory fsync (EINVAL/ENOTSUP) are tolerated.
 func syncDir(dir string) error {
 	dir = filepath.Clean(strings.TrimSpace(dir))
-	dir = cmp.Or(dir, ".")
+	if dir == "" {
+		dir = "."
+	}
 
 	df, err := restoreFS.Open(dir)
 	if err != nil {

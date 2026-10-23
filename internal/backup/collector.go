@@ -3,7 +3,6 @@ package backup
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1453,7 +1452,9 @@ func sanitizeFilename(name string) string {
 	)
 	clean := replacer.Replace(name)
 	clean = strings.ReplaceAll(clean, "..", "_")
-	clean = cmp.Or(clean, "entry")
+	if clean == "" {
+		clean = "entry"
+	}
 	return clean
 }
 

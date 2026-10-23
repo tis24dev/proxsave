@@ -3,7 +3,6 @@ package identity
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -1537,7 +1536,9 @@ func normalizeServerID(value string, hash []byte) string {
 func fallbackServerID(hash []byte) string {
 	timestamp := time.Now().Unix()
 	hashDigits := sanitizeDigits(fmt.Sprintf("%x", hash))
-	hashDigits = cmp.Or(hashDigits, "0000000000")
+	if hashDigits == "" {
+		hashDigits = "0000000000"
+	}
 	candidate := fmt.Sprintf("%d%s000000", timestamp, hashDigits)
 	candidate = sanitizeDigits(candidate)
 	if len(candidate) < serverIDLength {

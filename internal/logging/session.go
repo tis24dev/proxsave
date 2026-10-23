@@ -52,7 +52,9 @@ func startSessionLogger(dir string, dirPerm os.FileMode, flow string, level type
 
 func sanitizeFlowName(flow string) string {
 	flow = strings.ToLower(strings.TrimSpace(flow))
-	flow = cmp.Or(flow, "session")
+	if flow == "" {
+		flow = "session"
+	}
 	replacer := func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			return r
@@ -74,6 +76,8 @@ func detectHostname() string {
 		return "host"
 	}
 	host = strings.TrimSpace(strings.ToLower(host))
-	host = cmp.Or(host, "host")
+	if host == "" {
+		host = "host"
+	}
 	return sanitizeFlowName(host)
 }

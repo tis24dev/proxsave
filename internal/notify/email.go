@@ -1311,7 +1311,9 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 
 			// Second part: log file attachment (Base64 encoded)
 			filename := filepath.Base(logPath)
-			filename = cmp.Or(filename, "backup.log")
+			if filename == "" {
+				filename = "backup.log"
+			}
 
 			fmt.Fprintf(&email, "--%s\n", mixedBoundary)
 			fmt.Fprintf(&email, "Content-Type: text/plain; charset=UTF-8; name=\"%s\"\n", filename)

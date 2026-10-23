@@ -1,7 +1,6 @@
 package installer
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -171,7 +170,9 @@ func extractDisableSuggestionsFromIssueLines(issueLines []string, allowed map[st
 		}
 
 		msg := normalizeIssueMessage(line)
-		msg = cmp.Or(msg, line)
+		if msg == "" {
+			msg = line
+		}
 
 		for _, m := range matches {
 			if len(m) < 2 {
