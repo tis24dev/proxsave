@@ -1,6 +1,7 @@
 package install
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -240,9 +241,7 @@ func buildTelegramPrompt(serverID, identityFile string, identityPersisted bool, 
 		return b.String()
 	}
 	label := statusLabel
-	if label == "" {
-		label = "Status"
-	}
+	label = cmp.Or(label, "Status")
 	b.WriteString(renderHealthcheckLevel(level, strings.ToUpper(label)))
 	if httpCode > 0 {
 		b.WriteString(theme.Subtle.Render(" (HTTP " + strconv.Itoa(httpCode) + ")"))
