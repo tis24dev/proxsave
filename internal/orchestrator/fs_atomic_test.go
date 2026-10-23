@@ -507,3 +507,22 @@ func TestEnsureDirExistsWithInheritedMeta_ChownsNewDirsWhenSimulatedRoot(t *test
 		}
 	}
 }
+
+// A directory whose permission bits are all clear is inherited as 0755.
+func TestFindNearestExistingDirMetaDefaultsAZeroMode(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+	dir := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if _, mode := findNearestExistingDirMeta(dir); mode != 0o755 {
+		t.Fatalf("inherited mode = %o, want 755", mode)
+	}
+}
