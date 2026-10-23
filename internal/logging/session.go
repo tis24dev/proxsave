@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,9 +52,7 @@ func startSessionLogger(dir string, dirPerm os.FileMode, flow string, level type
 
 func sanitizeFlowName(flow string) string {
 	flow = strings.ToLower(strings.TrimSpace(flow))
-	if flow == "" {
-		flow = "session"
-	}
+	flow = cmp.Or(flow, "session")
 	replacer := func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			return r
@@ -65,9 +64,7 @@ func sanitizeFlowName(flow string) string {
 	for strings.Contains(sanitized, "--") {
 		sanitized = strings.ReplaceAll(sanitized, "--", "-")
 	}
-	if sanitized == "" {
-		sanitized = "session"
-	}
+	sanitized = cmp.Or(sanitized, "session")
 	return sanitized
 }
 
@@ -77,8 +74,6 @@ func detectHostname() string {
 		return "host"
 	}
 	host = strings.TrimSpace(strings.ToLower(host))
-	if host == "" {
-		host = "host"
-	}
+	host = cmp.Or(host, "host")
 	return sanitizeFlowName(host)
 }
