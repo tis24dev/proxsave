@@ -1153,3 +1153,32 @@ func TestCreateSafetyBackupArchiveIsOwnerOnly(t *testing.T) {
 		t.Fatalf("safety archive is %04o, want 0600: it holds /etc/shadow and is never deleted", perm)
 	}
 }
+
+// A spec with a blank description and prefix falls back to "Safety backup" and the
+// "restore_backup" archive prefix.
+func TestCreateSafetyBackupDefaultsABlankSpec(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
+	origFS := safetyFS
+	safetyFS = fake
+	t.Cleanup(func() { safetyFS = origFS })
+	fixed := time.Date(2024, time.March, 1, 15, 4, 5, 0, time.UTC)
+	origNow := safetyNow
+	safetyNow = func() time.Time { return fixed }
+	t.Cleanup(func() { safetyNow = origNow })
+
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&log)
+
+	result, err := createSafetyBackup(logger, nil, "/restore-target", safetyBackupSpec{HumanDescription: " ", ArchivePrefix: " "})
+	if err != nil {
+		t.Fatalf("createSafetyBackup error: %v", err)
+	}
+	if want := "restore_backup_" + fixed.Format("20060102_150405") + ".tar.gz"; filepath.Base(result.BackupPath) != want {
+		t.Fatalf("backup archive = %s, want %s", filepath.Base(result.BackupPath), want)
+	}
+	if want := "Creating safety backup of current configuration"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
+	}
+}
