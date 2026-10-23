@@ -282,53 +282,57 @@ func TestVerifyRemoteChecksumHealthySlowReadIsContentVerified(t *testing.T) {
 	}
 }
 
-// TestStoreVerifyGetsFreshBudgetAfterSlowCopy: a copy that consumes its whole
+// TestStoreVerifiesAfterCopyExhaustsItsBudget: a copy that consumes its whole
 // RcloneTimeoutOperation budget must NOT starve the post-upload verify of a good,
-// fully-uploaded object. RED today: verify shares the copy-consumed budget and
-// fails, so Store reports the healthy backup as not saved. GREEN after F08-03:
-// verify runs under its own fresh budget and succeeds. (~1s: the copy blocks until
-// its budget expires.)
-func TestStoreVerifyGetsFreshBudgetAfterSlowCopy(t *testing.T) {
-	tmp := t.TempDir()
-	backupFile := filepath.Join(tmp, "pbs1-backup.tar.zst")
-	const content = "primary-bytes"
-	writeTestFile(t, backupFile, content)
-	base := filepath.Base(backupFile)
-	wantHash := sha256Hex(content)
+// fully-uploaded object (F08-03). A verify left with what the copy left of its budget
+// finds its ctx already expired and fails, so Store reports the healthy backup as not
+// saved; a verify under its own fresh budget succeeds. The bubble's clock moves only
+// while every goroutine in it waits, so the copy ends exactly at its deadline and the
+// verify's own steps, real file I/O included, take no time on that clock: the outcome
+// does not depend on how fast the machine runs them.
+func TestStoreVerifiesAfterCopyExhaustsItsBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tmp := t.TempDir()
+		backupFile := filepath.Join(tmp, "pbs1-backup.tar.zst")
+		const content = "primary-bytes"
+		writeTestFile(t, backupFile, content)
+		base := filepath.Base(backupFile)
+		wantHash := sha256Hex(content)
 
-	cfg := &config.Config{
-		CloudEnabled:           true,
-		CloudRemote:            "remote",
-		BundleAssociatedFiles:  true, // only the primary task, no sidecars
-		CloudVerifyChecksum:    true,
-		RcloneRetries:          1,
-		RcloneTimeoutOperation: 1, // 1s budgets
-	}
-	cs := newCloudStorageForTest(cfg)
-	cs.sleep = func(time.Duration) {}
-
-	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		switch args[0] {
-		case "copyto":
-			<-ctx.Done() // copy uses its whole budget, then the object lands intact
-			return nil, nil
-		case "lsl":
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return []byte(itoa(len(content)) + " 2025-01-01 00:00:00 " + base + "\n"), nil
-		case "hashsum":
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return []byte(wantHash + "  " + base + "\n"), nil
+		cfg := &config.Config{
+			CloudEnabled:           true,
+			CloudRemote:            "remote",
+			BundleAssociatedFiles:  true, // only the primary task, no sidecars
+			CloudVerifyChecksum:    true,
+			RcloneRetries:          1,
+			RcloneTimeoutOperation: 1,
 		}
-		return nil, nil
-	}
+		cs := newCloudStorageForTest(cfg)
+		cs.sleep = func(time.Duration) {}
 
-	if err := cs.Store(context.Background(), backupFile, nil); err != nil {
-		t.Fatalf("Store must succeed: a good upload whose copy ate the budget must still verify; err = %v", err)
-	}
+		cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			switch args[0] {
+			case "copyto":
+				<-ctx.Done() // the copy uses its whole budget, then the object lands intact
+				return nil, nil
+			case "lsl":
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return []byte(itoa(len(content)) + " 2025-01-01 00:00:00 " + base + "\n"), nil
+			case "hashsum":
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return []byte(wantHash + "  " + base + "\n"), nil
+			}
+			return nil, nil
+		}
+
+		if err := cs.Store(context.Background(), backupFile, nil); err != nil {
+			t.Fatalf("Store must succeed: a good upload whose copy ate the budget must still verify; err = %v", err)
+		}
+	})
 }
 
 // TestUploadToRemotePathVerifiesAfterCopyExhaustsItsBudget: the log-upload entry point
