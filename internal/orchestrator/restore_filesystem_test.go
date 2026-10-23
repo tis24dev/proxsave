@@ -112,3 +112,13 @@ func TestLoadFstabDeviceInventoryCopiesEveryLsblkField(t *testing.T) {
 		t.Fatalf("inventory[/dev/sdb1] = %+v, want %+v", got["/dev/sdb1"], want)
 	}
 }
+
+// A device known only to the embedded lsblk JSON keeps every identifier it reports.
+func TestParsePBSDatastoreInventoryForDevicesCopiesEveryLsblkField(t *testing.T) {
+	inventory := `{"commands":{"lsblk_json":{"output":"{\"blockdevices\":[{\"name\":\"sdb1\",\"uuid\":\"u-1\",\"partuuid\":\"p-1\",\"label\":\"data\"}]}"}}}`
+
+	got := parsePBSDatastoreInventoryForDevices(newTestLogger(), inventory)
+	if want := (fstabDeviceIdentity{UUID: "u-1", PartUUID: "p-1", Label: "data"}); got["/dev/sdb1"] != want {
+		t.Fatalf("inventory[/dev/sdb1] = %+v, want %+v", got["/dev/sdb1"], want)
+	}
+}
