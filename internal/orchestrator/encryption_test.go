@@ -281,3 +281,18 @@ func TestBackupExistingRecipientFileWithDepsDefaultsAZeroMode(t *testing.T) {
 		t.Fatalf("backup mode = %o, want 600", perm)
 	}
 }
+
+// A zero permission argument writes the file as 0600.
+func TestWriteFileAtomicWithDepsDefaultsAZeroPerm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recipient.txt")
+	if err := writeFileAtomicWithDeps(osFS{}, realTimeProvider{}, path, []byte("age1example\n"), 0); err != nil {
+		t.Fatalf("writeFileAtomicWithDeps error: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("file mode = %o, want 600", perm)
+	}
+}
