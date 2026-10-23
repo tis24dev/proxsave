@@ -2872,3 +2872,29 @@ func TestEnsureOwnershipAndPermFromFDNamesAnUnnamedDescriptor(t *testing.T) {
 		t.Fatalf("log missing %q:\n%s", want, log.String())
 	}
 }
+
+// A writable executable descriptor without a name is reported as "<opened file>".
+func TestEnsureExecutableOwnerWriteOnlyNamesAnUnnamedDescriptor(t *testing.T) {
+	testFile := filepath.Join(t.TempDir(), "proxsave")
+	if err := os.WriteFile(testFile, []byte("binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(testFile, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	f := openUnnamedDescriptor(t, testFile)
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+	checker := &Checker{logger: logger, cfg: &config.Config{}, result: &Result{}}
+
+	checker.ensureExecutableOwnerWriteOnly(f, info, "executable")
+
+	if want := "group/other-writable executable <opened file>"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
+	}
+}
