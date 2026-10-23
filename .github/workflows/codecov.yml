@@ -41,7 +41,10 @@ jobs:
         env:
           GOTOOLCHAIN: ${{ env.COVER_GOTOOLCHAIN }}
         run: |
-          go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$') -coverprofile=coverage.out
+          # One go test argument per package path: read the list into an array
+          # instead of word-splitting an unquoted command substitution.
+          mapfile -t pkgs < <(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$')
+          go test "${pkgs[@]}" -coverprofile=coverage.out
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

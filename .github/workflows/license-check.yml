@@ -39,6 +39,7 @@ jobs:
       # dependency carries a license outside the allow-list.
       - name: Check dependency licenses
         run: |
-          export PATH="$(go env GOPATH)/bin:$PATH"
+          PATH="$(go env GOPATH)/bin:$PATH"
+          export PATH
           go-licenses check ./... \
             --allowed_licenses=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC
