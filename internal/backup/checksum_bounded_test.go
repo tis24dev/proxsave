@@ -142,7 +142,7 @@ func TestGenerateChecksumBounded_StallSkipsClose(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := GenerateChecksumBounded(context.Background(), logger, "/x", 50*time.Millisecond)
+		_, err := GenerateChecksumBounded(t.Context(), logger, "/x", 50*time.Millisecond)
 		done <- err
 	}()
 	select {
@@ -257,7 +257,7 @@ func TestGenerateChecksumBounded_SuccessSurvivesAbandonedClose(t *testing.T) {
 	}
 	done := make(chan res, 1)
 	go func() {
-		s, e := GenerateChecksumBounded(context.Background(), logger, "/x", 50*time.Millisecond)
+		s, e := GenerateChecksumBounded(t.Context(), logger, "/x", 50*time.Millisecond)
 		done <- res{s, e}
 	}()
 	want := sha256.Sum256([]byte("abc"))
@@ -316,7 +316,7 @@ func TestGenerateChecksumBounded_FifoOpenWedge(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := GenerateChecksumBounded(context.Background(), logger, fifo, 500*time.Millisecond)
+		_, err := GenerateChecksumBounded(t.Context(), logger, fifo, 500*time.Millisecond)
 		done <- err
 	}()
 	select {
