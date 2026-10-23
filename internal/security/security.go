@@ -3,6 +3,7 @@ package security
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1133,9 +1134,7 @@ func extractPort(address string) (int, string) {
 	}
 
 	ip := addr[:lastColon]
-	if ip == "" {
-		ip = "0.0.0.0"
-	}
+	ip = cmp.Or(ip, "0.0.0.0")
 
 	return port, ip
 }
@@ -1371,9 +1370,7 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 	}
 
 	path := f.Name()
-	if path == "" {
-		path = "<opened file>"
-	}
+	path = cmp.Or(path, "<opened file>")
 
 	var err error
 	if info == nil {
@@ -1436,9 +1433,7 @@ func (c *Checker) ensureExecutableOwnerWriteOnly(f *os.File, info os.FileInfo, d
 	}
 
 	path := f.Name()
-	if path == "" {
-		path = "<opened file>"
-	}
+	path = cmp.Or(path, "<opened file>")
 	fixed := perm &^ 0o022
 	c.bannerWarning(fmt.Sprintf("group/other-writable executable %s (current %o)", path, perm))
 	if c.cfg.AutoFixPermissions {
