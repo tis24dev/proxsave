@@ -120,7 +120,7 @@ func TestRunHealthcheckSetupShowsTheNotificationsBlockAfterTheCheck(t *testing.T
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", true)
+		_, _ = RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", true)
 		close(done)
 	}()
 	deadline := time.After(uitest.Deadline(10 * time.Second))

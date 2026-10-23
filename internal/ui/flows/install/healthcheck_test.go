@@ -36,7 +36,7 @@ func TestRunHealthcheckSetupDashboardBack(t *testing.T) {
 
 	resCh := make(chan struct{}, 1)
 	go func() {
-		_, _ = RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", true)
+		_, _ = RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", true)
 		resCh <- struct{}{}
 	}()
 	d.waitScreen("Backup monitoring (healthchecks)")
@@ -68,7 +68,7 @@ func TestRunHealthcheckSetupCtrlCInterrupts(t *testing.T) {
 
 	resCh := make(chan error, 1)
 	go func() {
-		_, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", true)
+		_, err := RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", true)
 		resCh <- err
 	}()
 	d.waitScreen("Backup monitoring (healthchecks)")
@@ -171,7 +171,7 @@ func TestRunHealthcheckSetupPortalFallbackReplacesTheSpentMagicLink(t *testing.T
 
 	resCh := make(chan struct{}, 1)
 	go func() {
-		_, _ = RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
+		_, _ = RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", false)
 		resCh <- struct{}{}
 	}()
 
@@ -212,7 +212,7 @@ func TestRunHealthcheckSetup(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			res, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
+			res, err := RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", false)
 			resCh <- result{res, err}
 		}()
 	}

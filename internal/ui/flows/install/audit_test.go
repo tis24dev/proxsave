@@ -104,7 +104,7 @@ func TestRunPostInstallAuditApplyFailure(t *testing.T) {
 	// Failure path: configPath under a nonexistent dir makes ApplyAuditDisables' ReadFile fail.
 	failPath := filepath.Join(t.TempDir(), "nope", "backup.env")
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", failPath, false)
+		res, err := RunPostInstallAudit(t.Context(), d.session, "/fake/proxsave", failPath, false)
 		resCh <- result{res, err}
 	}()
 
@@ -132,7 +132,7 @@ func TestRunPostInstallAuditApplyFailure(t *testing.T) {
 	// Benign path: reach the multi-select, esc out. No write is attempted, so ApplyErr is nil,
 	// distinct from the failure above.
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", failPath, false)
+		res, err := RunPostInstallAudit(t.Context(), d.session, "/fake/proxsave", failPath, false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")

@@ -111,7 +111,7 @@ func TestResolveExistingConfig(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			action, err := ResolveExistingConfig(context.Background(), d.session, configPath)
+			action, err := ResolveExistingConfig(t.Context(), d.session, configPath)
 			resCh <- result{action, err}
 		}()
 	}
@@ -148,7 +148,7 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		data, err := CollectWizardData(context.Background(), d.session, "")
+		data, err := CollectWizardData(t.Context(), d.session, "")
 		resCh <- result{data, err}
 	}()
 
@@ -230,7 +230,7 @@ func TestCollectWizardDataPrefillNoOp(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		data, err := CollectWizardData(context.Background(), d.session, template)
+		data, err := CollectWizardData(t.Context(), d.session, template)
 		resCh <- result{data, err}
 	}()
 
@@ -341,7 +341,7 @@ func TestCollectWizardDataEditWithoutSchedulerModeDefaultsCron(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		data, err := CollectWizardData(context.Background(), d.session, template)
+		data, err := CollectWizardData(t.Context(), d.session, template)
 		resCh <- result{data, err}
 	}()
 
@@ -462,7 +462,7 @@ func TestCollectWizardDataEscCancels(t *testing.T) {
 	d := newDriver(t)
 	resCh := make(chan error, 1)
 	go func() {
-		_, err := CollectWizardData(context.Background(), d.session, "")
+		_, err := CollectWizardData(t.Context(), d.session, "")
 		resCh <- err
 	}()
 	d.waitScreen("Configuration")
@@ -481,7 +481,7 @@ func TestConfirmNewInstall(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			ok, err := ConfirmNewInstall(context.Background(), d.session, "/opt/proxsave", []string{"build", "env"})
+			ok, err := ConfirmNewInstall(t.Context(), d.session, "/opt/proxsave", []string{"build", "env"})
 			resCh <- result{ok, err}
 		}()
 	}
@@ -526,7 +526,7 @@ func TestRunPostInstallAudit(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", configPath, false)
+		res, err := RunPostInstallAudit(t.Context(), d.session, "/fake/proxsave", configPath, false)
 		resCh <- result{res, err}
 	}()
 
@@ -589,7 +589,7 @@ func TestRunPostInstallAuditNoSuggestions(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
+		res, err := RunPostInstallAudit(t.Context(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 
@@ -617,7 +617,7 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
+		res, err := RunPostInstallAudit(t.Context(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
@@ -630,7 +630,7 @@ func TestRunPostInstallAuditSkipAndEsc(t *testing.T) {
 	// Ctrl+C on the selector is a non-blocking skip too (parity with the
 	// CLI, where a prompt EOF abandons the optional step).
 	go func() {
-		res, err := RunPostInstallAudit(context.Background(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
+		res, err := RunPostInstallAudit(t.Context(), d.session, "/fake/proxsave", "/tmp/nonexistent.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Post-install check")
@@ -716,7 +716,7 @@ func TestRunTelegramSetup(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			res, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
+			res, err := RunTelegramSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", false)
 			resCh <- result{res, err}
 		}()
 	}
