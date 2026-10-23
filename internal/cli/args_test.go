@@ -214,14 +214,25 @@ func parseWithArgs(t *testing.T, cliArgs []string) *Args {
 	return Parse()
 }
 
-func TestPrintHelp(t *testing.T) {
-	var buf bytes.Buffer
+// printHelp writes the usage line and the flags registered on flag.CommandLine to
+// the writer it is given. The test runs against its own FlagSet and puts the
+// original flag.CommandLine back on cleanup, so the testing flags are still there
+// for the next -count pass.
+func TestPrintHelpWritesUsageAndRegisteredFlags(t *testing.T) {
+	origCommandLine := flag.CommandLine
+	t.Cleanup(func() {
+		flag.CommandLine = origCommandLine
+	})
+
 	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(&buf)
-	// register a couple of dummy flags so PrintDefaults emits content
+	// The FlagSet's own output is discarded, so the options reach buf only
+	// through the writer passed to printHelp.
+	flag.CommandLine.SetOutput(io.Discard)
+	// Register a couple of dummy flags so PrintDefaults emits content.
 	flag.CommandLine.String("config", "", "Path to configuration file")
 	flag.CommandLine.Bool("dry-run", false, "Perform a dry run")
 
+	var buf bytes.Buffer
 	printHelp(&buf, "proxsave")
 	out := buf.String()
 	if !strings.Contains(out, "Usage: proxsave [options]") {
