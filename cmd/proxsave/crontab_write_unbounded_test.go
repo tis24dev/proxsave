@@ -118,3 +118,21 @@ exit 1`)
 		t.Fatalf("err = %v, lost crontab's stderr. That diagnostic is the whole value of CombinedOutput here", err)
 	}
 }
+
+// An empty schedule installs the proxsave entry at the default 02:00.
+func TestMigrateLegacyCronEntriesDefaultsAnEmptySchedule(t *testing.T) {
+	installed := fakeCrontabForWrite(t, `if [ "$1" = "-l" ]; then
+  exit 0
+fi
+cat > "$PROXSAVE_TEST_CRONTAB_OUT"`)
+
+	migrateLegacyCronEntries(context.Background(), t.TempDir(), "/usr/local/bin/proxsave", nil, " ")
+
+	got, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatalf("the crontab was never installed: %v", err)
+	}
+	if want := "0 2 * * * /usr/local/bin/proxsave --backup\n"; string(got) != want {
+		t.Fatalf("installed crontab = %q, want %q", got, want)
+	}
+}
