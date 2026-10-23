@@ -30,3 +30,8 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+
+formatters:
+  # gofmt reports any file whose formatting differs from `gofmt` output.
+  enable:
+    - gofmt
