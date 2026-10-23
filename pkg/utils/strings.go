@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -163,9 +164,7 @@ func SetEnvValue(template, key, value string) string {
 			newLine := leading + exportPrefix + key + "=" + value
 			if comment != "" {
 				spacing := commentSpacing
-				if spacing == "" {
-					spacing = " "
-				}
+				spacing = cmp.Or(spacing, " ")
 				newLine += spacing + comment
 			}
 			lines[i] = newLine
