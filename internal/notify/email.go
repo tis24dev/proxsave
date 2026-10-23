@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -121,9 +122,7 @@ func NewEmailNotifier(config EmailConfig, proxmoxType types.ProxmoxType, logger 
 	}
 
 	// Validate from address
-	if config.From == "" {
-		config.From = "no-reply@proxmox.tis24.it"
-	}
+	config.From = cmp.Or(config.From, "no-reply@proxmox.tis24.it")
 
 	return &EmailNotifier{
 		config:      config,
@@ -372,9 +371,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		}
 
 		recipientHint := redactEmail(strings.TrimSpace(recipient))
-		if recipientHint == "" {
-			recipientHint = "(recipient not set - routed by Proxmox Notifications)"
-		}
+		recipientHint = cmp.Or(recipientHint, "(recipient not set - routed by Proxmox Notifications)")
 		e.logger.Info("Email notification handed off to %s for %s", backend, recipientHint)
 	}
 
@@ -1260,13 +1257,9 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 	// Build email headers and body
 	var email strings.Builder
 	toHeader = sanitizeHeaderValue(recipient)
-	if toHeader == "" {
-		toHeader = "root"
-	}
+	toHeader = cmp.Or(toHeader, "root")
 	fromHeader := sanitizeHeaderValue(e.config.From)
-	if fromHeader == "" {
-		fromHeader = "no-reply@proxmox.tis24.it"
-	}
+	fromHeader = cmp.Or(fromHeader, "no-reply@proxmox.tis24.it")
 	messageID = newMessageID(fromHeader)
 	e.logger.Debug("email message-id: <%s>", messageID)
 	fmt.Fprintf(&email, "To: %s\n", toHeader)
@@ -1318,9 +1311,7 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 
 			// Second part: log file attachment (Base64 encoded)
 			filename := filepath.Base(logPath)
-			if filename == "" {
-				filename = "backup.log"
-			}
+			filename = cmp.Or(filename, "backup.log")
 
 			fmt.Fprintf(&email, "--%s\n", mixedBoundary)
 			fmt.Fprintf(&email, "Content-Type: text/plain; charset=UTF-8; name=\"%s\"\n", filename)

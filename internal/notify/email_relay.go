@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -168,12 +169,7 @@ func sendViaCloudRelay(
 				var apiResp EmailRelayResponse
 				if err := json.Unmarshal(body, &apiResp); err == nil && !apiResp.Success {
 					errMsg := apiResp.Error
-					if errMsg == "" {
-						errMsg = apiResp.Message
-					}
-					if errMsg == "" {
-						errMsg = "relay returned success=false with no details"
-					}
+					errMsg = cmp.Or(errMsg, apiResp.Message, "relay returned success=false with no details")
 					return fmt.Errorf("cloud relay rejected email (HTTP 200 but success=false): %s", errMsg)
 				}
 			}
@@ -203,9 +199,7 @@ func sendViaCloudRelay(
 			if detail == "" {
 				detail = strings.TrimSpace(apiResp.Error)
 			}
-			if detail == "" {
-				detail = "no additional details provided"
-			}
+			detail = cmp.Or(detail, "no additional details provided")
 
 			logger.Debug("Cloud relay: rate limit exceeded (HTTP 429): %s", detail)
 
@@ -282,9 +276,7 @@ func relayResponseDetail(apiResp EmailRelayResponse, fallback string) string {
 	if detail == "" {
 		detail = strings.TrimSpace(apiResp.Message)
 	}
-	if detail == "" {
-		detail = fallback
-	}
+	detail = cmp.Or(detail, fallback)
 	return detail
 }
 
