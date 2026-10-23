@@ -185,3 +185,11 @@ func pumpEnter(t *testing.T, s *shell.Session, done <-chan error) error {
 		}
 	}
 }
+
+// A blank permission message shows the permission status itself.
+func TestBuildInstallOutcomePromptFallsBackToThePermissionStatus(t *testing.T) {
+	out := ansi.Strip(buildInstallOutcomePrompt(RestartVerifyResult{}, false, "ok", " "))
+	if !strings.Contains(out, "Permissions: ok") {
+		t.Fatalf("blank permission message must show the status, got:\n%s", out)
+	}
+}
