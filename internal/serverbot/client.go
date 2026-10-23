@@ -2,6 +2,7 @@ package serverbot
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -87,13 +88,9 @@ func refuseRedirect(_ *http.Request, via []*http.Request) error {
 // empty, the lines are exactly the ones above.
 func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 	op := req.LogOperation
-	if op == "" {
-		op = defaultLogOperation
-	}
+	op = cmp.Or(op, defaultLogOperation)
 	method := req.Method
-	if method == "" {
-		method = http.MethodGet
-	}
+	method = cmp.Or(method, http.MethodGet)
 	prefix := req.LogPrefix
 	c.logURL(op, prefix, method, req.Path, req.LogURLDetail)
 
