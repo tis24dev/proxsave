@@ -1,6 +1,7 @@
 package version
 
 import (
+	"cmp"
 	"runtime/debug"
 	"strings"
 )
@@ -44,9 +45,7 @@ func String() string {
 		}
 	}
 
-	if v == "" {
-		v = "0.0.0-dev"
-	}
+	v = cmp.Or(v, "0.0.0-dev")
 
 	// Normalize common "vX.Y.Z" tag format.
 	v = strings.TrimPrefix(v, "v")
