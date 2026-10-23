@@ -66,7 +66,7 @@ func TestListFloorsWedgedDeadlessCtx(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := cs.List(context.Background())
+		_, err := cs.List(t.Context())
 		done <- err
 	}()
 	select {
@@ -96,7 +96,7 @@ func TestCountLogFilesFloorsWedgedDeadlessCtx(t *testing.T) {
 	}
 
 	done := make(chan int, 1)
-	go func() { done <- cs.countLogFiles(context.Background()) }()
+	go func() { done <- cs.countLogFiles(t.Context()) }()
 	select {
 	case <-done: // returns (-1 best-effort) promptly; not hung
 	case <-time.After(3 * time.Second):
@@ -200,7 +200,7 @@ func TestDeleteBackupInternalFloorsWedgedDeletefile(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	go func() {
-		_, _ = cs.deleteBackupInternal(context.Background(), "pbs1-backup.tar.zst")
+		_, _ = cs.deleteBackupInternal(t.Context(), "pbs1-backup.tar.zst")
 		done <- struct{}{}
 	}()
 	select {

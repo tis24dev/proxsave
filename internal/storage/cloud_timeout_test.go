@@ -158,7 +158,7 @@ func TestStoreLocalSourceStatBoundedAgainstDeadMount(t *testing.T) {
 	t.Cleanup(restore)
 
 	done := make(chan error, 1)
-	go func() { done <- cs.Store(context.Background(), src, &types.BackupMetadata{}) }()
+	go func() { done <- cs.Store(t.Context(), src, &types.BackupMetadata{}) }()
 
 	select {
 	case err := <-done:
