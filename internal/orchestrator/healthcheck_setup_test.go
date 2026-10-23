@@ -460,3 +460,17 @@ func TestCheckHealthcheckConnectionProcStaleFallback(t *testing.T) {
 		t.Fatalf("DaemonStale must carry the /proc fallback phrasing")
 	}
 }
+
+// A daemon config with a blank mode and host is read as centralized against the
+// default server.
+func TestBuildHealthcheckSetupBootstrapDefaultsABlankModeAndHost(t *testing.T) {
+	stubHealthcheckBootstrap(t, &config.Config{HealthcheckEnabled: true}, nil, "123456789012", "sekret")
+
+	state, err := BuildHealthcheckSetupBootstrap(context.Background(), "/cfg", "/base")
+	if err != nil {
+		t.Fatalf("bootstrap returned error (must be non-blocking): %v", err)
+	}
+	if state.HealthcheckMode != "centralized" || state.ServerAPIHost != defaultServerAPIHost {
+		t.Fatalf("mode=%q host=%q; want centralized and %q", state.HealthcheckMode, state.ServerAPIHost, defaultServerAPIHost)
+	}
+}
