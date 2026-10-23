@@ -474,3 +474,16 @@ func TestBuildHealthcheckSetupBootstrapDefaultsABlankModeAndHost(t *testing.T) {
 		t.Fatalf("mode=%q host=%q; want centralized and %q", state.HealthcheckMode, state.ServerAPIHost, defaultServerAPIHost)
 	}
 }
+
+// A behind daemon with no specific stale reason gets the generic one.
+func TestClassifyHealthcheckBehindDefaultsABlankReason(t *testing.T) {
+	behind := HealthcheckCheckResult{
+		Reachable: true, DaemonRead: true,
+		Daemon:             health.Diagnosis{State: health.TxRunningNoReport, DaemonUp: true},
+		DaemonAlignChecked: true,
+	}
+	msg := ClassifyHealthcheckSetupResult(behind).Message
+	if want := "is behind: it is running an older binary than the one now on disk;"; !strings.Contains(msg, want) {
+		t.Fatalf("BEHIND message = %q, want it to contain %q", msg, want)
+	}
+}
