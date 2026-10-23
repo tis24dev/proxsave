@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -160,9 +161,7 @@ func (c *CheckerConfig) Validate() error {
 	if c.LogPath == "" {
 		return fmt.Errorf("log path cannot be empty")
 	}
-	if c.LockDirPath == "" {
-		c.LockDirPath = c.BackupPath
-	}
+	c.LockDirPath = cmp.Or(c.LockDirPath, c.BackupPath)
 	if c.MinDiskPrimaryGB < 0 {
 		return fmt.Errorf("primary minimum disk space cannot be negative")
 	}
