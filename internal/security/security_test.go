@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -2830,5 +2831,44 @@ func TestExtractPortIPv6WithBrackets(t *testing.T) {
 	}
 	if addr != "::1" {
 		t.Errorf("expected addr ::1, got %s", addr)
+	}
+}
+
+// openUnnamedDescriptor opens path and returns a duplicate descriptor wrapped in an
+// *os.File with an empty name, the shape f.Name() returns "" for.
+func openUnnamedDescriptor(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	fd, err := syscall.Dup(int(f.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unnamed := os.NewFile(uintptr(fd), "")
+	t.Cleanup(func() { _ = unnamed.Close() })
+	return unnamed
+}
+
+// A descriptor without a name is reported as "<opened file>".
+func TestEnsureOwnershipAndPermFromFDNamesAnUnnamedDescriptor(t *testing.T) {
+	testFile := filepath.Join(t.TempDir(), "testfile")
+	if err := os.WriteFile(testFile, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(testFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+	checker := &Checker{logger: logger, cfg: &config.Config{}, result: &Result{}}
+
+	checker.ensureOwnershipAndPermFromFD(openUnnamedDescriptor(t, testFile), nil, 0o600, "test file")
+
+	if want := "incorrect permissions on <opened file>"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
 	}
 }
