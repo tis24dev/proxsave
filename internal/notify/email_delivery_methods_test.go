@@ -691,3 +691,23 @@ func TestEmailNotifierCheckRelayHostConfigured_Variants(t *testing.T) {
 		}
 	})
 }
+
+// A From address that sanitizes to nothing falls back to the default sender.
+func TestEmailNotifierBuildEmailMessageDefaultsABlankFromHeader(t *testing.T) {
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(io.Discard)
+
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliveryPMF,
+		From:           "\r\n",
+	}, types.ProxmoxBS, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	emailMessage, _, _ := notifier.buildEmailMessage("admin@example.com", "subject", "<b>html</b>", "text", createTestNotificationData())
+	if want := "\nFrom: no-reply@proxmox.tis24.it\n"; !strings.Contains(emailMessage, want) {
+		t.Fatalf("email message missing %q:\n%s", want, emailMessage)
+	}
+}
