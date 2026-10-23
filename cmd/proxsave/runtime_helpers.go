@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -412,9 +413,7 @@ func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	}
 
 	mount := info.MountPoint
-	if mount == "" {
-		mount = "unknown"
-	}
+	mount = cmp.Or(mount, "unknown")
 
 	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
 }
@@ -924,9 +923,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	schedule := strings.TrimSpace(cronSchedule)
-	if schedule == "" {
-		schedule = "0 2 * * *"
-	}
+	schedule = cmp.Or(schedule, "0 2 * * *")
 
 	// (Re)install resets proxsave's schedule to the chosen one: every
 	// proxsave-managed entry is dropped and a single fresh entry is written at the

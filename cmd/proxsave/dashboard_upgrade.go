@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -119,9 +120,7 @@ func runDashboardUpgrade(ctx context.Context, session *shell.Session, configPath
 				avail, kw, sty, sym, notes, url = false, "CHECK FAILED", theme.WarningText, symWarn, "", ""
 			case info.NewVersion:
 				latest := upgradeSafeToken(info.Latest)
-				if latest == "" {
-					latest = "UPDATE AVAILABLE"
-				}
+				latest = cmp.Or(latest, "UPDATE AVAILABLE")
 				avail, kw, sty, sym, notes, url = true, latest, theme.WarningText, symWarn, info.Notes, releaseTagURL(info.Tag)
 			default:
 				avail, kw, sty, sym, notes, url = false, "NO UPGRADE ("+cur+")", theme.SuccessText, symOk, info.Notes, releaseTagURL(info.Tag)

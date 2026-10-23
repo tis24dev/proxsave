@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -122,9 +123,7 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr er
 		unit = "installed"
 	}
 	active := daemonStatusActiveStateProbe(ctx)
-	if active == "" {
-		active = "unknown"
-	}
+	active = cmp.Or(active, "unknown")
 
 	state := health.CheckDaemonState(health.DaemonStateInput{
 		BaseDir:           baseDir,

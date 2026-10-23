@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -27,9 +28,7 @@ func buildNewInstallPlan(configPath string) (newInstallPlan, error) {
 	}
 
 	buildSig := strings.TrimSpace(newInstallBuildSignature())
-	if buildSig == "" {
-		buildSig = "n/a"
-	}
+	buildSig = cmp.Or(buildSig, "n/a")
 
 	baseDir, _ := detectedBaseDirOrFallback()
 	return newInstallPlan{
