@@ -269,3 +269,21 @@ func TestCLIWorkflowUIShowRestorePlanRejectsNilConfig(t *testing.T) {
 		t.Fatal("nil config must error")
 	}
 }
+
+// A blank default destination falls back to ./decrypt, which Enter accepts.
+func TestCLIWorkflowUIPromptDestinationDirDefaultsABlankDefault(t *testing.T) {
+	var buf bytes.Buffer
+	u := &cliWorkflowUI{
+		reader: bufio.NewReader(strings.NewReader("\n")),
+		logger: logging.New(types.LogLevelInfo, false),
+		out:    &buf,
+	}
+
+	dir, err := u.PromptDestinationDir(context.Background(), " ")
+	if err != nil {
+		t.Fatalf("PromptDestinationDir: %v", err)
+	}
+	if dir != "decrypt" || !strings.Contains(buf.String(), "(default: ./decrypt)") {
+		t.Fatalf("dir = %q, prompt = %q; want decrypt and the ./decrypt default", dir, buf.String())
+	}
+}
