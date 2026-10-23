@@ -409,3 +409,10 @@ func TestSendViaCloudRelayDefaultsBlankErrorDetails(t *testing.T) {
 		})
 	}
 }
+
+// A response with blank error and message fields reports the caller's fallback.
+func TestRelayResponseDetailDefaultsToTheFallback(t *testing.T) {
+	if got := relayResponseDetail(EmailRelayResponse{Error: " ", Message: " "}, "bad request"); got != "bad request" {
+		t.Fatalf("relayResponseDetail() = %q; want %q", got, "bad request")
+	}
+}
