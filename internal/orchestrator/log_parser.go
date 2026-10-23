@@ -274,9 +274,7 @@ func sanitizeLogMessage(msg string) string {
 func splitCategoryAndExample(msg string) (label, example string) {
 	parts := strings.SplitN(msg, " - ", 2)
 	label = strings.TrimSpace(parts[0])
-	if label == "" {
-		label = msg
-	}
+	label = cmp.Or(label, msg)
 	label = truncateString(label, 120)
 
 	if len(parts) == 2 {

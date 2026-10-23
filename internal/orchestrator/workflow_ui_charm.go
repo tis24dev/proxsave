@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -167,9 +168,7 @@ func (u *charmWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates 
 
 func (u *charmWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir string) (string, error) {
 	defaultDir = strings.TrimSpace(defaultDir)
-	if defaultDir == "" {
-		defaultDir = "./decrypt"
-	}
+	defaultDir = cmp.Or(defaultDir, "./decrypt")
 	dest, err := shell.Ask(ctx, u.session, components.NewInput(
 		"Destination directory",
 		"Directory where the decrypted files will be written.",
@@ -189,9 +188,7 @@ func (u *charmWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir s
 
 func (u *charmWorkflowUI) ResolveExistingPath(ctx context.Context, path, description, failure string) (ExistingPathDecision, string, error) {
 	desc := strings.TrimSpace(description)
-	if desc == "" {
-		desc = "file"
-	}
+	desc = cmp.Or(desc, "file")
 	prompt := fmt.Sprintf("The %s %s already exists.\nSelect how you want to proceed.", desc, path)
 	if strings.TrimSpace(failure) != "" {
 		prompt += "\n\n" + strings.TrimSpace(failure)
@@ -261,9 +258,7 @@ func validateDistinctNewPathInput(value, defaultPath string) (string, error) {
 
 func (u *charmWorkflowUI) PromptDecryptSecret(ctx context.Context, displayName, previousError string) (string, error) {
 	name := strings.TrimSpace(displayName)
-	if name == "" {
-		name = "selected backup"
-	}
+	name = cmp.Or(name, "selected backup")
 	opts := []components.InputOption{
 		components.WithSecret(),
 		components.WithNote("Enter 0 to exit."),

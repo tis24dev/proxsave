@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -278,9 +279,7 @@ func setGrubCmdlineDefault(content string, merge func(current string) string) (u
 	if next == value {
 		return content, value, nil
 	}
-	if quote == "" {
-		quote = `"`
-	}
+	quote = cmp.Or(quote, `"`)
 	if (quote == `'` && strings.Contains(next, `'`)) || (quote == `"` && strings.ContainsAny(next, grubUnsafeInDoubleQuotes)) {
 		return "", "", fmt.Errorf("the merged value cannot be quoted in %s", grubCmdlineDefaultVar)
 	}

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -17,17 +18,13 @@ type networkEndpoint struct {
 
 func (e networkEndpoint) summary() string {
 	iface := strings.TrimSpace(e.Interface)
-	if iface == "" {
-		iface = "n/a"
-	}
+	iface = cmp.Or(iface, "n/a")
 	addrs := strings.Join(compactStrings(e.Addresses), ",")
 	if strings.TrimSpace(addrs) == "" {
 		addrs = "n/a"
 	}
 	gw := strings.TrimSpace(e.Gateway)
-	if gw == "" {
-		gw = "n/a"
-	}
+	gw = cmp.Or(gw, "n/a")
 	return fmt.Sprintf("iface=%s ip=%s gw=%s", iface, addrs, gw)
 }
 

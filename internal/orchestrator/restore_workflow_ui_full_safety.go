@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -148,8 +149,6 @@ func categoryHasExistingPath(cat Category, destRoot string) bool {
 func resolveCategoryPath(archivePath, destRoot string) string {
 	clean := strings.TrimPrefix(strings.TrimSpace(archivePath), "./")
 	clean = strings.TrimPrefix(clean, "/")
-	if destRoot == "" {
-		destRoot = "/"
-	}
+	destRoot = cmp.Or(destRoot, "/")
 	return filepath.Join(destRoot, clean)
 }

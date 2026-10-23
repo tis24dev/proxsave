@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -137,15 +138,9 @@ func loadFstabDeviceInventory(logger *logging.Logger, backupRoot string) map[str
 				continue
 			}
 			existing := out[dev]
-			if existing.UUID == "" {
-				existing.UUID = id.UUID
-			}
-			if existing.PartUUID == "" {
-				existing.PartUUID = id.PartUUID
-			}
-			if existing.Label == "" {
-				existing.Label = id.Label
-			}
+			existing.UUID = cmp.Or(existing.UUID, id.UUID)
+			existing.PartUUID = cmp.Or(existing.PartUUID, id.PartUUID)
+			existing.Label = cmp.Or(existing.Label, id.Label)
 			out[dev] = existing
 		}
 	}
@@ -194,15 +189,9 @@ func parsePBSDatastoreInventoryForDevices(logger *logging.Logger, content string
 	if lsblk := strings.TrimSpace(report.Commands["lsblk_json"].Output); lsblk != "" {
 		for dev, id := range parseLsblkJSONInventory(lsblk) {
 			existing := out[dev]
-			if existing.UUID == "" {
-				existing.UUID = id.UUID
-			}
-			if existing.PartUUID == "" {
-				existing.PartUUID = id.PartUUID
-			}
-			if existing.Label == "" {
-				existing.Label = id.Label
-			}
+			existing.UUID = cmp.Or(existing.UUID, id.UUID)
+			existing.PartUUID = cmp.Or(existing.PartUUID, id.PartUUID)
+			existing.Label = cmp.Or(existing.Label, id.Label)
 			out[dev] = existing
 		}
 	}

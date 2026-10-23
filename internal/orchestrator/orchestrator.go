@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -567,9 +568,7 @@ func (o *Orchestrator) SetBackupConfig(backupPath, logPath string, compression t
 	o.compressionLevel = level
 	o.compressionThreads = threads
 	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		mode = "standard"
-	}
+	mode = cmp.Or(mode, "standard")
 	o.compressionMode = mode
 	o.excludePatterns = append([]string(nil), excludePatterns...)
 }
@@ -1238,9 +1237,7 @@ func (o *Orchestrator) writeBackupMetadata(tempDir string, stats *BackupStats) e
 	infoDir := filepath.Join(tempDir, "var/lib/proxsave-info")
 
 	version := strings.TrimSpace(stats.Version)
-	if version == "" {
-		version = "0.0.0"
-	}
+	version = cmp.Or(version, "0.0.0")
 
 	builder := strings.Builder{}
 	builder.WriteString("# ProxSave Metadata\n")

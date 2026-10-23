@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -193,9 +194,7 @@ func backupDiskValidationError(message string, diskErr error) error {
 	if errMsg == "" && diskErr != nil {
 		errMsg = diskErr.Error()
 	}
-	if errMsg == "" {
-		errMsg = "insufficient disk space"
-	}
+	errMsg = cmp.Or(errMsg, "insufficient disk space")
 	if diskErr == nil {
 		diskErr = errors.New(errMsg)
 	}

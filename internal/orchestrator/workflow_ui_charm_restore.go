@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -336,9 +337,7 @@ func (u *charmWorkflowUI) confirmApplyWithLabel(ctx context.Context, title, yesL
 
 func (u *charmWorkflowUI) ConfirmAction(ctx context.Context, title, message, yesLabel, noLabel string, timeout time.Duration, defaultYes bool) (bool, error) {
 	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Confirm"
-	}
+	title = cmp.Or(title, "Confirm")
 	opts := []components.ConfirmOption{
 		components.WithLabels(yesLabel, noLabel),
 		components.WithDefaultYes(defaultYes),

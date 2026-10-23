@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1116,9 +1117,7 @@ func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConf
 	}
 	trimmed := strings.TrimSpace(string(data))
 	perm := f.perm
-	if perm == 0 {
-		perm = 0o640
-	}
+	perm = cmp.Or(perm, 0o640)
 	var writeErr error
 	switch {
 	case f.json && trimmed == "":

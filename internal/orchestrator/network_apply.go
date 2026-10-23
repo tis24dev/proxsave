@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -125,9 +126,7 @@ func extractIPFromSnapshot(path, iface string) string {
 			if parsed.To4() != nil {
 				return token
 			}
-			if firstIPv6 == "" {
-				firstIPv6 = token
-			}
+			firstIPv6 = cmp.Or(firstIPv6, token)
 		}
 		if firstIPv6 != "" {
 			return firstIPv6

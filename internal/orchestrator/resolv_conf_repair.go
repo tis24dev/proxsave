@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -61,9 +62,7 @@ func maybeRepairResolvConfAfterRestore(ctx context.Context, logger *logging.Logg
 		return nil
 	}
 
-	if reason == "" {
-		reason = "unknown"
-	}
+	reason = cmp.Or(reason, "unknown")
 	logger.Warning("DNS resolver preflight: %s needs repair (%s)", resolvConfPath, reason)
 
 	if err := removeResolvConfIfPresent(); err != nil {

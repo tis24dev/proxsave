@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"os"
 	"strings"
 
@@ -98,12 +99,8 @@ func BuildTelegramSetupBootstrap(configPath, baseDir string) (TelegramSetupBoots
 		return state, nil
 	}
 
-	if state.TelegramMode == "" {
-		state.TelegramMode = "centralized"
-	}
-	if state.ServerAPIHost == "" {
-		state.ServerAPIHost = defaultServerAPIHost
-	}
+	state.TelegramMode = cmp.Or(state.TelegramMode, "centralized")
+	state.ServerAPIHost = cmp.Or(state.ServerAPIHost, defaultServerAPIHost)
 
 	if state.TelegramMode == "personal" {
 		state.Eligibility = TelegramSetupSkipPersonalMode

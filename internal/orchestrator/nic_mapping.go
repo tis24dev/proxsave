@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,9 +114,7 @@ func (c nicNameConflict) Details() string {
 		existingParts = append(existingParts, "pci="+v)
 	}
 	existing := strings.Join(existingParts, " ")
-	if existing == "" {
-		existing = "no identifiers"
-	}
+	existing = cmp.Or(existing, "no identifiers")
 	return fmt.Sprintf("- %s -> %s (%s=%s) but current %s exists (%s)",
 		c.Mapping.OldName,
 		c.Mapping.NewName,

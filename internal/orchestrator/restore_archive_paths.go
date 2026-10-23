@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path"
@@ -51,9 +52,7 @@ func restoreRootPrefix(root string) string {
 
 func resolveRestoreDestRoot(destRoot string) (string, error) {
 	cleanDestRoot := filepath.Clean(destRoot)
-	if cleanDestRoot == "" {
-		cleanDestRoot = string(os.PathSeparator)
-	}
+	cleanDestRoot = cmp.Or(cleanDestRoot, string(os.PathSeparator))
 	return filepath.Abs(cleanDestRoot)
 }
 

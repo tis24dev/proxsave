@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -376,9 +377,7 @@ func (s *StorageAdapter) logStoreIssues(name string, issues []storage.StoreIssue
 // symbol, because one can succeed while another does not.
 func (s *StorageAdapter) logRetentionOutcome(summary storage.RetentionSummary, deleted int) {
 	backupsDeleted := summary.BackupsDeleted
-	if backupsDeleted == 0 {
-		backupsDeleted = deleted
-	}
+	backupsDeleted = cmp.Or(backupsDeleted, deleted)
 	planned := summary.Planned
 	if minimum := backupsDeleted + summary.NotDeleted; planned < minimum {
 		planned = minimum

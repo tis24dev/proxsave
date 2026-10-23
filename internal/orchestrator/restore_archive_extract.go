@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -574,9 +575,7 @@ func materializeFromArchive(ctx context.Context, archivePath string, needByCanon
 // a regular file holding content, via a sibling temp + rename so a crash never
 // leaves the path missing.
 func writeMaterializedFile(target string, content []byte, mode os.FileMode, uid, gid *uint32, logger *logging.Logger) error {
-	if mode == 0 {
-		mode = 0o600
-	}
+	mode = cmp.Or(mode, 0o600)
 	tmp, err := restoreFS.CreateTemp(filepath.Dir(target), restoreTempPattern)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)

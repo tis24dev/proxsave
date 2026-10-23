@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"time"
@@ -113,12 +114,8 @@ func BuildHealthcheckSetupBootstrap(ctx context.Context, configPath, baseDir str
 		state.Eligibility = HealthcheckSetupSkipDisabled
 		return state, nil
 	}
-	if state.HealthcheckMode == "" {
-		state.HealthcheckMode = "centralized"
-	}
-	if state.ServerAPIHost == "" {
-		state.ServerAPIHost = defaultServerAPIHost
-	}
+	state.HealthcheckMode = cmp.Or(state.HealthcheckMode, "centralized")
+	state.ServerAPIHost = cmp.Or(state.ServerAPIHost, defaultServerAPIHost)
 	if state.HealthcheckMode == "self" {
 		// Self mode needs no centralized identity (no ServerID / relay secret): the
 		// check is pure reachability of the user's own alive URL. Return BEFORE the
