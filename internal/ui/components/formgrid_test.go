@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
@@ -490,5 +491,13 @@ func TestNewFormGridSanitizesTextPrefill(t *testing.T) {
 	}
 	if got != "foobarbaz" {
 		t.Fatalf("sanitized Text = %q, want %q", got, "foobarbaz")
+	}
+}
+
+// An empty text field renders a "-" placeholder instead of a blank control.
+func TestFormGridRenderControlShowsAPlaceholderForEmptyText(t *testing.T) {
+	g := NewFormGrid("T", []*FormField{{Label: "Host", Kind: FieldText}})
+	if got := strings.TrimSpace(ansi.Strip(g.renderControl(g.fields[0], false, 20))); got != "-" {
+		t.Fatalf("renderControl() = %q, want %q", got, "-")
 	}
 }
