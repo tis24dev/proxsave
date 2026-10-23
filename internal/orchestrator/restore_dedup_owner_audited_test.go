@@ -86,3 +86,22 @@ func TestMaterializeDedupPreservesOwner(t *testing.T) {
 		}
 	})
 }
+
+// Content materialized without a recorded mode is written as 0600.
+func TestWriteMaterializedFileDefaultsAZeroMode(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+	target := filepath.Join(t.TempDir(), "hosts")
+
+	if err := writeMaterializedFile(target, []byte("127.0.0.1 localhost\n"), 0, nil, nil, nil); err != nil {
+		t.Fatalf("writeMaterializedFile error: %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("materialized mode = %o, want 600", perm)
+	}
+}
