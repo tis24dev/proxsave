@@ -284,3 +284,19 @@ func TestCharmWorkflowUIResolveExistingPathDefaultsABlankDescription(t *testing.
 		t.Fatalf("expected ErrDecryptAborted on esc, got %v", err)
 	}
 }
+
+// A secret prompt without a display name refers to the selected backup.
+func TestCharmWorkflowUIPromptDecryptSecretDefaultsABlankName(t *testing.T) {
+	d, ui := newCharmUITestHarness(t)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ui.PromptDecryptSecret(context.Background(), " ", "")
+		errCh <- err
+	}()
+	d.waitScreen("Decrypt key")
+	d.waitOutput("passphrase used for selected backup.")
+	d.keys("esc")
+	if err := <-errCh; !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("expected ErrDecryptAborted on esc, got %v", err)
+	}
+}
