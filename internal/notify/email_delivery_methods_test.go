@@ -711,3 +711,36 @@ func TestEmailNotifierBuildEmailMessageDefaultsABlankFromHeader(t *testing.T) {
 		t.Fatalf("email message missing %q:\n%s", want, emailMessage)
 	}
 }
+
+// A PMF hand-off with no recipient names Proxmox Notifications as the router.
+func TestEmailNotifierSendPMFLogsAMissingRecipient(t *testing.T) {
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+
+	capturePath := filepath.Join(t.TempDir(), "pmf_capture.txt")
+	t.Setenv("PMF_CAPTURE_PATH", capturePath)
+	pmfScriptPath := writeCaptureScript(t, "proxmox-mail-forward", "PMF_CAPTURE_PATH")
+	t.Setenv("PATH", filepath.Dir(pmfScriptPath)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	origCandidates := pmfLookPathCandidates
+	pmfLookPathCandidates = []string{"proxmox-mail-forward"}
+	t.Cleanup(func() { pmfLookPathCandidates = origCandidates })
+
+	// An unknown Proxmox type makes recipient auto-detection fail without probing the host.
+	notifier, err := NewEmailNotifier(EmailConfig{
+		Enabled:        true,
+		DeliveryMethod: EmailDeliveryPMF,
+		From:           "no-reply@proxmox.example.com",
+	}, types.ProxmoxUnknown, logger)
+	if err != nil {
+		t.Fatalf("NewEmailNotifier() error = %v", err)
+	}
+
+	result, err := notifier.Send(context.Background(), createTestNotificationData())
+	if err != nil || !result.Success {
+		t.Fatalf("Send() = %+v, %v; want success", result, err)
+	}
+	if want := "for (recipient not set - routed by Proxmox Notifications)"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
+	}
+}
