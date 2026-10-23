@@ -375,3 +375,37 @@ func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
 		t.Fatalf("request failed line: %q", got)
 	}
 }
+
+// A relay error with blank fields falls back to the next field, then to a fixed text.
+func TestSendViaCloudRelayDefaultsBlankErrorDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		body       string
+		wantSuffix string
+	}{
+		{name: "200-success-false-message-only", statusCode: 200, body: `{"success":false,"message":"mailbox full"}`, wantSuffix: ": mailbox full"},
+		{name: "200-success-false-no-details", statusCode: 200, body: `{"success":false}`, wantSuffix: ": relay returned success=false with no details"},
+		{name: "429-no-details", statusCode: 429, body: `{}`, wantSuffix: ": no additional details provided"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			cfg := CloudRelayConfig{WorkerURL: server.URL, WorkerToken: "token", HMACSecret: "secret", Timeout: 5}
+			err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
+				To:            "dest@test.invalid",
+				Subject:       "subject",
+				ServerMAC:     "00:11:22:33:44:55",
+				ScriptVersion: "0.0.1",
+				ServerID:      "server-id",
+			}, logging.New(types.LogLevelError, false))
+			if err == nil || !strings.HasSuffix(err.Error(), tc.wantSuffix) {
+				t.Fatalf("sendViaCloudRelay() error = %v; want it to end with %q", err, tc.wantSuffix)
+			}
+		})
+	}
+}
