@@ -5,6 +5,11 @@ on:
     branches: [ main, dev ]
   pull_request:
 
+# The upload authenticates with CODECOV_TOKEN (use_oidc is not set), so the job
+# needs no id-token: write; reading the repository is all it does with GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
