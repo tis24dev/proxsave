@@ -287,3 +287,18 @@ func TestCLIWorkflowUIPromptDestinationDirDefaultsABlankDefault(t *testing.T) {
 		t.Fatalf("dir = %q, prompt = %q; want decrypt and the ./decrypt default", dir, buf.String())
 	}
 }
+
+// An existing path without a description is called a file.
+func TestCLIWorkflowUIResolveExistingPathDefaultsABlankDescription(t *testing.T) {
+	var buf bytes.Buffer
+	u := &cliWorkflowUI{
+		reader: bufio.NewReader(strings.NewReader("0\n")),
+		logger: logging.New(types.LogLevelInfo, false),
+		out:    &buf,
+	}
+
+	_, _, _ = u.ResolveExistingPath(context.Background(), "/tmp/out.tar", " ", "")
+	if want := "File /tmp/out.tar already exists."; !strings.Contains(buf.String(), want) {
+		t.Fatalf("prompt missing %q:\n%s", want, buf.String())
+	}
+}
