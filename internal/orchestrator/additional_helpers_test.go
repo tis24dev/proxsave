@@ -1749,3 +1749,18 @@ func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
 		t.Fatalf("expected skip logs for disabled storage, got: %s", buf.String())
 	}
 }
+
+// An Email channel that failed to initialize with no delivery method configured names
+// the default method in its warning.
+func TestDispatchNotificationsNamesTheDefaultEmailMethod(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	o := &Orchestrator{logger: logger, cfg: &config.Config{EmailEnabled: true}}
+
+	o.dispatchNotifications(context.Background(), &BackupStats{})
+
+	if want := `EMAIL_DELIVERY_METHOD="relay"`; !strings.Contains(buf.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, buf.String())
+	}
+}
