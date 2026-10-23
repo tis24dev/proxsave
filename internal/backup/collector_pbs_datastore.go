@@ -181,9 +181,7 @@ func assignUniquePBSOutputKeys[T any](items []T, identityFn func(T) string, base
 	baseKeys := make([]string, 0, len(items))
 	for idx, item := range items {
 		baseKey := strings.TrimSpace(baseKeyFn(item))
-		if baseKey == "" {
-			baseKey = "entry"
-		}
+		baseKey = cmp.Or(baseKey, "entry")
 
 		identity := strings.TrimSpace(identityFn(item))
 		if identity == "" {

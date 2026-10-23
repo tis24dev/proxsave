@@ -3,6 +3,7 @@ package backup
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -687,9 +688,7 @@ func (c *Collector) collectPVEStorageRuntime(ctx context.Context, commandsDir st
 	}
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
-	if nodeName == "" {
-		nodeName = hostname
-	}
+	nodeName = cmp.Or(nodeName, hostname)
 
 	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/disks/list", nodeName), "--output-format=json"),
@@ -853,9 +852,7 @@ func (c *Collector) collectPVEGuestInventory(ctx context.Context) error {
 
 	hostname, _ := os.Hostname()
 	nodeName := shortHostname(hostname)
-	if nodeName == "" {
-		nodeName = hostname
-	}
+	nodeName = cmp.Or(nodeName, hostname)
 
 	if err := c.safeCmdOutput(ctx,
 		commandSpec("pvesh", "get", fmt.Sprintf("/nodes/%s/qemu", nodeName), "--output-format=json"),
@@ -2891,9 +2888,7 @@ func (c *Collector) cephConfigPaths() []string {
 	// effectivePVEConfigPath() is already prefixed and would double-prefix to
 	// PREFIX/PREFIX/etc/pve/ceph.
 	pveConfigRoot := strings.TrimSpace(c.config.PVEConfigPath)
-	if pveConfigRoot == "" {
-		pveConfigRoot = "/etc/pve"
-	}
+	pveConfigRoot = cmp.Or(pveConfigRoot, "/etc/pve")
 	add(filepath.Join(pveConfigRoot, "ceph"))
 	add("/etc/ceph")
 	return paths
@@ -2927,9 +2922,7 @@ func (c *Collector) cephHasClusterConfig(path string) bool {
 // verbatim so a restore onto a real host recreates the link correctly (issue #255).
 func (c *Collector) readSystemFileFollowingSymlinks(path string) ([]byte, error) {
 	root := strings.TrimSpace(c.config.SystemRootPrefix)
-	if root == "" {
-		root = string(filepath.Separator)
-	}
+	root = cmp.Or(root, string(filepath.Separator))
 	cleanRoot := filepath.Clean(root)
 	rel := path
 	switch {

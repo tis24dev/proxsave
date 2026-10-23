@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -74,9 +75,7 @@ func (c *Collector) collectBestEffortProbe(ctx context.Context, spec CommandSpec
 			return ctxErr
 		}
 		if !ok {
-			if reason == "" {
-				reason = "required capability not detected"
-			}
+			reason = cmp.Or(reason, "required capability not detected")
 			c.logger.Debug("Skipping %s: %s", description, reason)
 			return nil
 		}
@@ -1292,9 +1291,7 @@ func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir string) 
 
 func ensureSystemPath() {
 	current := os.Getenv("PATH")
-	if current == "" {
-		current = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	}
+	current = cmp.Or(current, "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
 	segments := strings.Split(current, string(os.PathListSeparator))
 	seen := make(map[string]struct{}, len(segments))
