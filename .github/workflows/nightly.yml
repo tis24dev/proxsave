@@ -17,6 +17,40 @@ defaults:
     shell: bash
 
 jobs:
+  flaky:
+    name: Flaky test hunt
+    runs-on: ubuntu-latest
+    # Two local runs of this command took 1187s and 1479s, internal/orchestrator
+    # being the slowest package (1176s and 1468s). The limit sits above go
+    # test's -timeout=90m, so a hung test ends with Go's timeout panic and
+    # goroutine dump, not a runner kill.
+    timeout-minutes: 100
+    permissions:
+      contents: read
+
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      # Five shuffled passes of every test under the race detector. -count=5
+      # runs each test binary five times, so -timeout (10m by default, per
+      # binary) is raised to cover the slowest package. A failing package's
+      # output starts with "-test.shuffle N"; -shuffle=N replays that order.
+      - name: Run tests (race, shuffled, 5 passes)
+        run: go test -race -shuffle=on -count=5 -timeout=90m ./...
+
   next-go:
     name: Next Go (latest stable)
     runs-on: ubuntu-latest
