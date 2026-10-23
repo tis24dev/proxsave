@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -586,9 +587,7 @@ func (c *Config) parseCompressionSettings() {
 	c.CompressionLevel = c.getInt("COMPRESSION_LEVEL", 6)
 	c.CompressionThreads = c.getInt("COMPRESSION_THREADS", 0) // 0 = auto
 	c.CompressionMode = strings.ToLower(c.getString("COMPRESSION_MODE", "standard"))
-	if c.CompressionMode == "" {
-		c.CompressionMode = "standard"
-	}
+	c.CompressionMode = cmp.Or(c.CompressionMode, "standard")
 	c.CompressionLevel = adjustLevelForMode(c.CompressionType, c.CompressionMode, c.CompressionLevel)
 }
 
@@ -774,9 +773,7 @@ func (c *Config) parseStorageSettings() {
 	c.RcloneTransfers = c.getInt("RCLONE_TRANSFERS", 4)
 	c.RcloneRetries = c.getInt("RCLONE_RETRIES", 3)
 	c.RcloneVerifyMethod = strings.ToLower(c.getString("RCLONE_VERIFY_METHOD", "primary"))
-	if c.RcloneVerifyMethod == "" {
-		c.RcloneVerifyMethod = "primary"
-	}
+	c.RcloneVerifyMethod = cmp.Or(c.RcloneVerifyMethod, "primary")
 	if rawFlags := strings.TrimSpace(c.getString("RCLONE_FLAGS", "")); rawFlags != "" {
 		c.RcloneFlags = strings.Fields(rawFlags)
 	}
