@@ -42,3 +42,18 @@ func TestWriteNetworkHealthReportFileNamedDefaultsABlankName(t *testing.T) {
 		t.Fatalf("report written to %s, want health.txt", path)
 	}
 }
+
+// A blank file name writes the ifquery report as ifquery_check.txt.
+func TestWriteNetworkIfqueryDiagnosticReportFileDefaultsABlankName(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	path, err := writeNetworkIfqueryDiagnosticReportFile(t.TempDir(), " ", networkPreflightResult{})
+	if err != nil {
+		t.Fatalf("writeNetworkIfqueryDiagnosticReportFile error: %v", err)
+	}
+	if filepath.Base(path) != "ifquery_check.txt" {
+		t.Fatalf("report written to %s, want ifquery_check.txt", path)
+	}
+}
