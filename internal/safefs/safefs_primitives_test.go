@@ -5,31 +5,74 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
-func TestLstat_ReturnsTimeoutError(t *testing.T) {
-	prev := osLstat
-	unblock := make(chan struct{})
-	finished := make(chan struct{})
-	registerBlockedOpCleanup(t, "lstat completion", unblock, finished, func() {
-		osLstat = prev
+// A stalled lstat is abandoned when its timeout fires: Lstat returns the lstat
+// TimeoutError for the path, which unwraps to ErrTimeout, at the timeout and not
+// later, and osLstat is put back afterwards. The test runs in a synctest bubble,
+// whose clock only moves when every goroutine in it is blocked, so the budget is
+// exact and a slow or frozen runner cannot stretch it.
+func TestLstat_StalledCallTimesOutWithinItsBudget(t *testing.T) {
+	const path = "/does/not/matter"
+	const timeout = 25 * time.Millisecond
+	origLstat, origLimiter := osLstat, fsOpLimiter
+
+	synctest.Test(t, func(t *testing.T) {
+		// A limiter made inside the bubble, so every channel Lstat uses belongs to it.
+		fsOpLimiter = newOperationLimiter(1)
+		unblock := make(chan struct{})
+		osLstat = func(string) (os.FileInfo, error) {
+			<-unblock
+			return nil, os.ErrNotExist
+		}
+		// Cleanups run inside the bubble, last registered first, before it waits for
+		// its goroutines: the stalled worker is released, then the globals go back.
+		t.Cleanup(func() {
+			osLstat, fsOpLimiter = origLstat, origLimiter
+		})
+		t.Cleanup(func() { close(unblock) })
+
+		type outcome struct {
+			err     error
+			elapsed time.Duration
+		}
+		done := make(chan outcome, 1)
+		start := time.Now()
+		go func() {
+			_, err := Lstat(context.Background(), path, timeout)
+			done <- outcome{err: err, elapsed: time.Since(start)}
+		}()
+
+		time.Sleep(timeout)
+		synctest.Wait()
+		var got outcome
+		select {
+		case got = <-done:
+		default:
+			t.Fatalf("Lstat still blocked after its %s timeout", timeout)
+		}
+
+		var te *TimeoutError
+		if !errors.Is(got.err, ErrTimeout) || !errors.As(got.err, &te) {
+			t.Fatalf("Lstat err = %v; want a TimeoutError", got.err)
+		}
+		if te.Op != "lstat" || te.Path != path || te.Timeout != timeout {
+			t.Fatalf("TimeoutError = %+v; want Op lstat, Path %s, Timeout %s", *te, path, timeout)
+		}
+		if got.elapsed != timeout {
+			t.Fatalf("Lstat returned after %s; want %s", got.elapsed, timeout)
+		}
 	})
 
-	osLstat = func(string) (os.FileInfo, error) {
-		<-unblock
-		close(finished)
-		return nil, os.ErrNotExist
+	if reflect.ValueOf(osLstat).Pointer() != reflect.ValueOf(origLstat).Pointer() {
+		t.Fatal("osLstat was not restored")
 	}
-
-	start := time.Now()
-	_, err := Lstat(context.Background(), "/does/not/matter", 25*time.Millisecond)
-	if err == nil || !errors.Is(err, ErrTimeout) {
-		t.Fatalf("Lstat err = %v; want timeout", err)
-	}
-	if time.Since(start) > 250*time.Millisecond {
-		t.Fatalf("Lstat took too long: %s", time.Since(start))
+	if fsOpLimiter != origLimiter {
+		t.Fatal("fsOpLimiter was not restored")
 	}
 }
 
