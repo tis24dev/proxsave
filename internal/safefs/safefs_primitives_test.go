@@ -133,25 +133,61 @@ func TestLchown_ReturnsTimeoutError(t *testing.T) {
 	}
 }
 
-func TestRun_ReturnsTimeoutError(t *testing.T) {
-	unblock := make(chan struct{})
-	finished := make(chan struct{})
-	t.Cleanup(func() {
-		close(unblock)
-		waitForSignal(t, finished, "run completion")
+// A stalled function given to Run is abandoned when its timeout fires: Run returns
+// the TimeoutError for the op and path, which unwraps to ErrTimeout, at the timeout
+// and not later. Like the Lstat test above it runs in a synctest bubble, so the
+// budget is exact and a slow or frozen runner cannot stretch it.
+func TestRun_StalledCallTimesOutWithinItsBudget(t *testing.T) {
+	const op, path = "probe", "/does/not/matter"
+	const timeout = 25 * time.Millisecond
+	origLimiter := fsOpLimiter
+
+	synctest.Test(t, func(t *testing.T) {
+		// A limiter made inside the bubble, so every channel Run uses belongs to it.
+		fsOpLimiter = newOperationLimiter(1)
+		unblock := make(chan struct{})
+		// Cleanups run inside the bubble, last registered first, before it waits for
+		// its goroutines: the stalled worker is released, then the limiter goes back.
+		t.Cleanup(func() { fsOpLimiter = origLimiter })
+		t.Cleanup(func() { close(unblock) })
+
+		type outcome struct {
+			err     error
+			elapsed time.Duration
+		}
+		done := make(chan outcome, 1)
+		start := time.Now()
+		go func() {
+			_, err := Run(context.Background(), op, path, timeout, func() (bool, error) {
+				<-unblock
+				return true, nil
+			})
+			done <- outcome{err: err, elapsed: time.Since(start)}
+		}()
+
+		time.Sleep(timeout)
+		synctest.Wait()
+		var got outcome
+		select {
+		case got = <-done:
+		default:
+			t.Fatalf("Run still blocked after its %s timeout", timeout)
+		}
+
+		var te *TimeoutError
+		if !errors.Is(got.err, ErrTimeout) || !errors.As(got.err, &te) {
+			t.Fatalf("Run err = %v; want a TimeoutError", got.err)
+		}
+		if te.Op != op || te.Path != path || te.Timeout != timeout {
+			t.Fatalf("TimeoutError = %+v; want Op %s, Path %s, Timeout %s", *te, op, path, timeout)
+		}
+		if got.elapsed != timeout {
+			t.Fatalf("Run returned after %s; want %s", got.elapsed, timeout)
+		}
 	})
 
-	start := time.Now()
-	_, err := Run(context.Background(), "probe", "/does/not/matter", 25*time.Millisecond, func() (bool, error) {
-		<-unblock
-		close(finished)
-		return true, nil
-	})
-	if err == nil || !errors.Is(err, ErrTimeout) {
-		t.Fatalf("Run err = %v; want timeout", err)
-	}
-	if time.Since(start) > 250*time.Millisecond {
-		t.Fatalf("Run took too long: %s", time.Since(start))
+	if fsOpLimiter != origLimiter {
+		t.Fatal("fsOpLimiter was not restored")
 	}
 }
 
