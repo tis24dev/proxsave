@@ -295,6 +295,12 @@ var notes = []Note{
 			"This release includes a collection of fixes and corrections.",
 		},
 	},
+	{
+		Version: "0.45.0",
+		Lines: []string{
+			"This release includes a collection of fixes and corrections.",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
