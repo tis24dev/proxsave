@@ -148,7 +148,7 @@ var (
 func classifyClientError(r ClientResult, namespace string) ServerCause {
 	text := string(r.Stderr) + "\n" + string(r.Stdout)
 	errorLine := ""
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "Error: ") {
 			errorLine = strings.TrimPrefix(trimmed, "Error: ")
 			break
@@ -827,7 +827,7 @@ func (p *PBS) debugCall(label string, result ClientResult) {
 			log.Debug("%s %s: %d bytes, not shown", label, stream.name, len(stream.data))
 			continue
 		}
-		for _, line := range strings.Split(strings.TrimRight(string(stream.data), "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimRight(string(stream.data), "\n"), "\n") {
 			if strings.TrimSpace(line) != "" {
 				log.Debug("%s %s: %s", label, stream.name, strings.TrimRight(line, " "))
 			}
@@ -860,7 +860,7 @@ func findExcludeFiles(log *logging.Logger, treeDir string) []string {
 	return found
 }
 
-func debugf(log *logging.Logger, format string, args ...interface{}) {
+func debugf(log *logging.Logger, format string, args ...any) {
 	if log != nil {
 		log.Debug(format, args...)
 	}

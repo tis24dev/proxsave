@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -57,9 +58,7 @@ func promptYesNoWithCountdown(ctx context.Context, reader *bufio.Reader, logger 
 	}
 
 	question = strings.TrimSpace(question)
-	if question == "" {
-		question = "Proceed?"
-	}
+	question = cmp.Or(question, "Proceed?")
 	if timeout <= 0 {
 		return promptYesNoWithDefault(ctx, reader, fmt.Sprintf("%s %s ", question, defStr), defaultYes)
 	}

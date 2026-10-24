@@ -86,8 +86,7 @@ func TestDoLogsAFailedNameLookup(t *testing.T) {
 	_, err := New("http://proxsave-stage-test.invalid", nil, lg).Do(context.Background(), Request{
 		Path: "/api/x", Timeout: 3 * time.Second, LogOperation: "op",
 	})
-	var te *TransportError
-	if !errors.As(err, &te) {
+	if _, ok := errors.AsType[*TransportError](err); !ok {
 		t.Fatalf("want *TransportError, got %T (%v)", err, err)
 	}
 	out := buf.String()

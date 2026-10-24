@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1294,5 +1295,54 @@ esac
 	}
 	if strings.Contains(candidates[0].RawMetadataPath, "ghost") {
 		t.Fatalf("stderr leaked into the listing: %q", candidates[0].RawMetadataPath)
+	}
+}
+
+// Raw backups found in a directory are listed newest first.
+func TestDiscoverBackupCandidates_ListsNewestFirst(t *testing.T) {
+	orig := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = orig })
+	tmpDir := t.TempDir()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	writeRaw := func(name string, created time.Time) {
+		t.Helper()
+		archivePath := filepath.Join(tmpDir, name)
+		data := []byte(name)
+		if err := os.WriteFile(archivePath, data, 0o600); err != nil {
+			t.Fatalf("write archive: %v", err)
+		}
+		checksum := checksumHexForBytes(data)
+		manifest := backup.Manifest{
+			ArchivePath:    "/var/backups/" + name,
+			ProxmoxType:    "pve",
+			CreatedAt:      created,
+			EncryptionMode: "none",
+			SHA256:         checksum,
+		}
+		raw, err := json.Marshal(&manifest)
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		if err := os.WriteFile(archivePath+".metadata", raw, 0o600); err != nil {
+			t.Fatalf("write metadata: %v", err)
+		}
+		if err := os.WriteFile(archivePath+".sha256", []byte(checksum+"  "+name+"\n"), 0o600); err != nil {
+			t.Fatalf("write checksum: %v", err)
+		}
+	}
+	writeRaw("a-older.tar.xz", base)
+	writeRaw("b-newer.tar.xz", base.Add(time.Hour))
+
+	candidates, err := discoverBackupCandidates(nil, tmpDir)
+	if err != nil {
+		t.Fatalf("discoverBackupCandidates() error = %v", err)
+	}
+	var got []string
+	for _, c := range candidates {
+		got = append(got, c.DisplayBase)
+	}
+	if want := []string{"b-newer.tar.xz", "a-older.tar.xz"}; !slices.Equal(got, want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
 	}
 }

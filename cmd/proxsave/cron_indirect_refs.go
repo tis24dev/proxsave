@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -367,14 +368,9 @@ func wrapperCronLines(lines []string) []string {
 // overlap is wanted: a wrapper naming /opt/site/proxsave is naming our binary.
 func basenameHasProxsaveComponent(token string) bool {
 	base := strings.ToLower(filepath.Base(strings.Trim(token, "\"'")))
-	for _, part := range strings.FieldsFunc(base, func(r rune) bool {
+	return slices.Contains(strings.FieldsFunc(base, func(r rune) bool {
 		return r == '-' || r == '_' || r == '.'
-	}) {
-		if part == "proxsave" {
-			return true
-		}
-	}
-	return false
+	}), "proxsave")
 }
 
 // pathLivesInProxsaveTree reports whether a DIRECTORY component of the command's
@@ -392,7 +388,7 @@ func pathLivesInProxsaveTree(token string) bool {
 	if !strings.Contains(path, "/") {
 		return false
 	}
-	for _, part := range strings.Split(strings.ToLower(filepath.Dir(path)), "/") {
+	for part := range strings.SplitSeq(strings.ToLower(filepath.Dir(path)), "/") {
 		if part == "proxsave" {
 			return true
 		}
@@ -886,14 +882,13 @@ func joinLineContinuations(lines []string) []string {
 
 // hereDocDelimiter returns the word that ends a here-document started on this line, or "".
 func hereDocDelimiter(line string) string {
-	idx := strings.Index(line, "<<")
-	if idx < 0 {
+	before, after, ok := strings.Cut(line, "<<")
+	if !ok {
 		return ""
 	}
 	// Only a REDIRECTION opens a body. The same two characters mean a left shift inside an
 	// arithmetic expansion and nothing at all inside a string, and treating either as an opener
 	// discards every following line of the script.
-	before := line[:idx]
 	if arithmeticOpenAt(before) {
 		return ""
 	}
@@ -901,7 +896,7 @@ func hereDocDelimiter(line string) string {
 		return ""
 	}
 	// "<<<" is a here-STRING: it carries its data inline and starts no body.
-	rest := line[idx+2:]
+	rest := after
 	if strings.HasPrefix(rest, "<") {
 		return ""
 	}
@@ -957,7 +952,7 @@ func scriptProxsavePathVars(lines []string) map[string]string {
 			continue
 		}
 		for _, segment := range splitShellSegments(trimmed) {
-			for _, word := range strings.Fields(segment) {
+			for word := range strings.FieldsSeq(segment) {
 				idx := strings.Index(word, "=")
 				if !looksLikeEnvAssignment(word) {
 					// An assigning expansion is an assignment the shell performs inside a
@@ -1213,10 +1208,8 @@ func segmentWalkCommands(words []string, vars map[string]string, visit func(stri
 			return false
 		}
 		heads := scriptWordExpansions(words[0], vars)
-		for _, head := range heads {
-			if visit(head) {
-				return true
-			}
+		if slices.ContainsFunc(heads, visit) {
+			return true
 		}
 		// A launcher reached through a variable is still a launcher: classifying on the
 		// unexpanded word ends the segment on a brace and hides whatever it was about to run,
@@ -1242,10 +1235,8 @@ func segmentWalkCommands(words []string, vars map[string]string, visit func(stri
 			return shellLauncherWalkCommands(base, words[1:], vars, visit)
 		case isIn(base, scriptOpaqueLaunchers):
 			for _, w := range words[1:] {
-				for _, candidate := range scriptWordExpansions(w, vars) {
-					if visit(candidate) {
-						return true
-					}
+				if slices.ContainsFunc(scriptWordExpansions(w, vars), visit) {
+					return true
 				}
 			}
 			return false

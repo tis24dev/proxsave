@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1028,13 +1029,7 @@ func TestNormalizeAndMergeLists(t *testing.T) {
 		t.Fatalf("mergeStringSlices unexpected length: %#v", merged)
 	}
 	for _, must := range []string{"a", "b", "c"} {
-		found := false
-		for _, v := range merged {
-			if v == must {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(merged, must)
 		if !found {
 			t.Fatalf("mergeStringSlices missing %s: %#v", must, merged)
 		}
@@ -1596,5 +1591,27 @@ func TestParseRejectsInvalidCollectionAndCloudSettings(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+// COMPRESSION_MODE assigned an empty value falls back to "standard".
+func TestParseCompressionSettingsDefaultsABlankMode(t *testing.T) {
+	cfg := &Config{raw: map[string]string{"COMPRESSION_MODE": ""}}
+
+	cfg.parseCompressionSettings()
+
+	if cfg.CompressionMode != "standard" {
+		t.Fatalf("CompressionMode = %q; want %q", cfg.CompressionMode, "standard")
+	}
+}
+
+// RCLONE_VERIFY_METHOD assigned an empty value falls back to "primary".
+func TestParseStorageSettingsDefaultsABlankRcloneVerifyMethod(t *testing.T) {
+	cfg := &Config{raw: map[string]string{"RCLONE_VERIFY_METHOD": ""}}
+
+	cfg.parseStorageSettings()
+
+	if cfg.RcloneVerifyMethod != "primary" {
+		t.Fatalf("RcloneVerifyMethod = %q; want %q", cfg.RcloneVerifyMethod, "primary")
 	}
 }

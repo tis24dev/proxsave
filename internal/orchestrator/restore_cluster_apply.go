@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/input"
@@ -88,7 +88,7 @@ func listExportNodeDirs(exportRoot string) ([]string, error) {
 		}
 		nodes = append(nodes, name)
 	}
-	sort.Strings(nodes)
+	slices.Sort(nodes)
 	return nodes, nil
 }
 
@@ -152,12 +152,7 @@ func promptExportNodeSelection(ctx context.Context, reader *bufio.Reader, export
 }
 
 func stringSliceContains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, want)
 }
 
 func readVMName(confPath string) string {
@@ -165,13 +160,13 @@ func readVMName(confPath string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "name:") {
-			return strings.TrimSpace(strings.TrimPrefix(t, "name:"))
+		if after, ok := strings.CutPrefix(t, "name:"); ok {
+			return strings.TrimSpace(after)
 		}
-		if strings.HasPrefix(t, "hostname:") {
-			return strings.TrimSpace(strings.TrimPrefix(t, "hostname:"))
+		if after, ok := strings.CutPrefix(t, "hostname:"); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 	return ""
@@ -640,11 +635,11 @@ func pveshRefusedKeyFrom(err error, out []byte) string {
 }
 
 func afterMarkerUpTo(text, marker, stop string) string {
-	idx := strings.Index(text, marker)
-	if idx < 0 {
+	_, after, ok := strings.Cut(text, marker)
+	if !ok {
 		return ""
 	}
-	rest := strings.TrimSpace(text[idx+len(marker):])
+	rest := strings.TrimSpace(after)
 	if end := strings.IndexAny(rest, stop); end >= 0 {
 		rest = rest[:end]
 	}
@@ -819,7 +814,7 @@ func parseStorageBlocks(cfgPath string) ([]storageBlock, error) {
 		}
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			flush()

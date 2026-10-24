@@ -2,27 +2,21 @@ package main
 
 import (
 	"path/filepath"
-	"sync"
 	"testing"
 )
 
 func forceDetectedBaseDirForTest(t *testing.T, baseDir string) {
 	t.Helper()
-	origInfo := execInfo
-	origOnce := execInfoOnce
+	orig := getExecInfo
 
 	execPath := filepath.Join(baseDir, "build", "proxsave")
-	execInfo = &ExecInfo{
+	info := ExecInfo{
 		ExecPath: execPath,
 		ExecDir:  filepath.Dir(execPath),
 		BaseDir:  baseDir,
 		HasBase:  true,
 	}
-	execInfoOnce = &sync.Once{}
-	execInfoOnce.Do(func() {})
+	getExecInfo = func() ExecInfo { return info }
 
-	t.Cleanup(func() {
-		execInfo = origInfo
-		execInfoOnce = origOnce
-	})
+	t.Cleanup(func() { getExecInfo = orig })
 }

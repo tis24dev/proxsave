@@ -75,7 +75,7 @@ func (f fakeFileInfo) Mode() os.FileMode {
 }
 func (f fakeFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
 func (f fakeFileInfo) IsDir() bool        { return f.isDir }
-func (f fakeFileInfo) Sys() interface{} {
+func (f fakeFileInfo) Sys() any {
 	return &syscall.Stat_t{Uid: uint32(f.uid), Gid: uint32(f.gid)}
 }
 
@@ -505,5 +505,44 @@ func TestEnsureDirExistsWithInheritedMeta_ChownsNewDirsWhenSimulatedRoot(t *test
 		if info == nil || !info.IsDir() {
 			t.Fatalf("%s not a directory", path)
 		}
+	}
+}
+
+// A directory whose permission bits are all clear is inherited as 0755.
+func TestFindNearestExistingDirMetaDefaultsAZeroMode(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+	dir := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if _, mode := findNearestExistingDirMeta(dir); mode != 0o755 {
+		t.Fatalf("inherited mode = %o, want 755", mode)
+	}
+}
+
+// A zero permission argument prepares the temp file as 0644.
+func TestPrepareAtomicTempFileDefaultsAZeroPerm(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+	path := filepath.Join(t.TempDir(), "hosts")
+
+	tmpPath, _, _, err := prepareAtomicTempFile(path, []byte("127.0.0.1 localhost\n"), 0)
+	if err != nil {
+		t.Fatalf("prepareAtomicTempFile error: %v", err)
+	}
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("temp file mode = %o, want 644", perm)
 	}
 }

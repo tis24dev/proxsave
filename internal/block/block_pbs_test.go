@@ -114,7 +114,7 @@ func (h *pbsHarness) execute(t *testing.T, tree string) Result {
 // the message without its indentation.
 func (h *pbsHarness) visible() []string {
 	var lines []string
-	for _, line := range strings.Split(h.output.String(), "\n") {
+	for line := range strings.SplitSeq(h.output.String(), "\n") {
 		if i := strings.Index(line, "] "); i >= 0 {
 			line = line[i+2:]
 		}

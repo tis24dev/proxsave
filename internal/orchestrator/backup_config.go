@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"strings"
 	"time"
 
@@ -99,9 +100,7 @@ func InitializeBackupStats(
 		stats.MaxCloudBackups = cfg.MaxCloudBackups
 		stats.PBSTargetStorage = cfg.PBSTargetStorage
 		stats.MaxPBSTargetBackups = cfg.MaxPBSTargetBackups
-		if stats.LocalPath == "" {
-			stats.LocalPath = cfg.BackupPath
-		}
+		stats.LocalPath = cmp.Or(stats.LocalPath, cfg.BackupPath)
 	}
 
 	// An enabled copy starts as "skipped", not "ok": nothing has been copied yet, and

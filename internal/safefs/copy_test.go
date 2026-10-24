@@ -9,6 +9,7 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -47,36 +48,38 @@ func (r *slowReader) Read(p []byte) (int, error) {
 }
 
 func TestCopyBounded_StallReturnsTimeout(t *testing.T) {
-	unblock := make(chan struct{})
-	t.Cleanup(func() { close(unblock) })
-	r := &blockingReader{prefix: []byte("hello"), unblock: unblock}
-	var dst bytes.Buffer
+	synctest.Test(t, func(t *testing.T) {
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		r := &blockingReader{prefix: []byte("hello"), unblock: unblock}
+		var dst bytes.Buffer
 
-	type res struct {
-		n   int64
-		err error
-	}
-	// Run in a goroutine guarded by a deadline so an unbounded-loop regression
-	// fails fast here instead of hanging until the package test timeout.
-	done := make(chan res, 1)
-	go func() {
-		n, err := CopyBounded(context.Background(), &dst, r, 64, 25*time.Millisecond, "copy", "/x")
-		done <- res{n, err}
-	}()
-	select {
-	case got := <-done:
-		if got.err == nil || !errors.Is(got.err, ErrTimeout) {
-			t.Fatalf("CopyBounded err = %v; want timeout", got.err)
+		type res struct {
+			n   int64
+			err error
 		}
-		if got.n != int64(len("hello")) {
-			t.Fatalf("written = %d; want 5 (the chunk delivered before the stall)", got.n)
+		// Run in a goroutine guarded by a deadline so an unbounded-loop regression
+		// fails fast here instead of hanging until the package test timeout.
+		done := make(chan res, 1)
+		go func() {
+			n, err := CopyBounded(context.Background(), &dst, r, 64, 25*time.Millisecond, "copy", "/x")
+			done <- res{n, err}
+		}()
+		select {
+		case got := <-done:
+			if got.err == nil || !errors.Is(got.err, ErrTimeout) {
+				t.Fatalf("CopyBounded err = %v; want timeout", got.err)
+			}
+			if got.n != int64(len("hello")) {
+				t.Fatalf("written = %d; want 5 (the chunk delivered before the stall)", got.n)
+			}
+			if dst.String() != "hello" {
+				t.Fatalf("dst = %q; want %q", dst.String(), "hello")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("CopyBounded hung on a stalled reader")
 		}
-		if dst.String() != "hello" {
-			t.Fatalf("dst = %q; want %q", dst.String(), "hello")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("CopyBounded hung on a stalled reader")
-	}
+	})
 }
 
 func TestCopyBounded_HealthyMultiChunk(t *testing.T) {
@@ -137,21 +140,26 @@ func TestCopyBounded_BypassesLimiter(t *testing.T) {
 // timeout<=0 must degrade to a plain unbounded copy: a slow reader completes with
 // the opt-out, but the same reader trips a tiny per-chunk budget.
 func TestCopyBounded_ZeroTimeoutIsDirect(t *testing.T) {
-	data := []byte("zero timeout means a plain synchronous copy with no stall budget")
+	synctest.Test(t, func(t *testing.T) {
+		data := []byte("zero timeout means a plain synchronous copy with no stall budget")
 
-	var dst bytes.Buffer
-	n, err := CopyBounded(context.Background(), &dst, &slowReader{data: data, delay: 15 * time.Millisecond}, 8, 0, "copy", "/x")
-	if err != nil {
-		t.Fatalf("opt-out CopyBounded err = %v; want success", err)
-	}
-	if n != int64(len(data)) || !bytes.Equal(dst.Bytes(), data) {
-		t.Fatalf("opt-out copy incorrect: n=%d", n)
-	}
+		var dst bytes.Buffer
+		n, err := CopyBounded(context.Background(), &dst, &slowReader{data: data, delay: 15 * time.Millisecond}, 8, 0, "copy", "/x")
+		if err != nil {
+			t.Fatalf("opt-out CopyBounded err = %v; want success", err)
+		}
+		if n != int64(len(data)) || !bytes.Equal(dst.Bytes(), data) {
+			t.Fatalf("opt-out copy incorrect: n=%d", n)
+		}
 
-	_, err = CopyBounded(context.Background(), &bytes.Buffer{}, &slowReader{data: data, delay: 15 * time.Millisecond}, 8, time.Millisecond, "copy", "/x")
-	if err == nil || !errors.Is(err, ErrTimeout) {
-		t.Fatalf("tiny-budget CopyBounded err = %v; want timeout", err)
-	}
+		_, err = CopyBounded(context.Background(), &bytes.Buffer{}, &slowReader{data: data, delay: 15 * time.Millisecond}, 8, time.Millisecond, "copy", "/x")
+		if err == nil || !errors.Is(err, ErrTimeout) {
+			t.Fatalf("tiny-budget CopyBounded err = %v; want timeout", err)
+		}
+		// The timed-out worker is abandoned by design and still sleeping: let it return
+		// in fake time, or the bubble cannot close.
+		time.Sleep(time.Second)
+	})
 }
 
 // blockingWriter accepts its first Write, then blocks on every subsequent one
@@ -201,71 +209,77 @@ func (r *eofWithDataReader) Read(p []byte) (int, error) {
 // time far exceeds the budget, but whose every chunk is well under it, must
 // still succeed. A WithTimeout-style whole-file mutation fails this.
 func TestCopyBounded_PerChunkBudgetReArms(t *testing.T) {
-	const chunks = 30
-	data := make([]byte, chunks*8)
-	for i := range data {
-		data[i] = byte(i)
-	}
-	r := &slowReader{data: data, delay: 10 * time.Millisecond} // ~300ms cumulative
-	var dst bytes.Buffer
-	n, err := CopyBounded(context.Background(), &dst, r, 8, 150*time.Millisecond, "copy", "/x")
-	if err != nil {
-		t.Fatalf("CopyBounded err = %v; a per-chunk budget must not accumulate across chunks", err)
-	}
-	if n != int64(len(data)) || !bytes.Equal(dst.Bytes(), data) {
-		t.Fatalf("copy incorrect: n=%d want %d", n, len(data))
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const chunks = 30
+		data := make([]byte, chunks*8)
+		for i := range data {
+			data[i] = byte(i)
+		}
+		r := &slowReader{data: data, delay: 10 * time.Millisecond} // ~300ms cumulative
+		var dst bytes.Buffer
+		n, err := CopyBounded(context.Background(), &dst, r, 8, 150*time.Millisecond, "copy", "/x")
+		if err != nil {
+			t.Fatalf("CopyBounded err = %v; a per-chunk budget must not accumulate across chunks", err)
+		}
+		if n != int64(len(data)) || !bytes.Equal(dst.Bytes(), data) {
+			t.Fatalf("copy incorrect: n=%d want %d", n, len(data))
+		}
+	})
 }
 
 // A destination that wedges mid-stream must time out, not hang. Only the read
 // side is covered by the FIFO storage test; this covers the write side.
 func TestCopyBounded_WriteStallReturnsTimeout(t *testing.T) {
-	unblock := make(chan struct{})
-	t.Cleanup(func() { close(unblock) })
-	w := &blockingWriter{unblock: unblock}
-	src := bytes.NewReader(make([]byte, 64)) // several 8-byte chunks
+	synctest.Test(t, func(t *testing.T) {
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		w := &blockingWriter{unblock: unblock}
+		src := bytes.NewReader(make([]byte, 64)) // several 8-byte chunks
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := CopyBounded(context.Background(), w, src, 8, 25*time.Millisecond, "copy", "/x")
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err == nil || !errors.Is(err, ErrTimeout) {
-			t.Fatalf("CopyBounded err = %v; want timeout on a stalled writer", err)
+		done := make(chan error, 1)
+		go func() {
+			_, err := CopyBounded(context.Background(), w, src, 8, 25*time.Millisecond, "copy", "/x")
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil || !errors.Is(err, ErrTimeout) {
+				t.Fatalf("CopyBounded err = %v; want timeout on a stalled writer", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("CopyBounded hung on a stalled writer")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("CopyBounded hung on a stalled writer")
-	}
+	})
 }
 
 // A context cancel mid-copy must surface as context.Canceled AND be classified
 // abandoned (so the caller drops, never closes, the still-held handles).
 func TestCopyBounded_ContextCancelIsAbandoned(t *testing.T) {
-	unblock := make(chan struct{})
-	t.Cleanup(func() { close(unblock) })
-	r := &blockingReader{unblock: unblock} // blocks on the first Read
-	ctx, cancel := context.WithCancel(context.Background())
+	synctest.Test(t, func(t *testing.T) {
+		unblock := make(chan struct{})
+		t.Cleanup(func() { close(unblock) })
+		r := &blockingReader{unblock: unblock} // blocks on the first Read
+		ctx, cancel := context.WithCancel(context.Background())
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := CopyBounded(ctx, &bytes.Buffer{}, r, 8, time.Second, "copy", "/x")
-		done <- err
-	}()
-	time.Sleep(30 * time.Millisecond)
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("err = %v; want context.Canceled", err)
+		done := make(chan error, 1)
+		go func() {
+			_, err := CopyBounded(ctx, &bytes.Buffer{}, r, 8, time.Second, "copy", "/x")
+			done <- err
+		}()
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("err = %v; want context.Canceled", err)
+			}
+			if !IsAbandoned(err) {
+				t.Fatalf("IsAbandoned(%v) = false; a cancel must be treated as abandoned", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("CopyBounded did not return after ctx cancel")
 		}
-		if !IsAbandoned(err) {
-			t.Fatalf("IsAbandoned(%v) = false; a cancel must be treated as abandoned", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("CopyBounded did not return after ctx cancel")
-	}
+	})
 }
 
 // A genuine (non-timeout, non-cancel) I/O error must propagate and must NOT be

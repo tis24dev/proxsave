@@ -44,32 +44,35 @@ func TestParseLogLevel(t *testing.T) {
 		name     string
 		input    string
 		expected types.LogLevel
+		ok       bool
 	}{
-		{"debug string", "debug", types.LogLevelDebug},
-		{"debug number", "5", types.LogLevelDebug},
-		{"info string", "info", types.LogLevelInfo},
-		{"info number", "4", types.LogLevelInfo},
-		{"warning string", "warning", types.LogLevelWarning},
-		{"warning number", "3", types.LogLevelWarning},
-		{"error string", "error", types.LogLevelError},
-		{"error number", "2", types.LogLevelError},
-		{"critical string", "critical", types.LogLevelCritical},
-		{"critical number", "1", types.LogLevelCritical},
-		{"none string", "none", types.LogLevelNone},
-		{"none number", "0", types.LogLevelNone},
-		{"unknown", "invalid", types.LogLevelInfo},
-		{"uppercase defaults", "DEBUG", types.LogLevelInfo},
-		{"mixed case defaults", "Debug", types.LogLevelInfo},
-		{"leading whitespace", " debug", types.LogLevelInfo},
-		{"trailing whitespace", "debug ", types.LogLevelInfo},
-		{"empty string", "", types.LogLevelInfo},
+		{"debug string", "debug", types.LogLevelDebug, true},
+		{"debug number", "5", types.LogLevelDebug, true},
+		{"info string", "info", types.LogLevelInfo, true},
+		{"info number", "4", types.LogLevelInfo, true},
+		{"warning string", "warning", types.LogLevelWarning, true},
+		{"warning number", "3", types.LogLevelWarning, true},
+		{"error string", "error", types.LogLevelError, true},
+		{"error number", "2", types.LogLevelError, true},
+		{"critical string", "critical", types.LogLevelCritical, true},
+		{"critical number", "1", types.LogLevelCritical, true},
+		{"uppercase", "DEBUG", types.LogLevelDebug, true},
+		{"mixed case", "Warning", types.LogLevelWarning, true},
+		{"none string refused", "none", types.LogLevelNone, false},
+		{"none number refused", "0", types.LogLevelNone, false},
+		{"out of range number refused", "6", types.LogLevelNone, false},
+		{"short form refused", "warn", types.LogLevelNone, false},
+		{"unknown refused", "invalid", types.LogLevelNone, false},
+		{"leading whitespace refused", " debug", types.LogLevelNone, false},
+		{"trailing whitespace refused", "debug ", types.LogLevelNone, false},
+		{"empty string refused", "", types.LogLevelNone, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseLogLevel(tt.input)
-			if result != tt.expected {
-				t.Errorf("parseLogLevel(%q) = %v; want %v", tt.input, result, tt.expected)
+			result, ok := parseLogLevel(tt.input)
+			if result != tt.expected || ok != tt.ok {
+				t.Errorf("parseLogLevel(%q) = (%v, %v); want (%v, %v)", tt.input, result, ok, tt.expected, tt.ok)
 			}
 		})
 	}
@@ -211,14 +214,25 @@ func parseWithArgs(t *testing.T, cliArgs []string) *Args {
 	return Parse()
 }
 
-func TestPrintHelp(t *testing.T) {
-	var buf bytes.Buffer
+// printHelp writes the usage line and the flags registered on flag.CommandLine to
+// the writer it is given. The test runs against its own FlagSet and puts the
+// original flag.CommandLine back on cleanup, so the testing flags are still there
+// for the next -count pass.
+func TestPrintHelpWritesUsageAndRegisteredFlags(t *testing.T) {
+	origCommandLine := flag.CommandLine
+	t.Cleanup(func() {
+		flag.CommandLine = origCommandLine
+	})
+
 	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(&buf)
-	// register a couple of dummy flags so PrintDefaults emits content
+	// The FlagSet's own output is discarded, so the options reach buf only
+	// through the writer passed to printHelp.
+	flag.CommandLine.SetOutput(io.Discard)
+	// Register a couple of dummy flags so PrintDefaults emits content.
 	flag.CommandLine.String("config", "", "Path to configuration file")
 	flag.CommandLine.Bool("dry-run", false, "Perform a dry run")
 
+	var buf bytes.Buffer
 	printHelp(&buf, "proxsave")
 	out := buf.String()
 	if !strings.Contains(out, "Usage: proxsave [options]") {
@@ -243,6 +257,7 @@ func TestPrintVersion(t *testing.T) {
 
 func TestShowHelpPrintsAndExitsZero(t *testing.T) {
 	origExit := osExit
+	origStdout := os.Stdout
 	origStderr := os.Stderr
 	origCommandLine := flag.CommandLine
 	origArgs := os.Args
@@ -252,40 +267,103 @@ func TestShowHelpPrintsAndExitsZero(t *testing.T) {
 		exitCode = code
 	}
 
-	r, w, err := os.Pipe()
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	os.Stderr = w
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = outW
+	os.Stderr = errW
 
 	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-	flag.CommandLine.SetOutput(w)
+	flag.CommandLine.SetOutput(errW)
 	flag.CommandLine.Bool("dry-run", false, "Perform a dry run")
 	os.Args = []string{"proxsave-test"}
 
 	t.Cleanup(func() {
-		_ = w.Close()
-		_ = r.Close()
+		_ = outW.Close()
+		_ = outR.Close()
+		_ = errW.Close()
+		_ = errR.Close()
 		osExit = origExit
+		os.Stdout = origStdout
 		os.Stderr = origStderr
 		flag.CommandLine = origCommandLine
 		os.Args = origArgs
 	})
 
 	ShowHelp()
-	_ = w.Close()
+	_ = outW.Close()
+	_ = errW.Close()
 
-	outBytes, err := io.ReadAll(r)
+	outBytes, err := io.ReadAll(outR)
 	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
+		t.Fatalf("ReadAll stdout: %v", err)
 	}
-	out := string(outBytes)
-	if !strings.Contains(out, "Usage: proxsave-test [options]") {
-		t.Fatalf("help output missing usage line: %q", out)
+	errBytes, err := io.ReadAll(errR)
+	if err != nil {
+		t.Fatalf("ReadAll stderr: %v", err)
+	}
+	if out := string(outBytes); !strings.Contains(out, "Usage: proxsave-test [options]") || !strings.Contains(out, "-dry-run") {
+		t.Fatalf("help on stdout missing usage line or options: %q", out)
+	}
+	if len(errBytes) != 0 {
+		t.Fatalf("explicit help wrote to stderr: %q", errBytes)
 	}
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d; want 0", exitCode)
 	}
+}
+
+// A parse error is not output the operator asked for: its usage stays on stderr.
+func TestParseErrorUsageStaysOnStderr(t *testing.T) {
+	origStdout, origStderr, origUsage := os.Stdout, os.Stderr, flag.Usage
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = outW, errW
+	t.Cleanup(func() {
+		_ = outR.Close()
+		_ = errR.Close()
+		os.Stdout, os.Stderr, flag.Usage = origStdout, origStderr, origUsage
+	})
+
+	_ = parseWithArgsKeepingUsage(t, []string{"--bogus"})
+	_ = outW.Close()
+	_ = errW.Close()
+
+	outBytes, _ := io.ReadAll(outR)
+	errBytes, _ := io.ReadAll(errR)
+	if len(outBytes) != 0 {
+		t.Fatalf("parse error wrote to stdout: %q", outBytes)
+	}
+	if !strings.Contains(string(errBytes), "Usage: test-binary [options]") {
+		t.Fatalf("parse error usage missing from stderr: %q", errBytes)
+	}
+}
+
+// parseWithArgsKeepingUsage is parseWithArgs without blanking flag.Usage, so the
+// usage Parse installs for a parse error is the one that runs. The real CommandLine
+// routes its usage to flag.Usage; a fresh FlagSet has to be told to.
+func parseWithArgsKeepingUsage(t *testing.T, cliArgs []string) *Args {
+	t.Helper()
+	origCommandLine, origArgs := flag.CommandLine, os.Args
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+	flag.CommandLine.Usage = func() { flag.Usage() }
+	os.Args = append([]string{"test-binary"}, cliArgs...)
+	t.Cleanup(func() {
+		flag.CommandLine, os.Args = origCommandLine, origArgs
+	})
+	return Parse()
 }
 
 func TestShowVersionPrintsAndExitsZero(t *testing.T) {

@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -180,9 +181,7 @@ func assignUniquePBSOutputKeys[T any](items []T, identityFn func(T) string, base
 	baseKeys := make([]string, 0, len(items))
 	for idx, item := range items {
 		baseKey := strings.TrimSpace(baseKeyFn(item))
-		if baseKey == "" {
-			baseKey = "entry"
-		}
+		baseKey = cmp.Or(baseKey, "entry")
 
 		identity := strings.TrimSpace(identityFn(item))
 		if identity == "" {
@@ -200,21 +199,19 @@ func assignUniquePBSOutputKeys[T any](items []T, identityFn func(T) string, base
 		})
 	}
 
-	sort.Strings(baseKeys)
+	slices.Sort(baseKeys)
 
 	usedKeys := make(map[string]string, len(items))
 	identityKeys := make(map[string]string, len(items))
 
 	for _, baseKey := range baseKeys {
 		assignments := grouped[baseKey]
-		sort.SliceStable(assignments, func(i, j int) bool {
-			if assignments[i].Priority != assignments[j].Priority {
-				return assignments[i].Priority < assignments[j].Priority
-			}
-			if assignments[i].Identity != assignments[j].Identity {
-				return assignments[i].Identity < assignments[j].Identity
-			}
-			return assignments[i].Index < assignments[j].Index
+		slices.SortStableFunc(assignments, func(a, b pbsOutputKeyAssignment) int {
+			return cmp.Or(
+				cmp.Compare(a.Priority, b.Priority),
+				strings.Compare(a.Identity, b.Identity),
+				cmp.Compare(a.Index, b.Index),
+			)
 		})
 
 		for pos, assignment := range assignments {
@@ -552,10 +549,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 	)
 
 	for _, ds := range state.eligible {
-		ds := ds
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -576,7 +570,7 @@ func (c *Collector) runPBSPXARStep(ctx context.Context, state *pbsPxarState, fn 
 				errs = append(errs, err)
 				errMu.Unlock()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

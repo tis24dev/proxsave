@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -63,5 +64,18 @@ Name=lan0
 	}
 	if !linkFound {
 		t.Fatalf("expected systemd-link naming override to be detected; rules=%#v", report.Rules)
+	}
+}
+
+// A .link file matching several MACs yields one rule per MAC, in sorted MAC order.
+func TestParseSystemdLinkNamingOverridesOrdersRulesByMAC(t *testing.T) {
+	content := "[Match]\nMACAddress=aa:bb:cc:00:00:02 aa:bb:cc:00:00:01\n\n[Link]\nName=lan0\n"
+	rules := parseSystemdLinkNamingOverrides("/etc/systemd/network/10-lan0.link", content)
+	var got []string
+	for _, r := range rules {
+		got = append(got, r.MAC)
+	}
+	if want := []string{"aa:bb:cc:00:00:01", "aa:bb:cc:00:00:02"}; !slices.Equal(got, want) {
+		t.Fatalf("rule MACs = %v, want %v", got, want)
 	}
 }

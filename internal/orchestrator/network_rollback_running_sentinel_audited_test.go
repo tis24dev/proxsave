@@ -70,8 +70,7 @@ func TestCommitNetworkConfig_NotCommittedWhileNohupRollbackRunning(t *testing.T)
 	}
 
 	err := f.commitNetworkConfig()
-	var nc *NetworkApplyNotCommittedError
-	if !errors.As(err, &nc) {
+	if _, ok := errors.AsType[*NetworkApplyNotCommittedError](err); !ok {
 		t.Fatalf("commitNetworkConfig while the rollback is running = %v; want *NetworkApplyNotCommittedError", err)
 	}
 	// commit must NOT have disarmed: marker and sentinel stay for the running revert.

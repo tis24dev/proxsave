@@ -184,7 +184,7 @@ func denyPVEEvidence(suffix string) func(*testing.T, *Collector, string) {
 func assertPVEDiagnosticEvents(t *testing.T, output, prefix string, want []string) {
 	t.Helper()
 	var got []string
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		_, line, ok := strings.Cut(line, "] ")
 		if !ok || len(line) < 9 {
 			continue

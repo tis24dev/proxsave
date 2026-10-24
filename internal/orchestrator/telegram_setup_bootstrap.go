@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"os"
 	"strings"
 
@@ -39,10 +40,7 @@ func TruncateTelegramSetupStatusMessage(msg string) string {
 	if len(runes) <= TelegramSetupStatusMessageMaxRunes {
 		return msg
 	}
-	keep := TelegramSetupStatusMessageMaxRunes - len([]rune(telegramSetupTruncationSuffix))
-	if keep < 0 {
-		keep = 0
-	}
+	keep := max(TelegramSetupStatusMessageMaxRunes-len([]rune(telegramSetupTruncationSuffix)), 0)
 	return string(runes[:keep]) + telegramSetupTruncationSuffix
 }
 
@@ -101,12 +99,8 @@ func BuildTelegramSetupBootstrap(configPath, baseDir string) (TelegramSetupBoots
 		return state, nil
 	}
 
-	if state.TelegramMode == "" {
-		state.TelegramMode = "centralized"
-	}
-	if state.ServerAPIHost == "" {
-		state.ServerAPIHost = defaultServerAPIHost
-	}
+	state.TelegramMode = cmp.Or(state.TelegramMode, "centralized")
+	state.ServerAPIHost = cmp.Or(state.ServerAPIHost, defaultServerAPIHost)
 
 	if state.TelegramMode == "personal" {
 		state.Eligibility = TelegramSetupSkipPersonalMode

@@ -55,7 +55,7 @@ func waitForBuffer(t *testing.T, buf *shell.SyncBuffer, want string) {
 func TestStreamScreenRetainsAllLines(t *testing.T) {
 	scr := newStreamScreen("Running backup", 5, func() {})
 	const n = 20
-	for i := 0; i < n; i++ {
+	for i := range n {
 		updated, _ := scr.Update(StreamLineMsg{Token: 5, Line: fmt.Sprintf("line %d", i)})
 		scr = updated.(*StreamTask)
 	}
@@ -63,7 +63,7 @@ func TestStreamScreenRetainsAllLines(t *testing.T) {
 		t.Fatalf("ring should hold %d lines, got %d", n, len(scr.lines))
 	}
 	out := scr.View(80, 40)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if !strings.Contains(out, fmt.Sprintf("line %d", i)) {
 			t.Fatalf("view missing %q\n%s", fmt.Sprintf("line %d", i), out)
 		}
@@ -117,7 +117,7 @@ func TestStreamScreenIgnoresForeignToken(t *testing.T) {
 // flagging the truncation.
 func TestStreamScreenRingCap(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
-	for i := 0; i < streamLineCap+50; i++ {
+	for i := range streamLineCap + 50 {
 		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
 		scr = updated.(*StreamTask)
 	}
@@ -239,7 +239,7 @@ func TestStreamScreenKeepsBlankLines(t *testing.T) {
 func TestStreamScreenScrollUpStopsFollow(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
 	// Fill enough lines to make the panel scrollable, then size the viewport.
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
 		scr = updated.(*StreamTask)
 	}
@@ -265,7 +265,7 @@ func TestStreamScreenScrollUpStopsFollow(t *testing.T) {
 // auto-follow; a wheel-down back to the bottom resumes it.
 func TestStreamScreenWheelTogglesFollow(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
 		scr = updated.(*StreamTask)
 	}
@@ -278,7 +278,7 @@ func TestStreamScreenWheelTogglesFollow(t *testing.T) {
 	if scr.follow {
 		t.Fatal("wheel up must stop auto-follow")
 	}
-	for i := 0; i < 20; i++ { // wheel down back to the bottom
+	for range 20 { // wheel down back to the bottom
 		updated, _ = scr.Update(wheel(true))
 		scr = updated.(*StreamTask)
 	}
@@ -337,7 +337,7 @@ func TestRunStreamTaskDriverPropagatesError(t *testing.T) {
 // cannot grow it without limit; the newest lines survive.
 func TestStreamEmitBufferCapsPending(t *testing.T) {
 	b := &streamEmitBuffer{wake: make(chan struct{}, 1)} // no flusher goroutine
-	for i := 0; i < streamPendingCap*3; i++ {
+	for i := range streamPendingCap * 3 {
 		b.emit(fmt.Sprintf("l%d", i))
 	}
 	if len(b.pending) > streamPendingCap {
@@ -354,12 +354,12 @@ func TestStreamEmitBufferCapsPending(t *testing.T) {
 // reviewed content stays pinned to the same logical lines instead of drifting.
 func TestStreamRingDropKeepsReviewedContentPinned(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
-	for i := 0; i < streamLineCap; i++ {
+	for i := range streamLineCap {
 		updated, _ := scr.Update(StreamLineMsg{Token: 1, Line: fmt.Sprintf("l%d", i)})
 		scr = updated.(*StreamTask)
 	}
-	scr.View(80, 10)         // size + wrap + follow at bottom
-	for i := 0; i < 3; i++ { // scroll up a few rows -> stop follow, review recent history
+	scr.View(80, 10) // size + wrap + follow at bottom
+	for range 3 {    // scroll up a few rows -> stop follow, review recent history
 		updated, _ := scr.Update(shell.KeyMsg("up"))
 		scr = updated.(*StreamTask)
 	}

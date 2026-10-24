@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -150,7 +150,7 @@ func (a *NotifyPolicyAck) Confirms(requested string, channels []string) bool {
 func sameSet(a, b []string) bool {
 	x := append([]string(nil), a...)
 	y := append([]string(nil), b...)
-	sort.Strings(x)
-	sort.Strings(y)
+	slices.Sort(x)
+	slices.Sort(y)
 	return strings.Join(x, ",") == strings.Join(y, ",")
 }

@@ -371,7 +371,7 @@ func (m *MultiSelect[T]) View(width, height int) string {
 		}
 		rightLines := m.detailLines(rightWidth, rows)
 		n := max(len(leftLines), len(rightLines))
-		for i := 0; i < n; i++ {
+		for i := range n {
 			l, r := "", ""
 			if i < len(leftLines) {
 				l = leftLines[i]

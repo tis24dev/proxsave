@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net"
@@ -156,9 +157,7 @@ func runNetworkHealthChecks(ctx context.Context, opts networkHealthOptions) netw
 	}
 
 	validationDev := sshRoute.Dev
-	if validationDev == "" {
-		validationDev = defaultRoute.Dev
-	}
+	validationDev = cmp.Or(validationDev, defaultRoute.Dev)
 	if strings.TrimSpace(validationDev) == "" {
 		report.add("Interface", networkHealthWarn, "no interface to validate (no SSH route and no default route)")
 	} else {
@@ -243,13 +242,9 @@ func runNetworkHealthChecks(ctx context.Context, opts networkHealthOptions) netw
 		for _, check := range opts.LocalPortChecks {
 			logging.DebugStep(opts.Logger, "network health checks", "Local port check: %s %s:%d", strings.TrimSpace(check.Name), strings.TrimSpace(check.Address), check.Port)
 			name := strings.TrimSpace(check.Name)
-			if name == "" {
-				name = "Local port"
-			}
+			name = cmp.Or(name, "Local port")
 			addr := strings.TrimSpace(check.Address)
-			if addr == "" {
-				addr = "127.0.0.1"
-			}
+			addr = cmp.Or(addr, "127.0.0.1")
 			if check.Port <= 0 || check.Port > 65535 {
 				report.add(name, networkHealthWarn, fmt.Sprintf("invalid port: %d", check.Port))
 				continue
@@ -302,7 +297,7 @@ func readResolvConfNameservers() ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
@@ -336,7 +331,7 @@ func ipDefaultRoute(ctx context.Context, timeout time.Duration) (ipRouteInfo, er
 	if text == "" {
 		return ipRouteInfo{}, nil
 	}
-	first := strings.SplitN(text, "\n", 2)[0]
+	first, _, _ := strings.Cut(text, "\n")
 	return parseIPRouteInfo(first), nil
 }
 
@@ -387,7 +382,7 @@ func ipGlobalAddresses(ctx context.Context, iface string, timeout time.Duration)
 	}
 
 	var addrs []string
-	for _, line := range strings.Split(string(output), "\n") {
+	for line := range strings.SplitSeq(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

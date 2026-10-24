@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -187,13 +188,7 @@ func TestCheckZFSPoolsAfterRestore_ConfiguredPools_NoImportables(t *testing.T) {
 	}
 
 	for _, want := range []string{"which zpool", "zpool import", "zpool status tank", "zpool status backup_ext"} {
-		found := false
-		for _, call := range fake.Calls {
-			if call == want {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(fake.Calls, want)
 		if !found {
 			t.Fatalf("expected call %q, got calls=%#v", want, fake.Calls)
 		}
@@ -228,13 +223,7 @@ func TestCheckZFSPoolsAfterRestore_ReportsImportablePools(t *testing.T) {
 	}
 
 	for _, want := range []string{"which zpool", "zpool import"} {
-		found := false
-		for _, call := range fake.Calls {
-			if call == want {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(fake.Calls, want)
 		if !found {
 			t.Fatalf("expected call %q, got calls=%#v", want, fake.Calls)
 		}

@@ -796,7 +796,10 @@ func (a *Archiver) attachStderrLogger(cmd *exec.Cmd, algo string) error {
 
 func drainTarWriterAfterCompressorStartFailure(pw *io.PipeWriter, errChan <-chan error, startErr error) {
 	_ = pw.CloseWithError(startErr)
-	<-errChan
+	// Wait for the tar writer to exit: its producer always closes errChan, and the
+	// failure to report is startErr, which the caller already returns.
+	for range errChan {
+	}
 }
 
 // createArchiveOutputFile creates the archive file of a backup run with

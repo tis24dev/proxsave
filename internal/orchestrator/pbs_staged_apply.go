@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -628,8 +629,8 @@ func parsePBSDatastoreCfgBlocks(content string) ([]pbsDatastoreBlock, error) {
 		current = nil
 	}
 
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			if current != nil {
@@ -1081,7 +1082,7 @@ var (
 // pbsConfigCommentsOnly reports whether content holds only comments and blank
 // lines.
 func pbsConfigCommentsOnly(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			return false
 		}
@@ -1116,9 +1117,7 @@ func applyPBSConfigFileBlock(logger *logging.Logger, stageRoot string, f pbsConf
 	}
 	trimmed := strings.TrimSpace(string(data))
 	perm := f.perm
-	if perm == 0 {
-		perm = 0o640
-	}
+	perm = cmp.Or(perm, 0o640)
 	var writeErr error
 	switch {
 	case f.json && trimmed == "":
@@ -1307,7 +1306,7 @@ func applyPBSConfigFileFromStage(ctx context.Context, logger *logging.Logger, st
 }
 
 func pbsConfigHasHeader(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue

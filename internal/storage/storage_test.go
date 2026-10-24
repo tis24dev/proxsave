@@ -242,7 +242,7 @@ func TestLocalStorageApplyRetentionDeletesOldBackups(t *testing.T) {
 		mod  time.Time
 	}
 	var metas []backupMeta
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		name := filepath.Join(dir, "node-backup-"+time.Now().Add(time.Duration(i)*time.Second).Format("20060102-150405")+".tar.zst")
 		if err := os.WriteFile(name, []byte{byte(i)}, 0o600); err != nil {
 			t.Fatalf("write backup: %v", err)
@@ -924,7 +924,6 @@ func TestExtractLogKeyFromBackup(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			host, ts, ok := extractLogKeyFromBackup(tt.backupFile)
 			if ok != tt.wantOK {
@@ -953,7 +952,6 @@ func TestComputeRemaining(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			remain, ok := computeRemaining(tt.initial, tt.deleted)
 			if ok != tt.wantOK || remain != tt.wantRemain {
@@ -993,7 +991,7 @@ func TestLocalStorageCountLogFiles(t *testing.T) {
 
 	t.Run("counts files", func(t *testing.T) {
 		logDir := t.TempDir()
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			name := fmt.Sprintf("backup-node-2024010%d-000000.log", i+1)
 			if err := os.WriteFile(filepath.Join(logDir, name), []byte("log"), 0o600); err != nil {
 				t.Fatalf("write log: %v", err)
@@ -1077,7 +1075,7 @@ func TestClassifyBackupsGFSLimitsDailyCount(t *testing.T) {
 	now := time.Now()
 
 	var backups []*types.BackupMetadata
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		backups = append(backups, &types.BackupMetadata{
 			BackupFile: fmt.Sprintf("backup-%d", i),
 			Timestamp:  now.Add(-time.Duration(i) * time.Hour),
@@ -1256,7 +1254,7 @@ func TestSecondaryStorageCountLogFiles(t *testing.T) {
 
 	t.Run("counts files", func(t *testing.T) {
 		logDir := t.TempDir()
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			name := fmt.Sprintf("backup-node-2024010%d-000000.log", i+1)
 			if err := os.WriteFile(filepath.Join(logDir, name), []byte("log"), 0o600); err != nil {
 				t.Fatalf("write log: %v", err)
@@ -1309,7 +1307,7 @@ func TestSecondaryStorageApplyRetentionSimple(t *testing.T) {
 		ts   time.Time
 	}
 	var infos []backupInfo
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		ts := baseTime.Add(-time.Duration(i) * time.Hour)
 		path := createSecondaryBackup(t, backupDir, logDir, "node-simple", ts)
 		// Completion sidecar so List marks the backup Verified (retention gate).

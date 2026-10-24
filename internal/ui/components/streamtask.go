@@ -199,7 +199,7 @@ func (t *StreamTask) appendRaw(raw string) {
 			// Shed exactly the wrapped rows of the oldest `drop` raw lines
 			// (computed BEFORE slicing lines), O(drop) not O(cap).
 			dropRows := 0
-			for i := 0; i < drop; i++ {
+			for i := range drop {
 				dropRows += len(wrapLine(t.lines[i], t.wrapWidth))
 			}
 			t.wrapped = t.wrapped[dropRows:]
@@ -345,10 +345,7 @@ func (t *StreamTask) View(width, height int) string {
 	if outcome != "" {
 		reserved += lipglossCount(outcome, width) + 1 /*rule below panel*/
 	}
-	bodyH := height - reserved
-	if bodyH < 1 {
-		bodyH = 1
-	}
+	bodyH := max(height-reserved, 1)
 
 	// Size FIRST (garble fix 80704d7 / memory proxsave-charm-viewport-gotcha):
 	// SetWidth/SetHeight then SetContentLines, both here in View, so the content
@@ -492,10 +489,7 @@ func wrapLine(line string, width int) []string {
 			// whole rather than dropping it, and step past it. This keeps wrapLine
 			// total (no silent drop) and the loop always progressing.
 			chunk = ansi.Cut(line, idx, idx+2)
-			cw = ansi.StringWidth(chunk)
-			if cw < 1 {
-				cw = 1
-			}
+			cw = max(ansi.StringWidth(chunk), 1)
 		}
 		rows = append(rows, chunk)
 		idx += cw
@@ -513,7 +507,7 @@ func lipglossCount(s string, width int) int {
 		width = 1
 	}
 	rows := 0
-	for _, seg := range strings.Split(s, "\n") {
+	for seg := range strings.SplitSeq(s, "\n") {
 		w := ansi.StringWidth(seg)
 		if w <= width {
 			rows++

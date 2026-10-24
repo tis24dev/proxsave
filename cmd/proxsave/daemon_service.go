@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -56,9 +57,7 @@ var daemonUnitPath = filepath.Join(daemonUnitDir, daemonUnitName)
 // abandon path, so nothing has to be redelivered to hosts already running an installed unit.
 func buildDaemonUnit(execToken, configPath string) string {
 	exec := strings.TrimSpace(execToken)
-	if exec == "" {
-		exec = daemonExecPath
-	}
+	exec = cmp.Or(exec, daemonExecPath)
 	cmd := exec + " --daemon"
 	if p := strings.TrimSpace(configPath); p != "" {
 		cmd += " --config " + p

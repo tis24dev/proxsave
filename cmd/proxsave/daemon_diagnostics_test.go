@@ -455,3 +455,28 @@ func TestTheSynchronizationDebugPrecedesTheVerdict(t *testing.T) {
 		t.Fatalf("the debug detail must precede the verdict it explains:\n%s", out)
 	}
 }
+
+// A unit whose active state cannot be read reports it as unknown.
+func TestCollectDaemonDiagnosticsDefaultsABlankActiveState(t *testing.T) {
+	origInstalled := daemonStatusUnitInstalledProbe
+	origActive := daemonStatusActiveStateProbe
+	origPresence := daemonPresenceProbe
+	origNow := daemonStatusNow
+	t.Cleanup(func() {
+		daemonStatusUnitInstalledProbe = origInstalled
+		daemonStatusActiveStateProbe = origActive
+		daemonPresenceProbe = origPresence
+		daemonStatusNow = origNow
+	})
+	daemonStatusUnitInstalledProbe = func() bool { return true }
+	daemonStatusActiveStateProbe = func(context.Context) string { return "" }
+	daemonPresenceProbe = func(context.Context) health.DaemonPresence {
+		return health.DaemonPresence{Probed: true, Installed: true}
+	}
+	daemonStatusNow = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	cfg := &config.Config{SchedulerMode: "daemon", BaseDir: t.TempDir()}
+	if got := collectDaemonDiagnostics(context.Background(), cfg, nil, cfg.BaseDir); got.Active != "unknown" {
+		t.Fatalf("Active = %q, want %q", got.Active, "unknown")
+	}
+}

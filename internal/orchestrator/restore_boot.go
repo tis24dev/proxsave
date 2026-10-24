@@ -1,12 +1,13 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -216,7 +217,7 @@ func grubMentionsCmdlineDefault(line string) bool {
 // GRUB_CMDLINE_LINUX_DEFAULT. update-grub reads the drop-ins after /etc/default/grub,
 // so a value written there could be overridden or rebuilt.
 func grubDropInSetsCmdlineDefault(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if grubMentionsCmdlineDefault(line) {
 			return true
 		}
@@ -278,9 +279,7 @@ func setGrubCmdlineDefault(content string, merge func(current string) string) (u
 	if next == value {
 		return content, value, nil
 	}
-	if quote == "" {
-		quote = `"`
-	}
+	quote = cmp.Or(quote, `"`)
 	if (quote == `'` && strings.Contains(next, `'`)) || (quote == `"` && strings.ContainsAny(next, grubUnsafeInDoubleQuotes)) {
 		return "", "", fmt.Errorf("the merged value cannot be quoted in %s", grubCmdlineDefaultVar)
 	}
@@ -329,7 +328,7 @@ var proxmoxBootStatusLine = regexp.MustCompile(`^(\S+) is configured with: (.*)$
 func detectBootTarget(ctx context.Context, destRoot string) bootTarget {
 	grubFile := filepath.Join(destRoot, "etc/default/grub")
 	cmdlineFile := filepath.Join(destRoot, "etc/kernel/cmdline")
-	unknown := func(t bootTarget, format string, args ...interface{}) bootTarget {
+	unknown := func(t bootTarget, format string, args ...any) bootTarget {
 		t.kind, t.file, t.reason = bootLoaderUnknown, "", fmt.Sprintf(format, args...)
 		return t
 	}
@@ -355,7 +354,7 @@ func detectBootTarget(ctx context.Context, destRoot string) bootTarget {
 	}
 	modes := map[string]bool{}
 	esps := 0
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		m := proxmoxBootStatusLine.FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
 			continue
@@ -406,7 +405,7 @@ func bootPathExists(path string) bool {
 
 func nonEmptyLines(s string) []string {
 	var out []string
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		if strings.TrimSpace(line) != "" {
 			out = append(out, line)
 		}
@@ -517,7 +516,7 @@ func grubDropInSettingCmdlineDefault(destRoot string) string {
 			names = append(names, e.Name())
 		}
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		data, err := restoreFS.ReadFile(path)

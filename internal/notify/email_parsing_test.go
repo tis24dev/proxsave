@@ -189,7 +189,6 @@ func TestInspectMailLogStatus_Variants(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			status, matched, usedPath := notifier.inspectMailLogStatus(context.Background(), tt.queueID)
 			if status != tt.want {

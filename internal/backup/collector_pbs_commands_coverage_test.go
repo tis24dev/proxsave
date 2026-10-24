@@ -29,7 +29,7 @@ func TestCollectPBSCommandsWritesExpectedOutputs(t *testing.T) {
 			return "/bin/" + name, nil
 		},
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+			return fmt.Appendf(nil, "%s %s", name, strings.Join(args, " ")), nil
 		},
 	}
 
@@ -107,7 +107,7 @@ func TestCollectPBSCommandsSkipsStatusForOverrideOnlyEntries(t *testing.T) {
 			return "/bin/" + name, nil
 		},
 		RunCommand: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return []byte(fmt.Sprintf("%s %s", name, strings.Join(args, " "))), nil
+			return fmt.Appendf(nil, "%s %s", name, strings.Join(args, " ")), nil
 		},
 	})
 
@@ -431,7 +431,7 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 				return []byte("ok"), nil
 			}
 			if len(args) >= 3 && args[0] == "datastore" && args[1] == "list" {
-				return []byte(fmt.Sprintf(`[{"name":"store","path":"%s","comment":"main"}]`, dsPath)), nil
+				return fmt.Appendf(nil, `[{"name":"store","path":"%s","comment":"main"}]`, dsPath), nil
 			}
 			if len(args) >= 3 && args[0] == "user" && args[1] == "list" {
 				return []byte(`[{"userid":"user@pam"},{"userid":"second@pve"}]`), nil

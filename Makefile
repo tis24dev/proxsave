@@ -87,7 +87,11 @@ coverage-check:
 # Lint
 lint: check-no-tview check-serverbot-leaf
 	go vet ./...
-	@command -v golint >/dev/null 2>&1 && golint ./... || echo "golint not installed"
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not installed"; \
+	fi
 
 # Guard: the legacy tview/tcell stack was excised (Charm UI replaced it);
 # any reappearance is a regression.

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -180,7 +180,7 @@ func parsePBSListIDs(raw []byte, candidateKeys ...string) ([]string, error) {
 			for k := range row {
 				available = append(available, k)
 			}
-			sort.Strings(available)
+			slices.Sort(available)
 			return nil, fmt.Errorf("failed to parse PBS list row %d: none of %v present as non-empty string (available keys: %v)", idx, keys, available)
 		}
 		if _, ok := seen[id]; ok {
@@ -189,7 +189,7 @@ func parsePBSListIDs(raw []byte, candidateKeys ...string) ([]string, error) {
 		seen[id] = struct{}{}
 		out = append(out, id)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out, nil
 }
 
@@ -253,12 +253,7 @@ type pbsSectionCfg struct {
 }
 
 func (c pbsSectionCfg) isBuiltin(id string) bool {
-	for _, b := range c.builtin {
-		if b == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.builtin, id)
 }
 
 func (c pbsSectionCfg) verb(verb, override string) string {
@@ -669,7 +664,7 @@ func pbsSyncJobsByRemote(path string) (byRemote map[string][]string, jobs int, e
 		}
 	}
 	for remote := range byRemote {
-		sort.Strings(byRemote[remote])
+		slices.Sort(byRemote[remote])
 	}
 	return byRemote, jobs, nil
 }
@@ -705,7 +700,7 @@ func pbsSectionFileBlocks(content string) map[string][]string {
 		}
 		name, lines = "", nil
 	}
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			if _, header, ok := parseProxmoxNotificationHeader(trimmed); ok {
@@ -1133,11 +1128,11 @@ func pbsManagerErrorLine(err error) string {
 	text := pbsManagerErrorText(err)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		idx := strings.Index(line, "Error: ")
-		if idx < 0 {
+		_, after, ok := strings.Cut(line, "Error: ")
+		if !ok {
 			continue
 		}
-		head := strings.TrimSpace(line[idx+len("Error: "):])
+		head := strings.TrimSpace(after)
 		// Several refusals at once come as "Error: ...:" and one "- ..." line
 		// each (measured on PBS 4.2.8): they are all part of the refusal.
 		var items []string
@@ -1570,7 +1565,7 @@ func pbsSortedNames[V any](m map[string]V) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
 
@@ -1785,13 +1780,13 @@ var pbsNodeSecretFlags = []string{"--http-proxy"}
 // in the file's order, the description last.
 func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
 	var description []string
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "#") {
-			description = append(description, strings.TrimPrefix(trimmed, "#"))
+		if after, ok := strings.CutPrefix(trimmed, "#"); ok {
+			description = append(description, after)
 			continue
 		}
 		key, value, ok := strings.Cut(trimmed, ":")

@@ -249,7 +249,7 @@ func TestAbandonPingsTheBackupCheckBeforeWritingTheMarker(t *testing.T) {
 	d := newAbandonDaemon(t, rep, 150*time.Millisecond)
 
 	done := make(chan bool, 1)
-	go func() { done <- d.runOnce(context.Background()) }()
+	go func() { done <- d.runOnce(t.Context()) }()
 
 	select {
 	case <-rep.entered:
@@ -390,11 +390,11 @@ func TestAbandonWaitsForAnInFlightBeat(t *testing.T) {
 	d := newAbandonDaemon(t, rep, 150*time.Millisecond)
 
 	beatDone := make(chan struct{})
-	go func() { defer close(beatDone); d.beat(context.Background()) }()
+	go func() { defer close(beatDone); d.beat(t.Context()) }()
 	<-rep.entered // the beat is now INSIDE the transmission, past the latch check
 
 	abandonDone := make(chan bool, 1)
-	go func() { abandonDone <- d.runOnce(context.Background()) }()
+	go func() { abandonDone <- d.runOnce(t.Context()) }()
 
 	// runOnce reaches the abandon in ~350ms (budget + reap deadline). It must still not have
 	// reported: the beat it would be overtaken by is on the wire.
@@ -875,7 +875,7 @@ func TestAStalledOrphanProbeIsNeverReissued(t *testing.T) {
 		return true
 	}
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if !d.pidIsAbandonedChild(4242, 7) {
 			t.Fatal("a probe that cannot answer must count as the orphan still being there")
 		}
@@ -1061,7 +1061,7 @@ func TestAbandonReportsEvenWhenTheHeartbeatInterlockIsStuck(t *testing.T) {
 	defer d.aliveMu.Unlock()
 
 	done := make(chan bool, 1)
-	go func() { done <- d.runOnce(context.Background()) }()
+	go func() { done <- d.runOnce(t.Context()) }()
 	select {
 	case abandoned := <-done:
 		if !abandoned {
@@ -1085,7 +1085,7 @@ func TestAbandonPingsTheBackupCheckBeforeTouchingTheAliveInterlock(t *testing.T)
 
 	d.aliveMu.Lock()
 	done := make(chan bool, 1)
-	go func() { done <- d.runOnce(context.Background()) }()
+	go func() { done <- d.runOnce(t.Context()) }()
 
 	reported := false
 	deadline := time.Now().Add(5 * time.Second)
@@ -1113,7 +1113,7 @@ func TestScheduleLoopUnwindsOnAbandon(t *testing.T) {
 	d.now = func() time.Time { return time.Date(2026, 1, 2, 2, 59, 59, 750*int(time.Millisecond), time.UTC) }
 
 	done := make(chan bool, 1)
-	go func() { done <- d.scheduleLoop(context.Background()) }()
+	go func() { done <- d.scheduleLoop(t.Context()) }()
 	select {
 	case abandoned := <-done:
 		if !abandoned {
@@ -1140,7 +1140,7 @@ func TestRunExitsAfterAbandoningUnreapableChild(t *testing.T) {
 	d.now = func() time.Time { return time.Date(2026, 1, 2, 2, 59, 59, 750*int(time.Millisecond), time.UTC) }
 
 	code := make(chan int, 1)
-	go func() { code <- d.run(context.Background()) }()
+	go func() { code <- d.run(t.Context()) }()
 	select {
 	case got := <-code:
 		if got != types.ExitBackupError.Int() {

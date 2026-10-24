@@ -66,8 +66,8 @@ func detectLegacyPVEPrefix(archivePaths []string) string {
 		}
 		if idx := strings.Index(clean, "/etc/pve/"); idx > 0 {
 			candidates[clean[:idx]] = true
-		} else if strings.HasSuffix(clean, "/etc/pve") {
-			candidates[strings.TrimSuffix(clean, "/etc/pve")] = true
+		} else if before, ok := strings.CutSuffix(clean, "/etc/pve"); ok {
+			candidates[before] = true
 		}
 	}
 	if len(candidates) != 1 {

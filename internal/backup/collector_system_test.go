@@ -3067,3 +3067,37 @@ func TestSafeCopyDirSkipsStagingWorkspace(t *testing.T) {
 		t.Fatalf("staging workspace must not be copied into itself (#56), stat err=%v", err)
 	}
 }
+
+// An unavailable probe that gives no reason is logged with the default reason.
+func TestCollectBestEffortProbeDefaultsABlankSkipReason(t *testing.T) {
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&log)
+	collector := NewCollectorWithDeps(logger, GetDefaultCollectorConfig(), t.TempDir(), types.ProxmoxUnknown, false, CollectorDeps{
+		LookPath:                    func(string) (string, error) { return "/bin/tool", nil },
+		DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+	})
+
+	err := collector.collectBestEffortProbe(context.Background(), commandSpec("tool"), filepath.Join(t.TempDir(), "out.txt"), "tool", func() (bool, string) {
+		return false, ""
+	})
+	if err != nil {
+		t.Fatalf("collectBestEffortProbe unavailable = %v", err)
+	}
+	if want := "Skipping tool: required capability not detected"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
+	}
+}
+
+// An empty PATH starts from the standard system PATH, so the bin directories
+// survive next to the sbin ones ensureSystemPath always adds.
+func TestEnsureSystemPathDefaultsAnEmptyPATH(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	ensureSystemPath()
+
+	want := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if got := os.Getenv("PATH"); got != want {
+		t.Fatalf("PATH = %q, want %q", got, want)
+	}
+}

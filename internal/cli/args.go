@@ -80,6 +80,13 @@ type Args struct {
 	DaemonSetup                      bool
 	DaemonRemove                     bool
 	DaemonStatus                     bool
+	// UnexpectedArgs holds the words left once flag parsing stopped: the flag package
+	// stops at the first word that is not a flag, so every flag after it is in here
+	// too, unread. Not a CLI flag; main refuses the run when it is not empty.
+	UnexpectedArgs []string
+	// InvalidLogLevel holds a --log-level value that is not a level, which leaves
+	// LogLevel unset. Not a CLI flag; main refuses the run when it is not empty.
+	InvalidLogLevel string
 }
 
 var osExit = os.Exit
@@ -184,6 +191,7 @@ func Parse() *Args {
 	} else {
 		_ = flag.CommandLine.Parse(nil)
 	}
+	args.UnexpectedArgs = flag.CommandLine.Args()
 
 	args.ConfigPath = configFlag.value
 	if configFlag.set {
@@ -193,10 +201,13 @@ func Parse() *Args {
 	}
 
 	// Parse log level if provided
+	args.LogLevel = types.LogLevelNone // Will be overridden by config
 	if logLevelStr != "" {
-		args.LogLevel = parseLogLevel(logLevelStr)
-	} else {
-		args.LogLevel = types.LogLevelNone // Will be overridden by config
+		if level, ok := parseLogLevel(logLevelStr); ok {
+			args.LogLevel = level
+		} else {
+			args.InvalidLogLevel = logLevelStr
+		}
 	}
 
 	return args
@@ -232,29 +243,31 @@ func extractUpgradeAutoYesArgs(argv []string) ([]string, bool) {
 	return processed, autoYes
 }
 
-// parseLogLevel converts string to LogLevel
-func parseLogLevel(s string) types.LogLevel {
-	switch s {
+// parseLogLevel converts a --log-level value to a LogLevel, ignoring case, and
+// reports false for anything else. There is no "none": LogLevelNone means the flag
+// was not given, so accepting it handed the run to DEBUG_LEVEL instead.
+func parseLogLevel(s string) (types.LogLevel, bool) {
+	switch strings.ToLower(s) {
 	case "debug", "5":
-		return types.LogLevelDebug
+		return types.LogLevelDebug, true
 	case "info", "4":
-		return types.LogLevelInfo
+		return types.LogLevelInfo, true
 	case "warning", "3":
-		return types.LogLevelWarning
+		return types.LogLevelWarning, true
 	case "error", "2":
-		return types.LogLevelError
+		return types.LogLevelError, true
 	case "critical", "1":
-		return types.LogLevelCritical
-	case "none", "0":
-		return types.LogLevelNone
+		return types.LogLevelCritical, true
 	default:
-		return types.LogLevelInfo
+		return types.LogLevelNone, false
 	}
 }
 
-// ShowHelp displays help message and exits
+// ShowHelp displays help message and exits. An explicit --help is the output the
+// operator asked for, so it goes to stdout (`proxsave --help | less`); the usage
+// printed after a parse error stays on stderr.
 func ShowHelp() {
-	printHelp(os.Stderr, os.Args[0])
+	printHelp(os.Stdout, os.Args[0])
 	osExit(0)
 }
 

@@ -51,7 +51,7 @@ func TestRunTelegramSetupScrubsTheRelayStatusMessage(t *testing.T) {
 	}
 	resCh := make(chan outcome, 1)
 	go func() {
-		res, err := RunTelegramSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
+		res, err := RunTelegramSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", false)
 		resCh <- outcome{res, err}
 	}()
 

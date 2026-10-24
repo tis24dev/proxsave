@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -380,13 +381,7 @@ func TestCephConfigPaths(t *testing.T) {
 			}
 
 			for _, expected := range tt.expectContains {
-				found := false
-				for _, path := range paths {
-					if path == expected {
-						found = true
-						break
-					}
-				}
+				found := slices.Contains(paths, expected)
 				if !found {
 					t.Errorf("cephConfigPaths() should contain %q, got: %v", expected, paths)
 				}
@@ -842,5 +837,18 @@ func TestEffectivePVEConfigPathDetailed(t *testing.T) {
 				t.Errorf("effectivePVEConfigPath() = %q, want %q", result, tt.expected)
 			}
 		})
+	}
+}
+
+// A blank PVEConfigPath still looks for ceph under /etc/pve.
+func TestCephConfigPathsDefaultsABlankPVEConfigPath(t *testing.T) {
+	cfg := GetDefaultCollectorConfig()
+	cfg.PVEConfigPath = "  "
+	cfg.CephConfigPath = ""
+	collector := NewCollector(newTestLogger(), cfg, t.TempDir(), "pve", false)
+
+	paths := collector.cephConfigPaths()
+	if !slices.Contains(paths, "/etc/pve/ceph") {
+		t.Fatalf("cephConfigPaths() = %v, want it to contain %q", paths, "/etc/pve/ceph")
 	}
 }

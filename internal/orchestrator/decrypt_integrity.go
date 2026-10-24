@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -68,9 +69,7 @@ func resolveCandidateIntegrityExpectation(staged stagedFiles, cand *backupCandid
 			Checksum: normalized,
 			Source:   strings.TrimSpace(cand.Integrity.Source),
 		}
-		if expectation.Source == "" {
-			expectation.Source = "candidate"
-		}
+		expectation.Source = cmp.Or(expectation.Source, "candidate")
 
 		if strings.TrimSpace(staged.ChecksumPath) != "" {
 			data, err := restoreFS.ReadFile(staged.ChecksumPath)

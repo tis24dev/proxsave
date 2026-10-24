@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -15,9 +16,7 @@ type archiveDecryptFunc func(ctx context.Context, encryptedPath, outputPath, dis
 
 func createUniquePreparedArchivePath(workDir, baseName string) (string, error) {
 	pattern := strings.TrimSpace(baseName)
-	if pattern == "" {
-		pattern = "archive"
-	}
+	pattern = cmp.Or(pattern, "archive")
 	tempFile, err := restoreFS.CreateTemp(workDir, pattern+".decrypted-*")
 	if err != nil {
 		return "", fmt.Errorf("create archive output path: %w", err)
@@ -54,9 +53,7 @@ func resolvePreparedArchivePath(workDir, stagedArchivePath, currentEncryption st
 
 	if strings.HasSuffix(archiveBase, ".age") {
 		mode := currentEncryption
-		if mode == "" {
-			mode = "plain"
-		}
+		mode = cmp.Or(mode, "plain")
 		return "", fmt.Errorf("archive %s has .age suffix but encryption mode is %s", stagedArchivePath, mode)
 	}
 

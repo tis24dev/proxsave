@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -28,26 +28,22 @@ var (
 	postInstallAuditDisableHintRe = regexp.MustCompile(`(?i)\bset\s+([A-Z0-9_]+)=false\b`)
 	postInstallAuditANSISGRRe     = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-	postInstallAuditAllowedKeysOnce sync.Once
-	postInstallAuditAllowedKeys     map[string]struct{}
-
 	postInstallAuditRunner = runPostInstallAuditDryRun
 )
 
-func postInstallAuditAllowedKeysSet() map[string]struct{} {
-	postInstallAuditAllowedKeysOnce.Do(func() {
-		allowed := make(map[string]struct{})
-		values := parseEnvTemplate(config.DefaultEnvTemplate())
-		for key := range values {
-			key = strings.ToUpper(strings.TrimSpace(key))
-			if strings.HasPrefix(key, "BACKUP_") {
-				allowed[key] = struct{}{}
-			}
+// postInstallAuditAllowedKeysSet is the set of BACKUP_* variables the shipped template
+// knows, computed once from the embedded template.
+var postInstallAuditAllowedKeysSet = sync.OnceValue(func() map[string]struct{} {
+	allowed := make(map[string]struct{})
+	values := parseEnvTemplate(config.DefaultEnvTemplate())
+	for key := range values {
+		key = strings.ToUpper(strings.TrimSpace(key))
+		if strings.HasPrefix(key, "BACKUP_") {
+			allowed[key] = struct{}{}
 		}
-		postInstallAuditAllowedKeys = allowed
-	})
-	return postInstallAuditAllowedKeys
-}
+	}
+	return allowed
+})
 
 func runPostInstallAuditDryRun(ctx context.Context, execPath, configPath string) (output string, exitCode int, err error) {
 	// Run a dry-run with warning-level logs to keep output minimal while still capturing
@@ -65,8 +61,7 @@ func runPostInstallAuditDryRun(ctx context.Context, execPath, configPath string)
 		return string(out), 0, nil
 	}
 
-	var exitErr *exec.ExitError
-	if errors.As(runErr, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 		// Non-zero exit codes are expected when warnings are emitted (exit code 1).
 		return string(out), exitErr.ExitCode(), nil
 	}
@@ -209,7 +204,7 @@ func extractDisableSuggestionsFromIssueLines(issueLines []string, allowed map[st
 	for key := range byKey {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	out := make([]PostInstallAuditSuggestion, 0, len(keys))
 	for _, key := range keys {
@@ -217,7 +212,7 @@ func extractDisableSuggestionsFromIssueLines(issueLines []string, allowed map[st
 		for msg := range byKey[key] {
 			msgs = append(msgs, msg)
 		}
-		sort.Strings(msgs)
+		slices.Sort(msgs)
 		out = append(out, PostInstallAuditSuggestion{
 			Key:      key,
 			Messages: msgs,
@@ -233,8 +228,8 @@ func normalizeIssueMessage(line string) string {
 	}
 	// Prefer to remove "[timestamp] LEVEL" prefix when present.
 	if strings.HasPrefix(line, "[") {
-		if idx := strings.Index(line, "]"); idx >= 0 {
-			rest := strings.TrimSpace(line[idx+1:])
+		if _, after, ok := strings.Cut(line, "]"); ok {
+			rest := strings.TrimSpace(after)
 			fields := strings.Fields(rest)
 			if len(fields) >= 2 {
 				level := fields[0]

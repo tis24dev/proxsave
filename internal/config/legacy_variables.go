@@ -195,11 +195,11 @@ func migrateLegacyLines(lines []string) ([]string, []LegacyChange) {
 // renameAssignedKey rewrites the variable name of one KEY=VALUE line, leaving an
 // "export" prefix, the spacing, the value and any comment as they were.
 func renameAssignedKey(line, name, current string) string {
-	eq := strings.Index(line, "=")
-	if eq < 0 {
+	before, _, ok := strings.Cut(line, "=")
+	if !ok {
 		return line
 	}
-	at := strings.LastIndex(strings.ToUpper(line[:eq]), name)
+	at := strings.LastIndex(strings.ToUpper(before), name)
 	if at < 0 {
 		return line
 	}

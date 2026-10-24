@@ -47,17 +47,15 @@ type backupOutcomeGoldenInput struct {
 // backupOutcomeGoldenEnvs are the environments the output must not depend on. A nil
 // value unsets the variable.
 var backupOutcomeGoldenEnvs = []map[string]*string{
-	{"TERM": strPtr("dumb")},
-	{"NO_COLOR": strPtr("1")},
-	{"CI": strPtr("true")},
+	{"TERM": new("dumb")},
+	{"NO_COLOR": new("1")},
+	{"CI": new("true")},
 	{"COLORTERM": nil},
-	{"TERM": strPtr("dumb"), "NO_COLOR": strPtr("1"), "CI": strPtr("true"), "COLORTERM": nil},
-	{"TERM": strPtr("xterm-256color"), "COLORTERM": strPtr("truecolor")},
+	{"TERM": new("dumb"), "NO_COLOR": new("1"), "CI": new("true"), "COLORTERM": nil},
+	{"TERM": new("xterm-256color"), "COLORTERM": new("truecolor")},
 }
 
-func strPtr(s string) *string { return &s }
-
-func readBackupOutcomeGoldenJSON(t *testing.T, path string, v interface{}) {
+func readBackupOutcomeGoldenJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -139,7 +137,7 @@ func describeBackupOutcomeSGR(s string) string {
 				attrs = append(attrs, "bold")
 			case (p == "38" || p == "48") && i+4 < len(parts) && parts[i+1] == "2":
 				var rgb [3]int
-				for k := 0; k < 3; k++ {
+				for k := range 3 {
 					rgb[k], _ = strconv.Atoi(parts[i+2+k])
 				}
 				hex := fmt.Sprintf("#%02X%02X%02X", rgb[0], rgb[1], rgb[2])

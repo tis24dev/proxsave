@@ -452,7 +452,7 @@ func TestVerifyBinaryIntegrityHashWriteTimeoutWarns(t *testing.T) {
 	checker := newCheckerWithExec(t, &config.Config{AutoUpdateHashes: true, DryRun: false}, execPath)
 	checker.fsTimeout = 300 * time.Millisecond
 
-	runVerifyBinaryIntegrityGuarded(t, checker, context.Background())
+	runVerifyBinaryIntegrityGuarded(t, checker, t.Context())
 
 	if checker.result.ErrorCount() != 0 {
 		t.Fatalf("write timeout must not error, got %d: %+v", checker.result.ErrorCount(), checker.result.Issues)

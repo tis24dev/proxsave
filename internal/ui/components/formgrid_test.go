@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tis24dev/proxsave/internal/ui/shell"
 )
@@ -34,7 +35,7 @@ func TestFormGridTabReachesCancel(t *testing.T) {
 // (unlike tab, it does not toggle), so a "mash down then Enter" submit is reliable.
 func TestFormGridDownStaysOnContinue(t *testing.T) {
 	g := NewFormGrid("Config", []*FormField{{Label: "A", Kind: FieldToggle}})
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		press(t, g, "down") // 1st down -> buttons (Continue); the rest stay on Continue
 	}
 	if g.onCancel {
@@ -244,7 +245,7 @@ func TestFormGridHintWrapsAtReadableWidth(t *testing.T) {
 	bindGrid(g)
 	view := g.View(180, 30) // very wide terminal
 	var first, second string
-	for _, l := range strings.Split(view, "\n") {
+	for l := range strings.SplitSeq(view, "\n") {
 		if strings.Contains(l, "redundant copies") {
 			first = l
 		}
@@ -319,7 +320,7 @@ func TestFormGridMouseClickBandRejectsOffscreen(t *testing.T) {
 
 	// Scroll: move the cursor down so offset > 0 and fields stay hidden both
 	// ABOVE and BELOW the window.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		press(t, g, "down")
 	}
 	g.View(80, 12)
@@ -381,7 +382,7 @@ func TestFormGridMouseClickBelowWindowLeavesOffscreenSelectUnchanged(t *testing.
 
 	// Scroll: move the cursor down so offset > 0 and fields stay hidden BELOW
 	// the window (same layout math as the FieldToggle band test).
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		press(t, g, "down")
 	}
 	g.View(80, 12)
@@ -490,5 +491,13 @@ func TestNewFormGridSanitizesTextPrefill(t *testing.T) {
 	}
 	if got != "foobarbaz" {
 		t.Fatalf("sanitized Text = %q, want %q", got, "foobarbaz")
+	}
+}
+
+// An empty text field renders a "-" placeholder instead of a blank control.
+func TestFormGridRenderControlShowsAPlaceholderForEmptyText(t *testing.T) {
+	g := NewFormGrid("T", []*FormField{{Label: "Host", Kind: FieldText}})
+	if got := strings.TrimSpace(ansi.Strip(g.renderControl(g.fields[0], false, 20))); got != "-" {
+		t.Fatalf("renderControl() = %q, want %q", got, "-")
 	}
 }

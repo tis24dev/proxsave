@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"errors"
 
 	"github.com/tis24dev/proxsave/internal/health"
@@ -118,9 +119,7 @@ func ClassifyHealthcheckSetupResult(res HealthcheckCheckResult) HealthcheckSetup
 	if res.DaemonAlignChecked && !res.DaemonAligned {
 		st.Level, st.Keyword = HealthcheckSetupLevelWarn, "BEHIND"
 		reason := res.DaemonStale
-		if reason == "" {
-			reason = "it is running an older binary than the one now on disk"
-		}
+		reason = cmp.Or(reason, "it is running an older binary than the one now on disk")
 		ver := ""
 		if res.DaemonVersion != "" {
 			ver = " (v" + res.DaemonVersion + ")"

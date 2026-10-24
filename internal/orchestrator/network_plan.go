@@ -1,10 +1,11 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -17,17 +18,13 @@ type networkEndpoint struct {
 
 func (e networkEndpoint) summary() string {
 	iface := strings.TrimSpace(e.Interface)
-	if iface == "" {
-		iface = "n/a"
-	}
+	iface = cmp.Or(iface, "n/a")
 	addrs := strings.Join(compactStrings(e.Addresses), ",")
 	if strings.TrimSpace(addrs) == "" {
 		addrs = "n/a"
 	}
 	gw := strings.TrimSpace(e.Gateway)
-	if gw == "" {
-		gw = "n/a"
-	}
+	gw = cmp.Or(gw, "n/a")
 	return fmt.Sprintf("iface=%s ip=%s gw=%s", iface, addrs, gw)
 }
 
@@ -102,7 +99,7 @@ func targetNetworkEndpointFromConfig(iface string) (networkEndpoint, error) {
 		}
 	}
 	ep.Addresses = uniqueStrings(ep.Addresses)
-	sort.Strings(ep.Addresses)
+	slices.Sort(ep.Addresses)
 	return ep, nil
 }
 
@@ -121,7 +118,7 @@ func collectIfupdownConfigPaths() ([]string, error) {
 			paths = append(paths, filepath.Join("/etc/network/interfaces.d", name))
 		}
 	}
-	sort.Strings(paths)
+	slices.Sort(paths)
 	return paths, nil
 }
 
@@ -132,7 +129,7 @@ func parseIfupdownStanzaForInterface(config string, iface string) (addresses []s
 	}
 
 	var currentIface string
-	for _, raw := range strings.Split(config, "\n") {
+	for raw := range strings.SplitSeq(config, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

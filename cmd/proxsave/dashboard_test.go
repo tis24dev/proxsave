@@ -952,7 +952,7 @@ func TestDashboardFlowActionHandsSessionOver(t *testing.T) {
 	}
 	askRes := make(chan askOut, 1)
 	go func() {
-		_, err := shell.Ask(context.Background(), s, components.NewNotice(components.NoticeInfo, "Adopted", "still alive"))
+		_, err := shell.Ask(t.Context(), s, components.NewNotice(components.NoticeInfo, "Adopted", "still alive"))
 		askRes <- askOut{err}
 	}()
 	driver.waitScreen("Adopted")

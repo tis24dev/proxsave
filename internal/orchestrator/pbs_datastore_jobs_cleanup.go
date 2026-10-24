@@ -75,7 +75,7 @@ type pbsCfgSection struct {
 // after it included), so that what is kept is written back unchanged.
 func splitPBSCfgSections(content string) (preamble []string, sections []pbsCfgSection) {
 	var current *pbsCfgSection
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		indented := line != "" && (line[0] == ' ' || line[0] == '\t')
 		if !indented && trimmed != "" && !strings.HasPrefix(trimmed, "#") {
@@ -148,7 +148,7 @@ func removePBSDatastoreACL(path string, out map[string]*pbsDatastoreCleanup) {
 	}
 	var kept []string
 	removed := map[string]int{}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if name := pbsACLDatastore(line, out); name != "" {
 			removed[name]++
 			continue

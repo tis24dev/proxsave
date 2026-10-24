@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -110,25 +111,27 @@ func TestCloudRetryBackoff(t *testing.T) {
 }
 
 func TestWaitForRetryContextReturnsOnCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-		close(done)
-	}()
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+			close(done)
+		}()
 
-	start := time.Now()
-	err := waitForRetryContext(ctx, time.Second)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("waitForRetryContext() error = %v, want context.Canceled", err)
-	}
-	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
-		t.Fatalf("waitForRetryContext() returned after %v, want prompt cancellation", elapsed)
-	}
+		start := time.Now()
+		err := waitForRetryContext(ctx, time.Second)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waitForRetryContext() error = %v, want context.Canceled", err)
+		}
+		if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+			t.Fatalf("waitForRetryContext() returned after %v, want prompt cancellation", elapsed)
+		}
 
-	<-done
+		<-done
+	})
 }
 
 func TestCloudStorageDetectFilesystem_RcloneMissingReturnsRecoverableError(t *testing.T) {
@@ -1138,7 +1141,6 @@ func TestCloudStorageRemoteNormalizationVariants(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
 				CloudEnabled:    true,
@@ -1177,7 +1179,6 @@ func TestSplitRemoteRefAndBaseName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.ref, func(t *testing.T) {
 			gotRemote, gotRel := splitRemoteRef(tt.ref)
 			if gotRemote != tt.wantRemote || gotRel != tt.wantRel {
@@ -1268,7 +1269,6 @@ func TestRemoteDirRef(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if got := remoteDirRef(tt.ref); got != tt.want {
 				t.Fatalf("remoteDirRef(%q) = %q, want %q", tt.ref, got, tt.want)
@@ -1580,8 +1580,7 @@ func TestCloudStorageCheckRemoteAccessiblePropagatesParentDeadline(t *testing.T)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("checkRemoteAccessible() error = %v, want context.DeadlineExceeded", err)
 	}
-	var rcErr *remoteCheckError
-	if errors.As(err, &rcErr) {
+	if _, ok := errors.AsType[*remoteCheckError](err); ok {
 		t.Fatalf("checkRemoteAccessible() error = %v, want parent deadline error, not remoteCheckError", err)
 	}
 	if len(queue.calls) != 1 {

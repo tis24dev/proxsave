@@ -272,19 +272,19 @@ func orNA(s string) string {
 	return s
 }
 
-func (h *HealthchecksChannel) info(format string, args ...interface{}) {
+func (h *HealthchecksChannel) info(format string, args ...any) {
 	if h.logger != nil {
 		h.logger.Info(format, args...)
 	}
 }
 
-func (h *HealthchecksChannel) warn(format string, args ...interface{}) {
+func (h *HealthchecksChannel) warn(format string, args ...any) {
 	if h.logger != nil {
 		h.logger.Warning(format, args...)
 	}
 }
 
-func (h *HealthchecksChannel) debug(format string, args ...interface{}) {
+func (h *HealthchecksChannel) debug(format string, args ...any) {
 	if h.logger != nil {
 		h.logger.Debug(format, args...)
 	}

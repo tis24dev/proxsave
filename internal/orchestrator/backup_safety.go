@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"archive/tar"
+	"cmp"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -33,13 +34,9 @@ type SafetyBackupResult struct {
 
 func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, destRoot string, spec safetyBackupSpec) (result *SafetyBackupResult, err error) {
 	desc := strings.TrimSpace(spec.HumanDescription)
-	if desc == "" {
-		desc = "Safety backup"
-	}
+	desc = cmp.Or(desc, "Safety backup")
 	prefix := strings.TrimSpace(spec.ArchivePrefix)
-	if prefix == "" {
-		prefix = "restore_backup"
-	}
+	prefix = cmp.Or(prefix, "restore_backup")
 	locationFileName := strings.TrimSpace(spec.LocationFileName)
 
 	done := logging.DebugStart(logger, "create "+strings.ToLower(desc), "dest=%s categories=%d", destRoot, len(selectedCategories))
@@ -359,9 +356,7 @@ func globFS(fs FS, pattern string) ([]string, error) {
 		var next []string
 		for _, base := range paths {
 			dir := base
-			if dir == "" {
-				dir = "."
-			}
+			dir = cmp.Or(dir, ".")
 
 			if strings.ContainsAny(part, "*?[") {
 				entries, err := fs.ReadDir(dir)

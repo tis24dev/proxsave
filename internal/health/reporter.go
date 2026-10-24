@@ -278,8 +278,7 @@ func (r *Reporter) ping(ctx context.Context, u, body, label string) error {
 // Reporter stays *logging.Logger-free; it is the byte-identical twin of
 // logging.RedactURLError (the canonical copy serverbot uses) -- keep them in sync.
 func redactURLErr(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
+	if ue, ok := errors.AsType[*url.Error](err); ok {
 		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
 	}
 	return err

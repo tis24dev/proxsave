@@ -40,11 +40,11 @@ const (
 // body (the markdown between the two auto-generated-comment markers), or "" when absent.
 // The returned text is raw markdown and is NOT sanitized here.
 func extractReleaseNotes(body string) string {
-	i := strings.Index(body, coderabbitNotesStart)
-	if i < 0 {
+	_, after, ok := strings.Cut(body, coderabbitNotesStart)
+	if !ok {
 		return ""
 	}
-	rest := body[i+len(coderabbitNotesStart):]
+	rest := after
 	if j := strings.Index(rest, coderabbitNotesEnd); j >= 0 {
 		rest = rest[:j]
 	}

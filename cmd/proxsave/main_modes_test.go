@@ -66,7 +66,7 @@ func TestValidateModeCompatibility(t *testing.T) {
 			args: &cli.Args{CleanupGuards: true, Support: true, Decrypt: true, Install: true, NewInstall: true, Upgrade: true},
 			want: []string{
 				"--cleanup-guards cannot be combined with: --support, --decrypt, --install, --new-install, --upgrade",
-				"Support mode cannot be combined with: --decrypt, --install, --new-install",
+				"Support mode cannot be combined with: --decrypt, --install, --new-install, --upgrade",
 				"--support is only available for the standard backup run or --restore.",
 				"Cannot use --install and --new-install together. Choose one installation mode.",
 				"Cannot use --upgrade together with --install or --new-install.",

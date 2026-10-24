@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -48,9 +49,7 @@ func findNearestExistingDirMeta(dir string) (uidGid, os.FileMode) {
 		info, err := restoreFS.Stat(candidate)
 		if err == nil && info != nil && info.IsDir() {
 			inheritMode := modeBits(info.Mode())
-			if inheritMode == 0 {
-				inheritMode = 0o755
-			}
+			inheritMode = cmp.Or(inheritMode, 0o755)
 			return uidGidFromFileInfo(info), inheritMode
 		}
 
@@ -222,9 +221,7 @@ func prepareAtomicTempFile(path string, data []byte, perm os.FileMode) (tmpPath,
 		return "", "", "", fmt.Errorf("invalid path")
 	}
 	perm = modeBits(perm)
-	if perm == 0 {
-		perm = 0o644
-	}
+	perm = cmp.Or(perm, 0o644)
 
 	dir = filepath.Dir(cleanPath)
 	if err := ensureDirExistsWithInheritedMeta(dir); err != nil {

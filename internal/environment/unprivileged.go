@@ -1,6 +1,7 @@
 package environment
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -166,7 +167,7 @@ func readIDMapOutsideZeroInfo(path string) IDMapOutsideZeroInfo {
 }
 
 func parseIDMapOutsideZero(content string) (outside0, length int64, ok bool) {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -337,16 +338,12 @@ func formatIDMapDetails(label string, info IDMapOutsideZeroInfo) string {
 
 func formatSimpleDetails(label, value, emptyValue string) string {
 	label = strings.TrimSpace(label)
-	if label == "" {
-		label = "value"
-	}
+	label = cmp.Or(label, "value")
 	value = strings.TrimSpace(value)
 	if value == "" {
 		value = strings.TrimSpace(emptyValue)
 	}
-	if value == "" {
-		value = "unknown"
-	}
+	value = cmp.Or(value, "unknown")
 	return fmt.Sprintf("%s=%s", label, value)
 }
 

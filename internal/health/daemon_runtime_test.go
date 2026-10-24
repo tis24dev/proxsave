@@ -130,12 +130,10 @@ func TestWriteDaemonRuntimeConcurrentWritesRemainComplete(t *testing.T) {
 	errs := make(chan error, len(states))
 	var writers sync.WaitGroup
 	for _, state := range states {
-		writers.Add(1)
-		go func() {
-			defer writers.Done()
+		writers.Go(func() {
 			<-start
 			errs <- WriteDaemonRuntime(base, state)
-		}()
+		})
 	}
 	close(start)
 	writers.Wait()

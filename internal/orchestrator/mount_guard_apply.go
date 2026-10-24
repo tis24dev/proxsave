@@ -271,19 +271,19 @@ func (a *pbsMountGuardApply) warnOfflineTargetUnguarded(guardTarget string, bind
 		guardTarget, bindErr, guardTarget)
 }
 
-func (a *pbsMountGuardApply) debug(format string, args ...interface{}) {
+func (a *pbsMountGuardApply) debug(format string, args ...any) {
 	if a.logger != nil {
 		a.logger.Debug(format, args...)
 	}
 }
 
-func (a *pbsMountGuardApply) info(format string, args ...interface{}) {
+func (a *pbsMountGuardApply) info(format string, args ...any) {
 	if a.logger != nil {
 		a.logger.Info(format, args...)
 	}
 }
 
-func (a *pbsMountGuardApply) warning(format string, args ...interface{}) {
+func (a *pbsMountGuardApply) warning(format string, args ...any) {
 	if a.logger != nil {
 		a.logger.Warning(format, args...)
 	}

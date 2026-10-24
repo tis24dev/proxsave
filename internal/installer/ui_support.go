@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/orchestrator"
@@ -85,7 +85,7 @@ func ApplyAuditDisables(configPath string, keys []string) error {
 			normalized = append(normalized, key)
 		}
 	}
-	sort.Strings(normalized)
+	slices.Sort(normalized)
 	if len(normalized) == 0 {
 		return nil
 	}

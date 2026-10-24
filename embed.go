@@ -5,7 +5,8 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"sort"
+	"slices"
+	"strings"
 )
 
 var (
@@ -66,8 +67,8 @@ func collectEmbeddedDocs() ([]DocAsset, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(assets, func(i, j int) bool {
-		return assets[i].Name < assets[j].Name
+	slices.SortFunc(assets, func(a, b DocAsset) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 	return assets, nil
 }

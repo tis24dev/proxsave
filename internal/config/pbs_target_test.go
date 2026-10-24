@@ -179,7 +179,7 @@ func TestPBSTargetEnvironmentOverrides(t *testing.T) {
 func TestUpgradeAddsPBSTargetVariables(t *testing.T) {
 	pbsKeys := []string{"MAX_PBS_TARGET_BACKUPS", "MIN_DISK_SPACE_PBS_GB", "PBS_TARGET_ENABLED", "PBS_TARGET_STORAGE"}
 	var kept []string
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		drop := false
 		for _, key := range pbsKeys {
 			if strings.HasPrefix(line, key+"=") {

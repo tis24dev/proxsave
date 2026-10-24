@@ -14,7 +14,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
-func logTelegramRegistrationDebug(logger *logging.Logger, format string, args ...interface{}) {
+func logTelegramRegistrationDebug(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Debug(format, args...)
 	}

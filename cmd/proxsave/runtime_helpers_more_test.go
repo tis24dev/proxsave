@@ -357,3 +357,11 @@ func TestCleanupAfterRun(t *testing.T) {
 		t.Fatalf("expected non-zero lock file to remain, stat err=%v", err)
 	}
 }
+
+// A filesystem with no known mount point reports the mount as unknown.
+func TestFormatFilesystemDetailDefaultsAnUnknownMount(t *testing.T) {
+	got := formatFilesystemDetail(&storage.FilesystemInfo{Type: "ext4"})
+	if want := "ext4 (no ownership) [mount: unknown]"; got != want {
+		t.Fatalf("formatFilesystemDetail() = %q, want %q", got, want)
+	}
+}

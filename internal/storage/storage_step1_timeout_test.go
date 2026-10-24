@@ -77,7 +77,7 @@ func TestSecondaryCopyFileLeafOpenTimeout(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- s.copyFile(context.Background(), fifo, filepath.Join(dir, "dst")) }()
+	go func() { done <- s.copyFile(t.Context(), fifo, filepath.Join(dir, "dst")) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, safefs.ErrTimeout) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,9 +59,7 @@ func runClusterRecoveryRestore(t *testing.T, opts clusterRecoveryOptions) cluste
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 
 	live := map[string]string{"/var/lib/pve-cluster/config.db": "db-live\n"}
-	for path, content := range opts.live {
-		live[path] = content
-	}
+	maps.Copy(live, opts.live)
 	for path, content := range live {
 		if err := fakeFS.AddFile(path, []byte(content)); err != nil {
 			t.Fatal(err)
@@ -81,15 +80,11 @@ func runClusterRecoveryRestore(t *testing.T, opts clusterRecoveryOptions) cluste
 	for k, v := range opts.outputs {
 		cmd.Outputs[k] = []byte(v)
 	}
-	for k, v := range opts.errs {
-		cmd.Errors[k] = v
-	}
+	maps.Copy(cmd.Errors, opts.errs)
 	restoreCmd = cmd
 
 	archive := map[string]string{"var/lib/pve-cluster/config.db": "db-from-backup\n"}
-	for path, content := range opts.archive {
-		archive[path] = content
-	}
+	maps.Copy(archive, opts.archive)
 	tmpTar := filepath.Join(t.TempDir(), "bundle.tar")
 	if err := writeTarFile(tmpTar, archive); err != nil {
 		t.Fatal(err)

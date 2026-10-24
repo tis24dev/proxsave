@@ -39,7 +39,7 @@ func captureStorageInit(t *testing.T, fn func(logger *logging.Logger)) []string 
 	logging.SetDefaultLogger(logger)
 	fn(logger)
 	var lines []string
-	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
 		if _, rest, ok := strings.Cut(line, "] "); ok {
 			line = rest
 		}
@@ -296,7 +296,7 @@ func TestDryRunCloudRemoteBlocks(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read the fake rclone record: %v", err)
 			}
-			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
 				if !strings.HasPrefix(line, "lsf ") && !strings.HasPrefix(line, "lsl ") {
 					t.Fatalf("a dry run only reads the remote, got %q", line)
 				}

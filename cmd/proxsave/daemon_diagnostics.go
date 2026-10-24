@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -122,9 +123,7 @@ func collectDaemonDiagnostics(ctx context.Context, cfg *config.Config, cfgErr er
 		unit = "installed"
 	}
 	active := daemonStatusActiveStateProbe(ctx)
-	if active == "" {
-		active = "unknown"
-	}
+	active = cmp.Or(active, "unknown")
 
 	state := health.CheckDaemonState(health.DaemonStateInput{
 		BaseDir:           baseDir,
@@ -342,17 +341,17 @@ const hardlinkAdvisoryPrefix = "fs.protected_hardlinks"
 // very verdict this function exists to stop. The cut is safe because there is one
 // producer, personalScriptForeignAncestorReason, and it appends the advisory last.
 func withoutHardlinkAdvisory(reason string) string {
-	start := strings.Index(reason, hardlinkAdvisoryPrefix)
-	if start < 0 {
+	before, _, ok := strings.Cut(reason, hardlinkAdvisoryPrefix)
+	if !ok {
 		return reason
 	}
-	return strings.TrimSuffix(strings.TrimSpace(reason[:start]), ";")
+	return strings.TrimSuffix(strings.TrimSpace(before), ";")
 }
 
 // parseProcEffectiveUID reads the second numeric value from Linux's Uid line:
 // real, effective, saved-set, then filesystem UID.
 func parseProcEffectiveUID(data []byte) (int, error) {
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 0 || fields[0] != "Uid:" {
 			continue

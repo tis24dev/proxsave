@@ -28,7 +28,7 @@ func newPBSDiskChecker(t *testing.T) (*Checker, *bytes.Buffer) {
 
 func visibleCheckLines(out *bytes.Buffer) []string {
 	var lines []string
-	for _, line := range strings.Split(out.String(), "\n") {
+	for line := range strings.SplitSeq(out.String(), "\n") {
 		if _, rest, ok := strings.Cut(line, "] "); ok && !strings.HasPrefix(rest, "DEBUG") {
 			lines = append(lines, rest)
 		}

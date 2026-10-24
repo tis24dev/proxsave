@@ -225,10 +225,7 @@ func (l *Logger) writeFileLocked(line string) {
 		_, _ = fileWrite(f, line) // opt-out / legacy: unbounded
 		return
 	}
-	wt := l.ioTimeout
-	if wt > logWriteTimeoutCap {
-		wt = logWriteTimeoutCap
-	}
+	wt := min(l.ioTimeout, logWriteTimeoutCap)
 	_, err := safefs.Run(context.Background(), "logwrite", f.Name(), wt, func() (int, error) {
 		return fileWrite(f, line)
 	})
@@ -258,10 +255,7 @@ func (l *Logger) disableFileSinkLocked(cause error) {
 	// re-wedge; its failure is ignored. disableFileSinkLocked is only reached with
 	// ioTimeout > 0 (the bounded write path), so mwt is always positive.
 	if f := l.logFile; f != nil {
-		mwt := l.ioTimeout
-		if mwt > logWriteTimeoutCap {
-			mwt = logWriteTimeoutCap
-		}
+		mwt := min(l.ioTimeout, logWriteTimeoutCap)
 		marker := fmt.Sprintf("[%s] %-8s log file sink disabled after I/O timeout; on-disk log truncated here\n", timestamp, types.LogLevelWarning.String())
 		_, _ = safefs.Run(context.Background(), "logwrite-marker", f.Name(), mwt, func() (int, error) {
 			return fileWrite(f, marker)
@@ -371,11 +365,11 @@ func FormatConsoleLogLine(timestamp string, level types.LogLevel, message string
 }
 
 // log is the internal method used to write logs.
-func (l *Logger) log(level types.LogLevel, format string, args ...interface{}) {
+func (l *Logger) log(level types.LogLevel, format string, args ...any) {
 	l.logWithLabel(level, "", "", format, args...)
 }
 
-func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride string, format string, args ...interface{}) {
+func (l *Logger) logWithLabel(level types.LogLevel, label string, colorOverride string, format string, args ...any) {
 	l.emit(level, label, colorOverride, true, format, args...)
 }
 
@@ -388,7 +382,7 @@ func (l *Logger) logFileOnly(level types.LogLevel, message string) {
 
 // emit is the single write path of the logger. toConsole is false only for a line
 // the console already shows.
-func (l *Logger) emit(level types.LogLevel, label string, colorOverride string, toConsole bool, format string, args ...interface{}) {
+func (l *Logger) emit(level types.LogLevel, label string, colorOverride string, toConsole bool, format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// The threshold is a CONSOLE filter (maintainer call, 2026-09-02). It used to
@@ -542,17 +536,17 @@ func (l *Logger) IssueLines() []string {
 }
 
 // Debug writes a debug log.
-func (l *Logger) Debug(format string, args ...interface{}) {
+func (l *Logger) Debug(format string, args ...any) {
 	l.log(types.LogLevelDebug, format, args...)
 }
 
 // Info writes an informational log
-func (l *Logger) Info(format string, args ...interface{}) {
+func (l *Logger) Info(format string, args ...any) {
 	l.log(types.LogLevelInfo, format, args...)
 }
 
 // Phase writes an informational log with PHASE label
-func (l *Logger) Phase(format string, args ...interface{}) {
+func (l *Logger) Phase(format string, args ...any) {
 	if l == nil {
 		return
 	}
@@ -564,7 +558,7 @@ func (l *Logger) Phase(format string, args ...interface{}) {
 }
 
 // Step writes an informational log with STEP label (to highlight sequential activities)
-func (l *Logger) Step(format string, args ...interface{}) {
+func (l *Logger) Step(format string, args ...any) {
 	if l == nil {
 		return
 	}
@@ -576,7 +570,7 @@ func (l *Logger) Step(format string, args ...interface{}) {
 }
 
 // Skip writes an informational log with SKIP label (for disabled/ignored elements)
-func (l *Logger) Skip(format string, args ...interface{}) {
+func (l *Logger) Skip(format string, args ...any) {
 	if l == nil {
 		return
 	}
@@ -588,12 +582,12 @@ func (l *Logger) Skip(format string, args ...interface{}) {
 }
 
 // Warning writes a warning log.
-func (l *Logger) Warning(format string, args ...interface{}) {
+func (l *Logger) Warning(format string, args ...any) {
 	l.log(types.LogLevelWarning, format, args...)
 }
 
 // Error writes an error log.
-func (l *Logger) Error(format string, args ...interface{}) {
+func (l *Logger) Error(format string, args ...any) {
 	l.log(types.LogLevelError, format, args...)
 }
 
@@ -606,7 +600,7 @@ const NotifyErrorLabel = "NOTIFY-ERR"
 // (red, captured in the issue summary) but is tallied into notifyCount rather than
 // errorCount, so it displays as ERROR yet never escalates the run status to error.
 // The run-side count logic buckets the NOTIFY-ERR token as warning-weight.
-func (l *Logger) NotifyError(format string, args ...interface{}) {
+func (l *Logger) NotifyError(format string, args ...any) {
 	if l == nil {
 		return
 	}
@@ -647,7 +641,7 @@ func (l *Logger) ExitNotifyErrorScope() {
 }
 
 // Critical writes a critical log.
-func (l *Logger) Critical(format string, args ...interface{}) {
+func (l *Logger) Critical(format string, args ...any) {
 	l.log(types.LogLevelCritical, format, args...)
 }
 
@@ -697,36 +691,36 @@ func GetDefaultLogger() *Logger {
 // Package-level convenience functions
 
 // Debug writes a debug log using the default logger.
-func Debug(format string, args ...interface{}) {
+func Debug(format string, args ...any) {
 	defaultLogger.Debug(format, args...)
 }
 
 // Info writes an informational log using the default logger
-func Info(format string, args ...interface{}) {
+func Info(format string, args ...any) {
 	defaultLogger.Info(format, args...)
 }
 
 // Step writes a STEP log using the default logger.
-func Step(format string, args ...interface{}) {
+func Step(format string, args ...any) {
 	defaultLogger.Step(format, args...)
 }
 
 // Skip writes a SKIP log using the default logger.
-func Skip(format string, args ...interface{}) {
+func Skip(format string, args ...any) {
 	defaultLogger.Skip(format, args...)
 }
 
 // Warning writes a warning log using the default logger.
-func Warning(format string, args ...interface{}) {
+func Warning(format string, args ...any) {
 	defaultLogger.Warning(format, args...)
 }
 
 // Error writes an error log using the default logger.
-func Error(format string, args ...interface{}) {
+func Error(format string, args ...any) {
 	defaultLogger.Error(format, args...)
 }
 
 // Critical writes a critical log using the default logger.
-func Critical(format string, args ...interface{}) {
+func Critical(format string, args ...any) {
 	defaultLogger.Critical(format, args...)
 }

@@ -229,7 +229,7 @@ func extractFstabReferencedFiles(content string) []string {
 			continue
 		}
 
-		for _, opt := range strings.Split(fields[3], ",") {
+		for opt := range strings.SplitSeq(fields[3], ",") {
 			opt = strings.TrimSpace(opt)
 			if opt == "" || !strings.Contains(opt, "=") {
 				continue

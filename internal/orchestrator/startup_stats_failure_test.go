@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -137,12 +138,7 @@ func assertF1Skipped(t *testing.T, stats *BackupStats) {
 }
 
 func containsCall(calls []string, name string) bool {
-	for _, c := range calls {
-		if c == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(calls, name)
 }
 
 // TestSyncStillWritesTheRealOutcome pins the other half: "skipped" is only where a

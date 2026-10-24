@@ -124,10 +124,10 @@ type stubLogger struct {
 	warns []string
 }
 
-func (s *stubLogger) Warning(format string, args ...interface{}) {
+func (s *stubLogger) Warning(format string, args ...any) {
 	s.warns = append(s.warns, fmt.Sprintf(format, args...))
 }
-func (s *stubLogger) Info(format string, args ...interface{}) {}
+func (s *stubLogger) Info(format string, args ...any) {}
 
 func TestEnsureConfigExists(t *testing.T) {
 	t.Run("empty path", func(t *testing.T) {

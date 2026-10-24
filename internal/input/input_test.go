@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -120,6 +121,34 @@ func currentPasswordInflight(t *testing.T, fd int) *passwordInflight {
 		t.Fatalf("expected password inflight state")
 	}
 	return state.inflight
+}
+
+// isolatePasswordState gives the calling test the password state of fd and hands it
+// back as the test found it. It detaches whatever state an earlier test left on fd, so
+// a completed read still attached there cannot answer this test's read. At cleanup it
+// calls release to unblock the test's own reader, waits for the read the test left in
+// flight to complete, and puts the earlier state back, or removes fd's state if there
+// was none.
+func isolatePasswordState(t *testing.T, fd int, release func()) {
+	t.Helper()
+	earlier, hadEarlier := passwordStates.LoadAndDelete(fd)
+	t.Cleanup(func() {
+		release()
+		if v, ok := passwordStates.Load(fd); ok {
+			state := v.(*passwordState)
+			state.mu.Lock()
+			inflight := state.inflight
+			state.mu.Unlock()
+			if inflight != nil {
+				<-inflight.done
+			}
+		}
+		if hadEarlier {
+			passwordStates.Store(fd, earlier)
+		} else {
+			passwordStates.Delete(fd)
+		}
+	})
 }
 
 func assertSameLineInflight(t *testing.T, reader *bufio.Reader, want *lineInflight) {
@@ -234,7 +263,7 @@ func TestReadLineWithContext_CancelledReturnsAborted(t *testing.T) {
 	defer func() { _ = pw.Close() }()
 
 	reader := bufio.NewReader(pr)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan struct{})
 	var err error
@@ -263,7 +292,7 @@ func TestReadLineWithContext_DeadlineReturnsDeadlineExceeded(t *testing.T) {
 	defer func() { _ = pw.Close() }()
 
 	reader := bufio.NewReader(pr)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	done := make(chan struct{})
@@ -295,7 +324,7 @@ func TestReadLineWithContext_ConcurrentCancelledCallerReturnsWhileReadPending(t 
 
 	firstResultCh := make(chan lineCallResult, 1)
 	go func() {
-		line, err := ReadLineWithContext(context.Background(), reader)
+		line, err := ReadLineWithContext(t.Context(), reader)
 		firstResultCh <- lineCallResult{line: line, err: err}
 	}()
 
@@ -303,7 +332,7 @@ func TestReadLineWithContext_ConcurrentCancelledCallerReturnsWhileReadPending(t 
 		return src.calls.Load() == 1
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	secondResultCh := make(chan lineCallResult, 1)
@@ -426,7 +455,7 @@ func TestReadPasswordWithContext_ConcurrentCancelledCallerReturnsWhileReadPendin
 
 	firstResultCh := make(chan passwordCallResult, 1)
 	go func() {
-		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
+		got, err := ReadPasswordWithContext(t.Context(), readPassword, 42)
 		firstResultCh <- passwordCallResult{b: got, err: err}
 	}()
 
@@ -434,7 +463,7 @@ func TestReadPasswordWithContext_ConcurrentCancelledCallerReturnsWhileReadPendin
 		return calls.Load() == 1
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	secondResultCh := make(chan passwordCallResult, 1)
@@ -499,7 +528,7 @@ func TestReadLineWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *testi
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		line, err := ReadLineWithContext(context.Background(), reader)
+		line, err := ReadLineWithContext(t.Context(), reader)
 		resultCh <- lineCallResult{line: line, err: err}
 	}()
 	waitForSignal(t, started, "line retry start")
@@ -595,7 +624,7 @@ func TestReadPasswordWithContext_ReusesInflightReadWhilePendingAfterTimeout(t *t
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		got, err := ReadPasswordWithContext(context.Background(), readPassword, 42)
+		got, err := ReadPasswordWithContext(t.Context(), readPassword, 42)
 		resultCh <- passwordCallResult{b: got, err: err}
 	}()
 	waitForSignal(t, started, "password retry start")
@@ -773,20 +802,27 @@ func TestReadLineWithIdleParentCancelStaysInputAborted(t *testing.T) {
 	}
 }
 
-func TestReadPasswordWithIdleTimesOut(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	fake := func(int) ([]byte, error) { <-block; return nil, nil }
+// TestReadPasswordWithIdleTimesOutWhileReadIsPending: a password read that is still
+// pending when the idle window closes must come back as ErrIdleTimeout, and that error
+// must wrap ErrInputAborted so every existing graceful-abort path catches it. The
+// bubble's clock makes the deadline independent of machine speed, and the reader stays
+// blocked until cleanup, so the deadline is the only way the read can return.
+func TestReadPasswordWithIdleTimesOutWhileReadIsPending(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const fd = 7
+		release := make(chan struct{})
+		isolatePasswordState(t, fd, func() { close(release) })
+		readPassword := func(int) ([]byte, error) {
+			<-release
+			return nil, nil
+		}
 
-	// fd 7 is dedicated to this test: the package-global passwordStates map keys
-	// in-flight reads by fd, and TestReadPasswordWithContext_DeadlineReturnsDeadlineExceeded
-	// leaves a completed, un-consumed in-flight read attached to fd 0. Reusing fd 0
-	// here would consume that stale result instead of hitting the idle deadline.
-	_, err := ReadPasswordWithIdle(context.Background(), fake, 7, time.Millisecond)
-	if !errors.Is(err, ErrIdleTimeout) {
-		t.Fatalf("want ErrIdleTimeout, got %v", err)
-	}
-	if !errors.Is(err, ErrInputAborted) {
-		t.Fatalf("ErrIdleTimeout must wrap ErrInputAborted; got %v", err)
-	}
+		_, err := ReadPasswordWithIdle(context.Background(), readPassword, fd, time.Millisecond)
+		if !errors.Is(err, ErrIdleTimeout) {
+			t.Fatalf("want ErrIdleTimeout, got %v", err)
+		}
+		if !errors.Is(err, ErrInputAborted) {
+			t.Fatalf("ErrIdleTimeout must wrap ErrInputAborted; got %v", err)
+		}
+	})
 }

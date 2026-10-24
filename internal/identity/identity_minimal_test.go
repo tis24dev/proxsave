@@ -156,7 +156,7 @@ func rejectedNames(t *testing.T, baseDir string) []string {
 
 func payloadParts(t *testing.T, content string) []string {
 	t.Helper()
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
 			continue
@@ -368,7 +368,7 @@ func TestP4_RepeatedFailedReplacementsLeaveExactlyOnePreservedCopy(t *testing.T)
 	original := identityBytes(t, baseDir)
 
 	failTempFor(t, false, errors.New("canonical write boom"))
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		if _, err := detectAs(t, baseDir, hostBravo); err != nil {
 			t.Fatalf("run %d: DetectWithContext() error = %v", i, err)
 		}
@@ -1337,5 +1337,33 @@ func TestP22_ReadMachineIDStateMatrix(t *testing.T) {
 				t.Fatalf("consulted the dbus copy = %v, want %v", consultedDbus, row.wantDbus)
 			}
 		})
+	}
+}
+
+// After the primary MAC, the alternate MAC arms follow the sorted MAC order, whatever
+// order the MACs were passed in.
+func TestIdentityKeyArmsOrdersAlternateMACs(t *testing.T) {
+	f := hostFacts{MachineID: "0123456789abcdef0123456789abcdef", HostnamePart: "pve1"}
+	primary := "02:00:00:00:00:02"
+	macs := []string{"02:00:00:00:00:03", "02:00:00:00:00:01", primary}
+
+	prefixFor := func(mac string) string {
+		return computeSystemKey(f.MachineID, f.HostnamePart, strings.ReplaceAll(mac, ":", ""))[:systemKeyPrefixLength]
+	}
+	want := map[string]string{
+		"mac":      prefixFor(primary),
+		"mac_alt1": prefixFor("02:00:00:00:00:01"),
+		"mac_alt2": prefixFor("02:00:00:00:00:03"),
+	}
+	got := make(map[string]string)
+	for _, arm := range identityKeyArms(f, macs, primary) {
+		if _, ok := want[arm.Label]; ok {
+			got[arm.Label] = arm.Prefix
+		}
+	}
+	for label, prefix := range want {
+		if got[label] != prefix {
+			t.Fatalf("arm %s prefix = %q, want %q (arms: %v)", label, got[label], prefix, identityKeyArms(f, macs, primary))
+		}
 	}
 }

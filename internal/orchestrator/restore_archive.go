@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -61,9 +62,7 @@ func redirectClusterCategoryToExport(normal []Category, export []Category) ([]Ca
 
 func exportDestRoot(baseDir string) string {
 	base := strings.TrimSpace(baseDir)
-	if base == "" {
-		base = "/opt/proxsave"
-	}
+	base = cmp.Or(base, "/opt/proxsave")
 	return filepath.Join(base, fmt.Sprintf("proxmox-config-export-%s", nowRestore().Format("20060102-150405")))
 }
 

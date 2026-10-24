@@ -47,7 +47,7 @@ func TestCharmSelectRestoreMode(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		mode, err := ui.SelectRestoreMode(context.Background(), SystemTypePVE)
+		mode, err := ui.SelectRestoreMode(t.Context(), SystemTypePVE)
 		resCh <- result{mode, err}
 	}()
 	d.waitScreen("Select restore mode")
@@ -58,7 +58,7 @@ func TestCharmSelectRestoreMode(t *testing.T) {
 	}
 
 	go func() {
-		mode, err := ui.SelectRestoreMode(context.Background(), SystemTypePVE)
+		mode, err := ui.SelectRestoreMode(t.Context(), SystemTypePVE)
 		resCh <- result{mode, err}
 	}()
 	d.waitScreen("Select restore mode")
@@ -78,7 +78,7 @@ func TestCharmSelectCategories(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			cats, err := ui.SelectCategories(context.Background(), testCategories(), SystemTypePVE)
+			cats, err := ui.SelectCategories(t.Context(), testCategories(), SystemTypePVE)
 			resCh <- result{cats, err}
 		}()
 	}
@@ -130,7 +130,7 @@ func TestCharmSelectPBSRestoreBehavior(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		behavior, err := ui.SelectPBSRestoreBehavior(context.Background())
+		behavior, err := ui.SelectPBSRestoreBehavior(t.Context())
 		resCh <- result{behavior, err}
 	}()
 	d.waitScreen("PBS restore behavior")
@@ -151,7 +151,7 @@ func TestCharmShowRestorePlan(t *testing.T) {
 	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- ui.ShowRestorePlan(context.Background(), cfg) }()
+	go func() { errCh <- ui.ShowRestorePlan(t.Context(), cfg) }()
 	d.waitScreen("Restore plan")
 	d.waitOutput("Restore mode:") // plan body (the styled title replaces the old ASCII banner)
 	d.keys("enter")
@@ -159,7 +159,7 @@ func TestCharmShowRestorePlan(t *testing.T) {
 		t.Fatalf("continue must return nil, got %v", err)
 	}
 
-	go func() { errCh <- ui.ShowRestorePlan(context.Background(), cfg) }()
+	go func() { errCh <- ui.ShowRestorePlan(t.Context(), cfg) }()
 	d.waitScreen("Restore plan")
 	d.keys("esc")
 	if err := <-errCh; !errors.Is(err, ErrRestoreAborted) {
@@ -181,7 +181,7 @@ func TestCharmConfirmRestoreTwoStage(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			ok, err := ui.ConfirmRestore(context.Background())
+			ok, err := ui.ConfirmRestore(t.Context())
 			resCh <- result{ok, err}
 		}()
 	}
@@ -226,7 +226,7 @@ func TestCharmSelectClusterRestoreMode(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			mode, err := ui.SelectClusterRestoreMode(context.Background())
+			mode, err := ui.SelectClusterRestoreMode(t.Context())
 			resCh <- result{mode, err}
 		}()
 	}
@@ -265,7 +265,7 @@ func TestCharmSelectExportNode(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			node, err := ui.SelectExportNode(context.Background(), exportRoot, "pve1", []string{"pve1", "pve2"})
+			node, err := ui.SelectExportNode(t.Context(), exportRoot, "pve1", []string{"pve1", "pve2"})
 			resCh <- result{node, err}
 		}()
 	}
@@ -304,7 +304,7 @@ func TestCharmConfirmFstabMergeRecommendedText(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		ok, err := ui.ConfirmFstabMerge(context.Background(), "Fstab merge", "3 new mounts detected.", 0, true)
+		ok, err := ui.ConfirmFstabMerge(t.Context(), "Fstab merge", "3 new mounts detected.", 0, true)
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Fstab merge")
@@ -320,7 +320,7 @@ func TestCharmConfirmFstabMergeRecommendedText(t *testing.T) {
 	// guaranteed to appear contiguously in the output stream. The default
 	// semantics (bare Enter skips) are the contract under test here.
 	go func() {
-		ok, err := ui.ConfirmFstabMerge(context.Background(), "Fstab merge", "", 0, false)
+		ok, err := ui.ConfirmFstabMerge(t.Context(), "Fstab merge", "", 0, false)
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Fstab merge")
@@ -340,7 +340,7 @@ func TestCharmConfirmApplyPrompts(t *testing.T) {
 	resCh := make(chan result, 1)
 
 	go func() {
-		ok, err := ui.ConfirmApplyVMConfigs(context.Background(), "pve9", "pve1", 4)
+		ok, err := ui.ConfirmApplyVMConfigs(t.Context(), "pve9", "pve1", 4)
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Apply VM/CT configs")
@@ -351,7 +351,7 @@ func TestCharmConfirmApplyPrompts(t *testing.T) {
 	}
 
 	go func() {
-		ok, err := ui.ConfirmApplyStorageCfg(context.Background(), "/tmp/storage.cfg")
+		ok, err := ui.ConfirmApplyStorageCfg(t.Context(), "/tmp/storage.cfg")
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Apply storage.cfg")
@@ -362,7 +362,7 @@ func TestCharmConfirmApplyPrompts(t *testing.T) {
 	}
 
 	go func() {
-		ok, err := ui.ConfirmApplyDatacenterCfg(context.Background(), "/tmp/datacenter.cfg")
+		ok, err := ui.ConfirmApplyDatacenterCfg(t.Context(), "/tmp/datacenter.cfg")
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Apply datacenter.cfg")
@@ -386,7 +386,7 @@ func TestCharmAdapterCtxCancelIsNotAbort(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 
-	askCtx, cancel := context.WithCancel(context.Background())
+	askCtx, cancel := context.WithCancel(t.Context())
 	go func() {
 		_, err := ui.ConfirmCompatibility(askCtx, errors.New("mismatch"))
 		resCh <- result{err}
@@ -401,7 +401,7 @@ func TestCharmAdapterCtxCancelIsNotAbort(t *testing.T) {
 		t.Fatal("ctx cancellation must not be converted into ErrRestoreAborted")
 	}
 
-	askCtx2, cancel2 := context.WithCancel(context.Background())
+	askCtx2, cancel2 := context.WithCancel(t.Context())
 	go func() {
 		_, err := ui.PromptDecryptSecret(askCtx2, "backup", "")
 		resCh <- result{err}
@@ -430,7 +430,7 @@ func TestCharmConfirmCompatibilitySanitizesWarning(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		ok, err := ui.ConfirmCompatibility(context.Background(), errors.New("\x1b[31mevil-warning"))
+		ok, err := ui.ConfirmCompatibility(t.Context(), errors.New("\x1b[31mevil-warning"))
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Compatibility warning")
@@ -486,7 +486,7 @@ func TestCharmConfirmDangerIgnoresShortcutKeys(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		ok, err := ui.ConfirmCompatibility(context.Background(), errors.New("version mismatch"))
+		ok, err := ui.ConfirmCompatibility(t.Context(), errors.New("version mismatch"))
 		resCh <- result{ok, err}
 	}()
 	d.waitScreen("Compatibility warning")
@@ -497,4 +497,17 @@ func TestCharmConfirmDangerIgnoresShortcutKeys(t *testing.T) {
 	if res := <-resCh; res.err != nil || res.ok {
 		t.Fatalf("danger prompt accepted a shortcut or wrong default: %+v", res)
 	}
+}
+
+// A confirmation without a title is shown on a "Confirm" screen.
+func TestCharmWorkflowUIConfirmActionDefaultsABlankTitle(t *testing.T) {
+	d, ui := newCharmRestoreUITestHarness(t)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ui.ConfirmAction(t.Context(), " ", "Apply the change?", "Apply", "Skip", 0, false)
+		errCh <- err
+	}()
+	d.waitScreen("Confirm")
+	d.keys("esc")
+	<-errCh
 }

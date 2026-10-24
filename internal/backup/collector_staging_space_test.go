@@ -27,10 +27,7 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	if w.limit <= 0 {
 		return 0, w.err
 	}
-	n := len(p)
-	if n > w.limit {
-		n = w.limit
-	}
+	n := min(len(p), w.limit)
 	written, err := w.f.Write(p[:n])
 	w.limit -= written
 	if err != nil {

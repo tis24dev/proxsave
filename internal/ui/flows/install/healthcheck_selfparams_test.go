@@ -75,7 +75,7 @@ func TestRunHealthcheckSelfParams(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunHealthcheckSelfParams(context.Background(), d.session, dir, configPath)
+		errCh <- RunHealthcheckSelfParams(t.Context(), d.session, dir, configPath)
 	}()
 	d.waitScreen("Healthchecks - your own server parameters")
 	d.typeText(aliveURL)
@@ -137,7 +137,7 @@ func TestRunHealthcheckSetupSelfBranch(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		res, err := RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", false)
+		res, err := RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", false)
 		resCh <- result{res, err}
 	}()
 	d.waitScreen("Backup monitoring (healthchecks)")

@@ -213,10 +213,7 @@ func (c *Confirm) View(width, height int) string {
 	// rows for the same reason.
 	tail := []string{}
 	if c.timeout > 0 {
-		left := c.deadline.Sub(c.now)
-		if left < 0 {
-			left = 0
-		}
+		left := max(c.deadline.Sub(c.now), 0)
 		// The countdown advertises the TIMEOUT outcome, which always resolves to No
 		// (c.noLabel), never the Enter default: a countdown-armed defaultYes prompt
 		// would otherwise read "default: Apply" while an expiry picks Skip. The Enter

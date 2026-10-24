@@ -3,6 +3,7 @@ package backup
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -739,7 +741,7 @@ func (c *Collector) finalizePVERuntimeInfo(info *pveRuntimeInfo) {
 			info.Nodes = append(info.Nodes, "localhost")
 		}
 	} else {
-		sort.Strings(info.Nodes)
+		slices.Sort(info.Nodes)
 	}
 }
 
@@ -2312,8 +2314,8 @@ func (c *Collector) augmentStoragesWithConfig(storages []pveStorageEntry) []pveS
 	for _, entry := range merged {
 		result = append(result, entry)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	slices.SortFunc(result, func(a, b pveStorageEntry) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 	return result
 }
@@ -2641,7 +2643,7 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (clustered bool, resultE
 			return serviceState{}, &pveClusterDetectionError{reason: "cannot query " + name, cause: err}
 		}
 		values := make(map[string]string)
-		for _, line := range strings.Split(string(out), "\n") {
+		for line := range strings.SplitSeq(string(out), "\n") {
 			if key, value, ok := strings.Cut(line, "="); ok {
 				values[key] = value
 			}
@@ -2676,7 +2678,7 @@ func (c *Collector) isClusteredPVE(ctx context.Context) (clustered bool, resultE
 			return "", &pveClusterDetectionError{reason: "cannot read pmxcfs mount information", cause: err}
 		}
 		unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			left, right, ok := strings.Cut(line, " - ")
 			fields, fs := strings.Fields(left), strings.Fields(right)
 			if !ok || len(fields) < 6 || len(fs) < 3 {
@@ -2877,10 +2879,8 @@ func (c *Collector) cephConfigPaths() []string {
 			abs = filepath.Clean(filepath.Join("/", path))
 		}
 		abs = c.systemPath(abs)
-		for _, existing := range paths {
-			if existing == abs {
-				return
-			}
+		if slices.Contains(paths, abs) {
+			return
 		}
 		paths = append(paths, abs)
 	}
@@ -2892,9 +2892,7 @@ func (c *Collector) cephConfigPaths() []string {
 	// effectivePVEConfigPath() is already prefixed and would double-prefix to
 	// PREFIX/PREFIX/etc/pve/ceph.
 	pveConfigRoot := strings.TrimSpace(c.config.PVEConfigPath)
-	if pveConfigRoot == "" {
-		pveConfigRoot = "/etc/pve"
-	}
+	pveConfigRoot = cmp.Or(pveConfigRoot, "/etc/pve")
 	add(filepath.Join(pveConfigRoot, "ceph"))
 	add("/etc/ceph")
 	return paths
@@ -2928,9 +2926,7 @@ func (c *Collector) cephHasClusterConfig(path string) bool {
 // verbatim so a restore onto a real host recreates the link correctly (issue #255).
 func (c *Collector) readSystemFileFollowingSymlinks(path string) ([]byte, error) {
 	root := strings.TrimSpace(c.config.SystemRootPrefix)
-	if root == "" {
-		root = string(filepath.Separator)
-	}
+	root = cmp.Or(root, string(filepath.Separator))
 	cleanRoot := filepath.Clean(root)
 	rel := path
 	switch {

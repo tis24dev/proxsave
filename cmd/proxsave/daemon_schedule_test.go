@@ -67,7 +67,7 @@ func captureDaemonLogWith(t *testing.T, onEntry func(entry string)) func() []str
 	logging.SetDefaultLogger(l)
 	return func() []string {
 		var out []string
-		for _, line := range strings.Split(strings.TrimRight(sink.String(), "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimRight(sink.String(), "\n"), "\n") {
 			_, rest, ok := strings.Cut(line, "] ")
 			if !ok || len(rest) < 9 {
 				continue
@@ -812,7 +812,7 @@ func TestScheduleBlockPrecedesTheBackgroundLoops(t *testing.T) {
 	})
 
 	d := scheduleDaemon(t, "weekly", "mon", "1", "02:00", true, config.HealthcheckModeSelf)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan int, 1)
 	go func() { done <- d.run(ctx) }()

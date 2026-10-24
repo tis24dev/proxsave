@@ -8,6 +8,7 @@ package installer
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"fmt"
 	"net/url"
@@ -482,9 +483,7 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 	// (defaulting to centralized when MODE is absent but the connector is enabled).
 	if readTemplateBool(values, "HEALTHCHECK_ENABLED") {
 		hcMode := normalizeHealthcheckMode(readTemplateString(values, "HEALTHCHECK_MODE"))
-		if hcMode == "" {
-			hcMode = "centralized"
-		}
+		hcMode = cmp.Or(hcMode, "centralized")
 		out.HealthcheckMode = hcMode
 	} else {
 		out.HealthcheckMode = "off"

@@ -77,8 +77,7 @@ func TestBuildInstallOutcomePromptUnverified(t *testing.T) {
 // composed outcome must appear on screen (inside the contained viewport), and pressing
 // Enter after done must let the driver return.
 func TestRunStreamTaskFinalizationDriver(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Install Wizard"}, &buf)
@@ -184,5 +183,13 @@ func pumpEnter(t *testing.T, s *shell.Session, done <-chan error) error {
 		case <-deadline:
 			return errors.New("RunStreamTask did not return")
 		}
+	}
+}
+
+// A blank permission message shows the permission status itself.
+func TestBuildInstallOutcomePromptFallsBackToThePermissionStatus(t *testing.T) {
+	out := ansi.Strip(buildInstallOutcomePrompt(RestartVerifyResult{}, false, "ok", " "))
+	if !strings.Contains(out, "Permissions: ok") {
+		t.Fatalf("blank permission message must show the status, got:\n%s", out)
 	}
 }

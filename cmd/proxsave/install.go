@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -303,7 +303,7 @@ func runPostInstallAuditCLI(ctx context.Context, reader *bufio.Reader, execPath,
 		return nil
 	}
 
-	sort.Strings(keys)
+	slices.Sort(keys)
 	// The summary printed just below renders the un-normalized `keys` slice while the
 	// file receives the ToUpper-normalized keys ApplyAuditDisables writes; the two agree
 	// only because internal/installer/audit.go already uppercases each Key at the source.
@@ -1519,9 +1519,6 @@ func isInstallAbortedError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	if strings.Contains(msg, "installation aborted by user") {
-		return true
-	}
-	if strings.Contains(msg, "installation aborted (existing configuration kept)") {
 		return true
 	}
 	if strings.Contains(msg, "encryption setup aborted by user") {

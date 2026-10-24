@@ -158,3 +158,19 @@ func TestVerifyStagedArchiveIntegrity_UsesCandidateIntegrityExpectation(t *testi
 		t.Fatalf("verifyStagedArchiveIntegrity(, 0) = %q; want %q", got, want)
 	}
 }
+
+// A candidate checksum with a blank source is attributed to "candidate".
+func TestResolveCandidateIntegrityExpectationDefaultsABlankSource(t *testing.T) {
+	got, err := resolveCandidateIntegrityExpectation(stagedFiles{}, &backupCandidate{
+		Integrity: &stagedIntegrityExpectation{
+			Checksum: checksumHexForBytes([]byte("archive")),
+			Source:   " ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveCandidateIntegrityExpectation error: %v", err)
+	}
+	if got.Source != "candidate" {
+		t.Fatalf("Source = %q, want %q", got.Source, "candidate")
+	}
+}

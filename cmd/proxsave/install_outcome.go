@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/ui/theme"
@@ -49,9 +50,7 @@ func buildInstallOutcomePrompt(rv RestartVerifyResult, verified bool, permStatus
 	b.WriteString("\n")
 	b.WriteString(theme.Text.Render("Permissions: "))
 	permText := strings.TrimSpace(permMessage)
-	if permText == "" {
-		permText = permStatus
-	}
+	permText = cmp.Or(permText, permStatus)
 	switch permStatus {
 	case "ok":
 		b.WriteString(theme.SuccessText.Render(permText))

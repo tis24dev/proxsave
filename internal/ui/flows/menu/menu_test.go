@@ -84,7 +84,7 @@ func TestMenuRowOrder(t *testing.T) {
 		d := newDriver(t)
 		ch := run(d, context.Background())
 		d.waitScreen("Dashboard")
-		for j := 0; j < i; j++ {
+		for range i {
 			d.keys("down")
 		}
 		d.keys("enter")

@@ -347,3 +347,20 @@ func TestDetectUnprivilegedContainer(t *testing.T) {
 		}
 	})
 }
+
+// A blank label falls back to "value", and a blank value with a blank fallback
+// falls back to "unknown".
+func TestFormatSimpleDetailsDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		label, value, emptyValue, want string
+	}{
+		{label: "", value: "x", emptyValue: "", want: "value=x"},
+		{label: "  ", value: "", emptyValue: "  ", want: "value=unknown"},
+		{label: "euid", value: "", emptyValue: "", want: "euid=unknown"},
+		{label: "euid", value: "", emptyValue: "none", want: "euid=none"},
+	} {
+		if got := formatSimpleDetails(tc.label, tc.value, tc.emptyValue); got != tc.want {
+			t.Errorf("formatSimpleDetails(%q, %q, %q) = %q; want %q", tc.label, tc.value, tc.emptyValue, got, tc.want)
+		}
+	}
+}

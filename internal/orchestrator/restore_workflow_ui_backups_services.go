@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -138,8 +139,8 @@ func (w *restoreUIWorkflowRun) shouldCreateAccessControlRollbackBackup() bool {
 func (w *restoreUIWorkflowRun) prepareRestoreServices() (func(), error) {
 	var cleanups []func()
 	runCleanups := func() {
-		for i := len(cleanups) - 1; i >= 0; i-- {
-			cleanups[i]()
+		for _, cleanup := range slices.Backward(cleanups) {
+			cleanup()
 		}
 	}
 	if cleanup, err := w.preparePVEClusterRestore(); err != nil {
@@ -195,8 +196,7 @@ func (w *restoreUIWorkflowRun) restartStoppedPVEClusterServices() {
 	defer cancel()
 	if err := startPVEClusterServices(restartCtx, w.logger); err != nil {
 		w.logger.Warning("Failed to restart PVE services after restore: %v", err)
-		var startErr *pveClusterStartError
-		if errors.As(err, &startErr) {
+		if startErr, ok := errors.AsType[*pveClusterStartError](err); ok {
 			w.clusterServicesNotRunning = startErr
 		}
 	}

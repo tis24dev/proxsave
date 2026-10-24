@@ -31,7 +31,7 @@ func TestDaemonRefusesSecondInstanceAndLeavesTheIncumbentsFilesAlone(t *testing.
 		cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"},
 		now: time.Now,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	done := make(chan int, 1)
@@ -65,7 +65,7 @@ func TestDaemonStartsOverAStalePidFile(t *testing.T) {
 		cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"},
 		now: time.Now,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	done := make(chan int, 1)
@@ -83,7 +83,7 @@ func TestDaemonStartsOverAStalePidFile(t *testing.T) {
 func TestConcurrentDaemonCannotPassTheSingleInstanceGate(t *testing.T) {
 	base := t.TempDir()
 	first := &daemon{cfg: &config.Config{BaseDir: base, SchedulerTime: "03:00"}, now: time.Now}
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
 	firstResult := make(chan int, 1)
 	firstStopped := make(chan struct{})
 	go func() {

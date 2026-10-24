@@ -15,6 +15,9 @@ through command-line flags.
 proxsave [FLAGS] [OPTIONS]
 ```
 
+ProxSave takes flags only. A word that is not a flag stops the run with
+`Unexpected argument "<word>": only flags are accepted. Nothing was run.` and exit code 2.
+
 **Mode flags do not all combine.** Each one selects an operation mode, and ProxSave refuses
 the combinations that would contradict each other rather than picking one silently: only one
 of `--daemon`, `--daemon-setup`, `--daemon-remove`, `--daemon-status` at a time and none of
@@ -22,9 +25,10 @@ them with another mode; `--install` not with `--new-install` or `--upgrade`;
 `--cleanup-guards` and `--support` each with their own short list of incompatible modes; and
 `--dry-run` refused with `--upgrade`, `--upgrade-finalize`, `--daemon`, `--daemon-setup` and
 `--daemon-remove`, none of which have ever honoured it, and with `--restore`, which cannot run
-without modifying the system (`DRY_RUN=true` refuses a restore too). The run stops with the
-reason printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode they apply
-to.
+without modifying the system (`DRY_RUN=true` refuses a restore too). Any other two operation
+modes in one run are refused as well, for example `--restore` with `--decrypt`. The run stops
+with the reason printed. Modifiers (`--config`, `--log-level`, `--cli`) do combine with the mode
+they apply to.
 
 **Configuration precedence** (highest to lowest):
 1. Command-line flags
@@ -223,6 +227,10 @@ proxsave -l info    # debug|info|warning|error|critical
 | `error` | Errors only | Critical issues only |
 | `critical` | Critical failures only | Emergency mode |
 
+The level is matched without regard to case (`DEBUG` works). Any other value stops the run with
+`Unknown log level "<value>": use debug, info, warning, error or critical. Nothing was run.`
+and exit code 2.
+
 **Log output**:
 - **Console**: Colored output (if `USE_COLOR=true`)
 - **File**: `LOG_PATH/backup-<resolved-hostname>-YYYYMMDD-HHMMSS.log`
@@ -371,12 +379,12 @@ The examples use an explicit operation because environment assignments alone do 
 | `15` | encryption error | Error during encryption setup or processing |
 | `16` | backup skipped | No backup was performed, for a benign reason: another backup already held the lock, or `BACKUP_ENABLED=false`. Not a failure |
 | `17` | guards still in place | `--cleanup-guards` only. The cleanup itself ran fine, but the storage is still locked: guard mounts or immutable flags are left behind (typically hidden under a live mount), or the remaining count could not be confirmed. Also returned by `--cleanup-guards --dry-run` when it finds guards. Not a failure: unmount the datastore and retry |
-| `130` | interrupted | The run was cancelled with Ctrl+C (128 plus SIGINT) |
+| `130` | interrupted | The run was cancelled (Ctrl+C, SIGTERM, or an abort at a restore prompt) |
 
 **Note**: `1`, `16`, `17` and `130` are the non-zero codes that do not mean something
 went wrong: `1` is also what a run that succeeded with warnings returns, `16` means no
 backup was performed for a benign reason, `17` means a guard cleanup ran fine but the
-storage is still locked, and `130` means the run was cancelled by hand. Only `2` through
+storage is still locked, and `130` means the run was cancelled. Only `2` through
 `15` are unambiguous failures. A wrapper of the form `proxsave --backup || alert` will
 page you on warning-only runs, every time two runs overlap, and on anything you Ctrl+C,
 unless it excludes them. For `--cleanup-guards`, `17` is the one to act on but not to

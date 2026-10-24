@@ -633,7 +633,7 @@ func notifyGoldenArchive(stats *BackupStats) {
 	stats.Duration = stats.EndTime.Sub(stats.StartTime)
 }
 
-func notifyGoldenMarshal(t *testing.T, v interface{}) []byte {
+func notifyGoldenMarshal(t *testing.T, v any) []byte {
 	t.Helper()
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

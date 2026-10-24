@@ -163,9 +163,9 @@ func TestPrepareCronHandoverProtectsTheAdoptedTime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "SCHEDULER_TIME=") {
-				return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "SCHEDULER_TIME="))
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if after, ok := strings.CutPrefix(strings.TrimSpace(line), "SCHEDULER_TIME="); ok {
+				return strings.TrimSpace(after)
 			}
 		}
 		return ""

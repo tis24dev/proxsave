@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -125,9 +126,7 @@ func extractIPFromSnapshot(path, iface string) string {
 			if parsed.To4() != nil {
 				return token
 			}
-			if firstIPv6 == "" {
-				firstIPv6 = token
-			}
+			firstIPv6 = cmp.Or(firstIPv6, token)
 		}
 		if firstIPv6 != "" {
 			return firstIPv6
@@ -322,10 +321,7 @@ func armNetworkRollback(ctx context.Context, logger *logging.Logger, backupPath 
 	}
 	logging.DebugStep(logger, "arm network rollback", "Script written successfully (%d bytes)", len(script))
 
-	timeoutSeconds := int(timeout.Seconds())
-	if timeoutSeconds < 1 {
-		timeoutSeconds = 1
-	}
+	timeoutSeconds := max(int(timeout.Seconds()), 1)
 
 	if commandAvailable("systemd-run") {
 		logging.DebugStep(logger, "arm network rollback", "Arm timer via systemd-run (%ds)", timeoutSeconds)

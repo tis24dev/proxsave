@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -26,10 +27,8 @@ func (w *restoreUIWorkflowRun) recordBootRebuildInput(entryName string) {
 	if !ok {
 		return
 	}
-	for _, seen := range w.bootRebuildInputsWritten {
-		if seen == input {
-			return
-		}
+	if slices.Contains(w.bootRebuildInputsWritten, input) {
+		return
 	}
 	w.bootRebuildInputsWritten = append(w.bootRebuildInputsWritten, input)
 }

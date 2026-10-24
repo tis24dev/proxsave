@@ -14,7 +14,7 @@ import (
 // visibleOf returns the INFO and WARNING lines of a captured log, without timestamps.
 func visibleOf(out string) []string {
 	var lines []string
-	for _, line := range strings.Split(stripTimes(out), "\n") {
+	for line := range strings.SplitSeq(stripTimes(out), "\n") {
 		if strings.HasPrefix(line, "INFO") || strings.HasPrefix(line, "WARNING") {
 			lines = append(lines, line)
 		}

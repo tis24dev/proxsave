@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
 
       ########################################
-      # GO 1.25 - MAIN TOOLCHAIN
+      # GO FROM go.mod - MAIN TOOLCHAIN
       ########################################
       - name: Set up Go (from go.mod)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -41,19 +41,21 @@ jobs:
         run: go version
 
       ########################################
-      # STATICCHECK - RUNS NATIVELY ON GO 1.25
+      # STATICCHECK - must be a release that supports the go.mod Go version;
+      # an older one cannot type-check the code, and with `|| true` it
+      # passed silently while checking nothing.
       ########################################
       - name: Install Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+        run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
 
       - name: Run Staticcheck
-        run: staticcheck ./... || true
+        run: staticcheck ./...
 
       ########################################
       # GOVULNCHECK - NATIVE
       ########################################
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
       - name: Download modules
         run: go mod download
@@ -62,14 +64,14 @@ jobs:
         run: govulncheck ./...
 
       ########################################
-      # GOSEC - runs under the project's Go (from go.mod, currently 1.25).
+      # GOSEC - runs under the project's Go (from go.mod).
       # gosec must be a version that supports the project's Go: support for Go
       # 1.25 landed in gosec v2.25.0, so the old v2.20.0 (built for Go ≤1.22)
       # could not type-check this code - combined with -no-fail/|| true it would
       # silently emit an empty SARIF. Keep gosec current with the Go toolchain.
       ########################################
       - name: Install GoSec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 
       - name: Run GoSec
         run: |
@@ -94,7 +96,7 @@ jobs:
       # UPLOAD SARIF
       ########################################
       - name: Upload GoSec SARIF
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370
         with:
           sarif_file: gosec.sarif
 

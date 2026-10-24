@@ -60,7 +60,7 @@ type StorageSection struct {
 func ParseStorageConfig(data []byte) []StorageSection {
 	var sections []StorageSection
 	current := -1
-	for _, raw := range strings.Split(string(data), "\n") {
+	for raw := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimRight(raw, "\r")
 		trimmed := strings.TrimSpace(line)
 		switch {

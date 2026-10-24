@@ -232,3 +232,11 @@ func TestGenerateRandomString(t *testing.T) {
 		t.Fatal("GenerateRandomString returned empty string")
 	}
 }
+
+// An inline comment glued to the old value gets one space before it.
+func TestSetEnvValueSpacesAnUnspacedComment(t *testing.T) {
+	got := SetEnvValue("FOO=old#comment", "FOO", "new")
+	if want := "FOO=new #comment"; got != want {
+		t.Fatalf("SetEnvValue() = %q; want %q", got, want)
+	}
+}

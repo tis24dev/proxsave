@@ -32,7 +32,7 @@ var (
 // pbsBlockLogLines returns the logged lines without their timestamps and durations.
 func pbsBlockLogLines(log string) []string {
 	var lines []string
-	for _, line := range strings.Split(strings.TrimRight(log, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(log, "\n"), "\n") {
 		line = pbsLogTimestamp.ReplaceAllString(line, "")
 		line = pbsLogFakeFS.ReplaceAllString(line, "<fakefs>")
 		lines = append(lines, pbsLogDuration.ReplaceAllString(line, "duration=<d>)"))

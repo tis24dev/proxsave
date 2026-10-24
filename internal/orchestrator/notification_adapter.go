@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strconv"
@@ -146,13 +147,9 @@ func (n *NotificationAdapter) convertBackupStatsToNotificationData(stats *Backup
 
 	// Email/Telegram status summaries
 	emailStatus := stats.EmailStatus
-	if emailStatus == "" {
-		emailStatus = "disabled"
-	}
+	emailStatus = cmp.Or(emailStatus, "disabled")
 	telegramStatus := stats.TelegramStatus
-	if telegramStatus == "" {
-		telegramStatus = "N/A"
-	}
+	telegramStatus = cmp.Or(telegramStatus, "N/A")
 
 	// Use precomputed compression ratio (savings %) if available
 	compressionRatio := stats.CompressionSavingsPercent
@@ -474,9 +471,7 @@ func (n *NotificationAdapter) recordNotifierStatus(stats *BackupStats, result *n
 	switch n.notifier.Name() {
 	case "Telegram":
 		base := strings.TrimSpace(stats.TelegramStatus)
-		if base == "" {
-			base = "unknown"
-		}
+		base = cmp.Or(base, "unknown")
 		statusDetail := describeNotificationResult(result)
 		if sub := telegramDeliverySubstate(result); sub != "" {
 			statusDetail = statusDetail + ", " + sub

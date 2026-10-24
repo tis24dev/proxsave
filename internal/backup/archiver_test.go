@@ -629,7 +629,7 @@ func TestContextCancellation(t *testing.T) {
 	if err := os.MkdirAll(testDir, 0755); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if err := os.WriteFile(filepath.Join(testDir, fmt.Sprintf("file%d.txt", i)), []byte("test content"), 0644); err != nil {
 			t.Fatalf("WriteFile failed: %v", err)
 		}

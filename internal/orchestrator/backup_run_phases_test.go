@@ -179,7 +179,7 @@ func TestFailedRunCountsTheStoppingErrorBeforeExport(t *testing.T) {
 				t.Fatalf("read metrics: %v", err)
 			}
 			metric := func(name string) string {
-				for _, line := range strings.Split(string(prom), "\n") {
+				for line := range strings.SplitSeq(string(prom), "\n") {
 					if v, ok := strings.CutPrefix(line, name+" "); ok {
 						return v
 					}

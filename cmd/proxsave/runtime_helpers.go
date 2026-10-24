@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,18 +36,8 @@ type ExecInfo struct {
 	HasBase  bool
 }
 
-var (
-	execInfo     = &ExecInfo{}
-	execInfoOnce = &sync.Once{}
-)
-
-func getExecInfo() ExecInfo {
-	execInfoOnce.Do(func() {
-		info := detectExecInfo()
-		execInfo = &info
-	})
-	return *execInfo
-}
+// getExecInfo detects the running executable once per process.
+var getExecInfo = sync.OnceValue(detectExecInfo)
 
 func detectExecInfo() ExecInfo {
 	candidates := collectExecPathCandidates()
@@ -422,9 +413,7 @@ func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	}
 
 	mount := info.MountPoint
-	if mount == "" {
-		mount = "unknown"
-	}
+	mount = cmp.Or(mount, "unknown")
 
 	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
 }
@@ -589,7 +578,7 @@ func logStorageInitSummary(summary string, warn bool) {
 		return
 	}
 	lines := make([]string, 0, 8)
-	for _, line := range strings.Split(summary, "\n") {
+	for line := range strings.SplitSeq(summary, "\n") {
 		if strings.TrimSpace(line) != "" {
 			lines = append(lines, line)
 		}
@@ -934,9 +923,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	schedule := strings.TrimSpace(cronSchedule)
-	if schedule == "" {
-		schedule = "0 2 * * *"
-	}
+	schedule = cmp.Or(schedule, "0 2 * * *")
 
 	// (Re)install resets proxsave's schedule to the chosen one: every
 	// proxsave-managed entry is dropped and a single fresh entry is written at the
@@ -1121,7 +1108,7 @@ func buildReinstallCronLines(lines []string, baseDir string, correctPaths []stri
 	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
 }
 
-func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Warning(format, args...)
 		return
@@ -1129,7 +1116,7 @@ func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args
 	logging.Warning(format, args...)
 }
 
-func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Info(format, args...)
 		return
@@ -1137,7 +1124,7 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 	logging.Info(format, args...)
 }
 
-func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Debug(format, args...)
 		return
@@ -1489,8 +1476,8 @@ func extractRemoteName(cloudRemote string) string {
 	if remote == "" {
 		return ""
 	}
-	if idx := strings.Index(remote, ":"); idx != -1 {
-		return remote[:idx]
+	if before, _, ok := strings.Cut(remote, ":"); ok {
+		return before
 	}
 	return remote
 }

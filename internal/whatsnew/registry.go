@@ -1,7 +1,7 @@
 package whatsnew
 
 import (
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -295,6 +295,12 @@ var notes = []Note{
 			"This release includes a collection of fixes and corrections.",
 		},
 	},
+	{
+		Version: "0.45.0",
+		Lines: []string{
+			"This release includes a collection of fixes and corrections.",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
@@ -322,10 +328,10 @@ func LookupNotes(from, to string) []Note {
 			out = append(out, n)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, _ := semver.NewVersion(out[i].Version)
-		b, _ := semver.NewVersion(out[j].Version)
-		return a.LessThan(b)
+	slices.SortStableFunc(out, func(a, b Note) int {
+		va, _ := semver.NewVersion(a.Version)
+		vb, _ := semver.NewVersion(b.Version)
+		return va.Compare(vb)
 	})
 	return out
 }

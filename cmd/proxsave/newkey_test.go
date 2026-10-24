@@ -149,3 +149,24 @@ func TestLoadNewKeyConfigFailsForInvalidExistingConfig(t *testing.T) {
 		t.Fatalf("expected wrapped configuration load error, got %v", err)
 	}
 }
+
+// A configuration without AGE_RECIPIENT_FILE uses the recipient file under BASE_DIR.
+func TestLoadNewKeyConfigDefaultsAnUnsetRecipientFile(t *testing.T) {
+	baseDir := t.TempDir()
+	configPath := filepath.Join(baseDir, "env", "backup.env")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(configPath), err)
+	}
+	if err := os.WriteFile(configPath, []byte("BASE_DIR="+baseDir+"\nENCRYPT_ARCHIVE=false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s): %v", configPath, err)
+	}
+
+	cfg, recipientPath, err := loadNewKeyConfig(configPath, baseDir)
+	if err != nil {
+		t.Fatalf("loadNewKeyConfig error: %v", err)
+	}
+	want := filepath.Join(baseDir, "identity", "age", "recipient.txt")
+	if recipientPath != want || cfg.AgeRecipientFile != want {
+		t.Fatalf("recipientPath=%q AgeRecipientFile=%q; want %q", recipientPath, cfg.AgeRecipientFile, want)
+	}
+}

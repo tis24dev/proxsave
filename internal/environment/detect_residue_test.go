@@ -484,3 +484,13 @@ func TestMarkerTableClassifiesBothPackagesFromOneDpkgRead(t *testing.T) {
 		t.Fatalf("dpkg status read %d times, want exactly 1: the verdict must come from the read it checked", served)
 	}
 }
+
+// An installed stanza with no Version field still counts as installed, and reports
+// the version as "unknown" rather than an empty string.
+func TestDpkgPackageInstalledInDefaultsAMissingVersion(t *testing.T) {
+	data := []byte("Package: pve-manager\nStatus: install ok installed\n")
+	version, ok := dpkgPackageInstalledIn(data, "pve-manager")
+	if !ok || version != "unknown" {
+		t.Fatalf("dpkgPackageInstalledIn() = (%q, %v); want (%q, true)", version, ok, "unknown")
+	}
+}

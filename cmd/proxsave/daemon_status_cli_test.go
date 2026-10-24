@@ -290,7 +290,7 @@ func TestLogDaemonDiagnosticsUsesStandardEnvelopeAndSeverity(t *testing.T) {
 		}
 	}
 	timestamped := regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] (DEBUG|INFO|WARNING) +`)
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if !timestamped.MatchString(line) {
 			t.Errorf("line does not use standard CLI timestamp/severity: %q", line)
 		}

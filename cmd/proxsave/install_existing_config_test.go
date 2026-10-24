@@ -52,7 +52,6 @@ func TestPromptExistingConfigModeCLIOptions(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			reader := bufio.NewReader(strings.NewReader(tc.input))
 			var mode installer.ExistingConfigAction

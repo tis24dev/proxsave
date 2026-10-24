@@ -69,7 +69,7 @@ func TestSendViaCloudRelay_NormalizesScriptVersionHeader(t *testing.T) {
 	err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
 		To:            "dest@test.invalid",
 		Subject:       "subject",
-		Report:        map[string]interface{}{"ok": true},
+		Report:        map[string]any{"ok": true},
 		Timestamp:     time.Now().Unix(),
 		ServerMAC:     "00:11:22:33:44:55",
 		ScriptVersion: "0.0.0-dev",
@@ -113,12 +113,12 @@ func TestBuildReportAndStorageData(t *testing.T) {
 	if report["status"] != data.Status.String() {
 		t.Fatalf("status mismatch: %v", report["status"])
 	}
-	emojis, ok := report["emojis"].(map[string]interface{})
+	emojis, ok := report["emojis"].(map[string]any)
 	if !ok || emojis["primary"] != GetStorageEmoji(data.LocalStatus) || emojis["cloud"] != GetStorageEmoji(data.CloudStatus) {
 		t.Fatalf("emojis missing or incorrect: %+v", emojis)
 	}
 
-	storageSection, ok := report["storage"].(map[string]interface{})
+	storageSection, ok := report["storage"].(map[string]any)
 	if !ok {
 		t.Fatal("storage section missing")
 	}
@@ -126,12 +126,12 @@ func TestBuildReportAndStorageData(t *testing.T) {
 		t.Fatal("secondary storage should be present when enabled")
 	}
 
-	logSummary, ok := report["log_summary"].(map[string]interface{})
+	logSummary, ok := report["log_summary"].(map[string]any)
 	if !ok || logSummary["color"] != getLogSummaryColor(data.ErrorCount, data.WarningCount) {
 		t.Fatalf("log_summary invalid: %+v", logSummary)
 	}
 
-	paths, ok := report["paths"].(map[string]interface{})
+	paths, ok := report["paths"].(map[string]any)
 	if !ok || paths["cloud_display"] == "" {
 		t.Fatalf("paths invalid: %+v", paths)
 	}
@@ -218,7 +218,7 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 			err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
 				To:            "dest@test.invalid",
 				Subject:       "subject",
-				Report:        map[string]interface{}{"ok": true},
+				Report:        map[string]any{"ok": true},
 				Timestamp:     time.Now().Unix(),
 				ServerMAC:     "00:11:22:33:44:55",
 				ScriptVersion: testData.ScriptVersion,
@@ -244,9 +244,9 @@ func TestSendViaCloudRelay_StatusHandling(t *testing.T) {
 }
 
 func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&attempts, 1) < 3 {
+		if attempts.Add(1) < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"temporary"}`))
 			return
@@ -268,7 +268,7 @@ func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
 	err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
 		To:            "dest@test.invalid",
 		Subject:       "subject",
-		Report:        map[string]interface{}{"ok": true},
+		Report:        map[string]any{"ok": true},
 		Timestamp:     time.Now().Unix(),
 		ServerMAC:     "00:11:22:33:44:55",
 		ScriptVersion: "0.0.1",
@@ -278,16 +278,16 @@ func TestSendViaCloudRelay_RetryOnServerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success after retries, got error: %v", err)
 	}
-	if got := atomic.LoadInt32(&attempts); got != 3 {
+	if got := attempts.Load(); got != 3 {
 		t.Fatalf("expected 3 attempts, got %d", got)
 	}
 }
 
 func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&attempts, 1) == 1 {
+		if attempts.Add(1) == 1 {
 			cancel()
 		}
 		w.WriteHeader(http.StatusInternalServerError)
@@ -308,7 +308,7 @@ func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
 	err := sendViaCloudRelay(ctx, cfg, EmailRelayPayload{
 		To:            "dest@test.invalid",
 		Subject:       "subject",
-		Report:        map[string]interface{}{"ok": true},
+		Report:        map[string]any{"ok": true},
 		Timestamp:     time.Now().Unix(),
 		ServerMAC:     "00:11:22:33:44:55",
 		ScriptVersion: "0.0.1",
@@ -318,7 +318,7 @@ func TestSendViaCloudRelay_StopsRetryingWhenContextCanceled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation error, got %v", err)
 	}
-	if got := atomic.LoadInt32(&attempts); got != 1 {
+	if got := attempts.Load(); got != 1 {
 		t.Fatalf("expected 1 attempt after cancellation, got %d", got)
 	}
 }
@@ -333,10 +333,10 @@ func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
 		logger.SetOutput(&buf)
 		_ = sendViaCloudRelay(context.Background(), CloudRelayConfig{
 			WorkerURL: url, WorkerToken: "token", HMACSecret: "secret", Timeout: 5, MaxRetries: maxRetries, RetryDelay: 0,
-		}, EmailRelayPayload{To: "dest@test.invalid", Subject: "subject", Report: map[string]interface{}{"ok": true},
+		}, EmailRelayPayload{To: "dest@test.invalid", Subject: "subject", Report: map[string]any{"ok": true},
 			Timestamp: time.Now().Unix(), ServerMAC: "00:11:22:33:44:55", ScriptVersion: "0.0.1", ServerID: "server-id"}, logger)
 		var warnings []string
-		for _, line := range strings.Split(buf.String(), "\n") {
+		for line := range strings.SplitSeq(buf.String(), "\n") {
 			if _, rest, ok := strings.Cut(line, "WARNING"); ok {
 				warnings = append(warnings, strings.TrimSpace(rest))
 			}
@@ -354,9 +354,9 @@ func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
 		t.Fatalf("server error lines:\n%s\nwant\n%s", got, want)
 	}
 
-	var calls int32
+	var calls atomic.Int32
 	teapot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&calls, 1) == 1 {
+		if calls.Add(1) == 1 {
 			w.WriteHeader(http.StatusTeapot)
 			_, _ = w.Write([]byte("nope"))
 			return
@@ -373,5 +373,46 @@ func TestSendViaCloudRelay_RetryLinesNameTheAttempt(t *testing.T) {
 	closed.Close()
 	if got := send(t, url, 0); !strings.HasPrefix(got, "Cloud relay: request failed, attempt 1/1: ") || strings.Contains(got, "\n") {
 		t.Fatalf("request failed line: %q", got)
+	}
+}
+
+// A relay error with blank fields falls back to the next field, then to a fixed text.
+func TestSendViaCloudRelayDefaultsBlankErrorDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		body       string
+		wantSuffix string
+	}{
+		{name: "200-success-false-message-only", statusCode: 200, body: `{"success":false,"message":"mailbox full"}`, wantSuffix: ": mailbox full"},
+		{name: "200-success-false-no-details", statusCode: 200, body: `{"success":false}`, wantSuffix: ": relay returned success=false with no details"},
+		{name: "429-no-details", statusCode: 429, body: `{}`, wantSuffix: ": no additional details provided"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			cfg := CloudRelayConfig{WorkerURL: server.URL, WorkerToken: "token", HMACSecret: "secret", Timeout: 5}
+			err := sendViaCloudRelay(context.Background(), cfg, EmailRelayPayload{
+				To:            "dest@test.invalid",
+				Subject:       "subject",
+				ServerMAC:     "00:11:22:33:44:55",
+				ScriptVersion: "0.0.1",
+				ServerID:      "server-id",
+			}, logging.New(types.LogLevelError, false))
+			if err == nil || !strings.HasSuffix(err.Error(), tc.wantSuffix) {
+				t.Fatalf("sendViaCloudRelay() error = %v; want it to end with %q", err, tc.wantSuffix)
+			}
+		})
+	}
+}
+
+// A response with blank error and message fields reports the caller's fallback.
+func TestRelayResponseDetailDefaultsToTheFallback(t *testing.T) {
+	if got := relayResponseDetail(EmailRelayResponse{Error: " ", Message: " "}, "bad request"); got != "bad request" {
+		t.Fatalf("relayResponseDetail() = %q; want %q", got, "bad request")
 	}
 }

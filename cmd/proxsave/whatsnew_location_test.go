@@ -226,7 +226,7 @@ func TestWhatsnewHungLogPathIsSilent(t *testing.T) {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
 	t.Cleanup(func() {
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			f, err := os.OpenFile(flag, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 			if err != nil {
 				return
@@ -246,7 +246,7 @@ func TestWhatsnewHungLogPathIsSilent(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			maybeShowWhatsnew(context.Background(), nil, loc, "0.40.0")
+			maybeShowWhatsnew(t.Context(), nil, loc, "0.40.0")
 		}()
 		select {
 		case <-done:

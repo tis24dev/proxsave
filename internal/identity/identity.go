@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -994,7 +995,7 @@ func identityKeyArms(f hostFacts, macs []string, primaryMAC string) []identityKe
 		orderedMACs = append(orderedMACs, mac)
 	}
 	if len(orderedMACs) > 1 {
-		sort.Strings(orderedMACs[1:])
+		slices.Sort(orderedMACs[1:])
 	}
 
 	arms := make([]identityKeyArm, 0, len(orderedMACs)*2+3)
@@ -1082,14 +1083,14 @@ func splitKeyFieldEntries(keyField string) []identityKeyArm {
 		if token == "" {
 			continue
 		}
-		idx := strings.IndexByte(token, '=')
-		if idx < 0 {
+		before, after, ok := strings.Cut(token, "=")
+		if !ok {
 			out = append(out, identityKeyArm{Prefix: token})
 			continue
 		}
 		out = append(out, identityKeyArm{
-			Label:  strings.TrimSpace(token[:idx]),
-			Prefix: strings.TrimSpace(token[idx+1:]),
+			Label:  strings.TrimSpace(before),
+			Prefix: strings.TrimSpace(after),
 		})
 	}
 	return out
@@ -1568,13 +1569,13 @@ func isAllDigits(value string) bool {
 	return true
 }
 
-func logWarning(logger *logging.Logger, format string, args ...interface{}) {
+func logWarning(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Warning(format, args...)
 	}
 }
 
-func logDebug(logger *logging.Logger, format string, args ...interface{}) {
+func logDebug(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Debug(format, args...)
 	}

@@ -42,7 +42,7 @@ func fakeRcloneOnPath(t *testing.T, script string) *[]time.Duration {
 // visibleLines are the lines an operator sees (no DEBUG), without timestamps.
 func visibleLines(out string) []string {
 	var lines []string
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
 		if _, rest, ok := strings.Cut(line, "] "); ok {
 			line = rest
 		}

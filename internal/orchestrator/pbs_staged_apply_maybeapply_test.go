@@ -130,8 +130,7 @@ func TestMaybeApplyPBSConfigsFromStage_CleanMode_ApiUnavailableFallsBackToFiles(
 	// datastore.cfg is written by the datastore block from the backup file, whose
 	// outcome is a ⚠ one already logged: the restore ends with warnings.
 	err := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), plan, stageRoot, false)
-	var logged *stageApplyOutcomeLoggedError
-	if !errors.As(err, &logged) {
+	if _, ok := errors.AsType[*stageApplyOutcomeLoggedError](err); !ok {
 		t.Fatalf("maybeApplyPBSConfigsFromStage: %v; want the datastore block outcome already logged", err)
 	}
 
@@ -334,8 +333,7 @@ func TestMaybeApplyPBSConfigsFromStage_ApiErrorsTriggerFallbackOnlyInCleanMode(t
 	// The datastore API error is written from the backup file by the datastore
 	// block, whose ⚠ outcome is already logged: the restore ends with warnings.
 	cleanErr := maybeApplyPBSConfigsFromStage(context.Background(), newTestLogger(), planClean, stageRoot, false)
-	var cleanLogged *stageApplyOutcomeLoggedError
-	if !errors.As(cleanErr, &cleanLogged) {
+	if _, ok := errors.AsType[*stageApplyOutcomeLoggedError](cleanErr); !ok {
 		t.Fatalf("maybeApplyPBSConfigsFromStage clean: %v; want the datastore block outcome already logged", cleanErr)
 	}
 
@@ -625,8 +623,7 @@ func TestMaybeApplyPBSConfigsFromStage_CleanDatastoreRemoveRefusedThenApplyFails
 					t.Fatalf("expected command %q, calls: %v", want, runner.CallsList())
 				}
 			}
-			var logged *stageApplyOutcomeLoggedError
-			if !errors.As(err, &logged) {
+			if _, ok := errors.AsType[*stageApplyOutcomeLoggedError](err); !ok {
 				t.Fatalf("expected an outcome-logged error so the restore reports 'with warnings', got: %v", err)
 			}
 			var incomplete *pbsDatastoreRestoreIncompleteError
@@ -748,8 +745,7 @@ func TestMaybeApplyPBSConfigsFromStage_DatastoreFailureKeepsApplyingTheRest(t *t
 					t.Fatalf("no line may follow the datastore block (%q), log:\n%s", unwanted, logBuf.String())
 				}
 			}
-			var logged *stageApplyOutcomeLoggedError
-			if !errors.As(err, &logged) {
+			if _, ok := errors.AsType[*stageApplyOutcomeLoggedError](err); !ok {
 				t.Fatalf("expected an outcome-logged error so the restore reports 'with warnings', got: %v", err)
 			}
 		})

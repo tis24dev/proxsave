@@ -135,7 +135,7 @@ func TestPagerWrapsLongLineInView(t *testing.T) {
 	if !strings.Contains(view, tail) {
 		t.Fatalf("long line tail was clipped, not wrapped:\n%s", view)
 	}
-	for _, row := range strings.Split(view, "\n") {
+	for row := range strings.SplitSeq(view, "\n") {
 		if got := ansi.StringWidth(row); got > 50 {
 			t.Fatalf("rendered row exceeds width (%d): %q", got, row)
 		}

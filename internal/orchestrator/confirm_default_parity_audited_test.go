@@ -122,7 +122,7 @@ func TestCharmConfirmDefaultParity_Audited(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resCh := make(chan result, 1)
 			go func() {
-				ok, err := tc.invoke(context.Background())
+				ok, err := tc.invoke(t.Context())
 				resCh <- result{ok, err}
 			}()
 			d.waitScreen(tc.screen)
@@ -172,7 +172,7 @@ func TestCharmConfirmTimeoutAlwaysNo_Audited(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resCh := make(chan result, 1)
 			go func() {
-				ok, err := tc.invoke(context.Background())
+				ok, err := tc.invoke(t.Context())
 				resCh <- result{ok, err}
 			}()
 			d.waitScreen(tc.screen)

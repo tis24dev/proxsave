@@ -567,7 +567,7 @@ func rcloneLocalCopy(failSuffix string) func(context.Context, string, ...string)
 			return nil, os.Chmod(dst, 0o644)
 		case "lsl":
 			if st, err := os.Stat(args[1]); err == nil && !st.IsDir() {
-				return []byte(fmt.Sprintf("%9d 2026-10-03 10:00:00.000000000 %s\n", st.Size(), filepath.Base(args[1]))), nil
+				return fmt.Appendf(nil, "%9d 2026-10-03 10:00:00.000000000 %s\n", st.Size(), filepath.Base(args[1])), nil
 			}
 		}
 		return nil, nil

@@ -146,7 +146,7 @@ func TestIncrementalWrapIsBounded(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
 	scr.View(40, 20) // establish a width so appends wrap incrementally
 	const n = 3000
-	for i := 0; i < n; i++ {
+	for i := range n {
 		scr = feedLines(scr, 1, fmt.Sprintf("line %d", i))
 	}
 	before := append([]string(nil), scr.wrapped...)
@@ -229,7 +229,7 @@ func TestCopyUsesRawNotWrapped(t *testing.T) {
 func TestRingDropKeepsRawAndWrappedConsistent(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
 	scr.View(20, 20) // establish width so appends wrap incrementally
-	for i := 0; i < streamLineCap+300; i++ {
+	for i := range streamLineCap + 300 {
 		if i%3 == 0 {
 			scr = feedLines(scr, 1, strings.Repeat("L", 50)) // 3 wrapped rows at width 20
 		} else {
@@ -256,7 +256,7 @@ func TestRingDropConsistentBigBatch(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
 	scr.View(20, 20)
 	// Prime near the cap.
-	for i := 0; i < streamLineCap-10; i++ {
+	for i := range streamLineCap - 10 {
 		scr = feedLines(scr, 1, fmt.Sprintf("s%d", i))
 	}
 	// One big batch of long (multi-row) lines overflows the cap by ~90.
@@ -313,7 +313,7 @@ func TestGateSkipsUnchangedRenders(t *testing.T) {
 // still work on the pre-wrapped (SoftWrap-off) content.
 func TestFollowAndScrollWithPreWrap(t *testing.T) {
 	scr := newStreamScreen("Running backup", 1, func() {})
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		scr = feedLines(scr, 1, fmt.Sprintf("line %d %s", i, strings.Repeat("x", 30)))
 	}
 	scr.View(20, 8) // small panel, wide lines -> many wrapped rows to scroll
@@ -403,8 +403,7 @@ func TestLipglossCountCountsWrappedRows(t *testing.T) {
 // emitting far more than streamFlushCount lines completes well under the
 // deadline (the old s.Send-per-line path could stall on backpressure).
 func TestEmitBufferNeverBlocks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	buf := &shell.SyncBuffer{}
 	s := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, buf)
 	t.Cleanup(func() { _ = s.Close() })
@@ -417,7 +416,7 @@ func TestEmitBufferNeverBlocks(t *testing.T) {
 	const n = 50000
 	emitted := make(chan struct{})
 	go func() {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			b.emit(fmt.Sprintf("l%d", i))
 		}
 		close(emitted)
@@ -432,8 +431,7 @@ func TestEmitBufferNeverBlocks(t *testing.T) {
 // TestEmitBufferCloseIdempotentNoLeak proves Close is idempotent and the flusher
 // goroutine exits (no leak / no deadlock).
 func TestEmitBufferCloseIdempotentNoLeak(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	buf := &shell.SyncBuffer{}
 	s := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, buf)
 	t.Cleanup(func() { _ = s.Close() })
@@ -474,7 +472,7 @@ func TestRunStreamTaskFlushesEveryLine(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- RunStreamTask(ctx, s, "Running backup", func(_ context.Context, emit func(string)) (string, error) {
-			for i := 0; i < 1000; i++ {
+			for i := range 1000 {
 				emit(fmt.Sprintf("burst line %d", i))
 			}
 			emit("FINAL-LINE-SENTINEL")

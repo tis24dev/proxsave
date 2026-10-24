@@ -2,13 +2,14 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -141,7 +142,7 @@ func isMountedFromMountinfo(mountinfo, path string) bool {
 		return false
 	}
 
-	for _, line := range strings.Split(mountinfo, "\n") {
+	for line := range strings.SplitSeq(mountinfo, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -169,7 +170,7 @@ func isMountedFromProcMounts(path string) (bool, error) {
 		return false, nil
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -288,7 +289,7 @@ func splitPath(rest string) []string {
 		return nil
 	}
 	var parts []string
-	for _, p := range strings.Split(rest, "/") {
+	for p := range strings.SplitSeq(rest, "/") {
 		if strings.TrimSpace(p) == "" {
 			continue
 		}
@@ -301,8 +302,8 @@ func sortByLengthDesc(items []string) {
 	if len(items) < 2 {
 		return
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return len(items[i]) > len(items[j])
+	slices.SortFunc(items, func(a, b string) int {
+		return cmp.Compare(len(b), len(a))
 	})
 }
 

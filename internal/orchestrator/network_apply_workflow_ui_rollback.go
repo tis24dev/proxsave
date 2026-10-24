@@ -541,25 +541,25 @@ func reconnectHostFromOriginalIP(original string) string {
 	return strings.TrimSpace(reconnectHost)
 }
 
-func (f *networkRollbackUIApplyFlow) debug(format string, args ...interface{}) {
+func (f *networkRollbackUIApplyFlow) debug(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Debug(format, args...)
 	}
 }
 
-func (f *networkRollbackUIApplyFlow) info(format string, args ...interface{}) {
+func (f *networkRollbackUIApplyFlow) info(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Info(format, args...)
 	}
 }
 
-func (f *networkRollbackUIApplyFlow) warning(format string, args ...interface{}) {
+func (f *networkRollbackUIApplyFlow) warning(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Warning(format, args...)
 	}
 }
 
-func (f *networkRollbackUIApplyFlow) logError(format string, args ...interface{}) {
+func (f *networkRollbackUIApplyFlow) logError(format string, args ...any) {
 	if f.logger != nil {
 		f.logger.Error(format, args...)
 	}

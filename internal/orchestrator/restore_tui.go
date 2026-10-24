@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -99,16 +99,16 @@ func filterAndSortCategoriesForSystem(available []Category, systemType SystemTyp
 	}
 
 	// Sort categories: PVE/PBS first, then common
-	sort.Slice(relevant, func(i, j int) bool {
-		if relevant[i].Type != relevant[j].Type {
-			if relevant[i].Type == CategoryTypeCommon {
-				return false
+	slices.SortFunc(relevant, func(a, b Category) int {
+		if a.Type != b.Type {
+			if a.Type == CategoryTypeCommon {
+				return 1
 			}
-			if relevant[j].Type == CategoryTypeCommon {
-				return true
+			if b.Type == CategoryTypeCommon {
+				return -1
 			}
 		}
-		return relevant[i].Name < relevant[j].Name
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	return relevant

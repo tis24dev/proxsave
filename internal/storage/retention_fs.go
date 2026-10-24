@@ -1,12 +1,13 @@
 package storage
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -331,12 +332,11 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 	// Oldest first, as the simple policy deletes: a pass stopped halfway leaves the
 	// newest of them. The map hands them out in random order; the same timestamp is
 	// settled by file name.
-	sort.Slice(toDelete, func(i, j int) bool {
-		a, b := toDelete[i], toDelete[j]
-		if !a.Timestamp.Equal(b.Timestamp) {
-			return a.Timestamp.Before(b.Timestamp)
-		}
-		return a.BackupFile < b.BackupFile
+	slices.SortFunc(toDelete, func(a, b *types.BackupMetadata) int {
+		return cmp.Or(
+			a.Timestamp.Compare(b.Timestamp),
+			strings.Compare(a.BackupFile, b.BackupFile),
+		)
 	})
 
 	return r.deleteBackups(ctx, toDelete, len(backups), initialLogs)
@@ -421,10 +421,7 @@ func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.Backup
 		}
 	}
 
-	remaining := total - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(total-deleted, 0)
 
 	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
 		r.logger.Debug("%s retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",

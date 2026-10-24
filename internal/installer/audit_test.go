@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -115,5 +116,24 @@ func TestSplitNormalizedLines_NormalizesCRLF(t *testing.T) {
 	want := []string{"a", "b", ""}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}
+
+// A variable reported by several warnings keeps its messages in sorted order, so the
+// reason shown first does not depend on the order the run printed them.
+func TestExtractDisableSuggestionsFromIssueLines_SortsMessages(t *testing.T) {
+	lines := []string{
+		"[2026-02-24 09:12:55] WARNING    Zeta check: missing. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+		"[2026-02-24 09:12:56] WARNING    Alpha check: missing. If unused, set BACKUP_CLUSTER_CONFIG=false to disable.",
+	}
+	allowed := map[string]struct{}{"BACKUP_CLUSTER_CONFIG": {}}
+	values := map[string]string{"BACKUP_CLUSTER_CONFIG": "true"}
+
+	got := extractDisableSuggestionsFromIssueLines(lines, allowed, values)
+	if len(got) != 1 || len(got[0].Messages) != 2 {
+		t.Fatalf("suggestions = %#v, want one variable with two messages", got)
+	}
+	if !slices.IsSorted(got[0].Messages) {
+		t.Fatalf("messages = %v, want sorted", got[0].Messages)
 	}
 }

@@ -33,7 +33,7 @@ func TestTelegramOutcome_Delivered(t *testing.T) {
 		Success:  true,
 		Method:   "telegram",
 		Duration: 50 * time.Millisecond,
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"relay_accepted":      true,
 			"telegram_state":      "delivered",
 			"telegram_message_id": int64(7),
@@ -58,7 +58,7 @@ func TestTelegramOutcome_FailedIsWarningNotError(t *testing.T) {
 		Success:  true,
 		Method:   "telegram",
 		Duration: 50 * time.Millisecond,
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"relay_accepted":  true,
 			"telegram_state":  "failed",
 			"telegram_reason": "http_403",
@@ -101,7 +101,7 @@ func TestRecordNotifierStatus_TelegramFailedDeliveryDrivesSensorDown(t *testing.
 			result := &notify.NotificationResult{
 				Success: true, // relay accepted: the run's success signal
 				Method:  "telegram",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"relay_accepted": true,
 					"telegram_state": c.state,
 				},
@@ -140,7 +140,7 @@ func TestRecordNotifierStatus_TelegramLoginURLTrustGate(t *testing.T) {
 			result := &notify.NotificationResult{
 				Success: true,
 				Method:  "telegram",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"relay_accepted": true,
 					"telegram_state": "delivered",
 					"login_url":      c.link,
@@ -159,7 +159,7 @@ func TestTelegramOutcome_PendingIsInProgress(t *testing.T) {
 	out, logger := telegramOutcome(t, &notify.NotificationResult{
 		Success: true,
 		Method:  "telegram",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"relay_accepted": true,
 			"telegram_state": "pending",
 		},
@@ -177,7 +177,7 @@ func TestTelegramOutcome_RelayUnreachableIsWarning(t *testing.T) {
 		Success: false,
 		Method:  "telegram",
 		Error:   errors.New("relay request failed"),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"relay_accepted": false,
 		},
 	})
@@ -199,7 +199,7 @@ func TestTelegramOutcome_FirstLineUsesAcceptanceDuration(t *testing.T) {
 		Success:  true,
 		Method:   "telegram",
 		Duration: 10 * time.Second, // total incl. poll
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"relay_accepted":        true,
 			"relay_accept_duration": 42 * time.Millisecond,
 			"telegram_state":        "delivered",
@@ -218,7 +218,7 @@ func TestTelegramOutcome_UnconfirmedIsQuietNotWarning(t *testing.T) {
 	out, logger := telegramOutcome(t, &notify.NotificationResult{
 		Success: true,
 		Method:  "telegram",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"relay_accepted": true,
 			"telegram_state": "unconfirmed",
 		},
@@ -239,14 +239,14 @@ func TestTelegramOutcome_UnconfirmedIsQuietNotWarning(t *testing.T) {
 func TestTelegramDeliverySubstate_ValueGated(t *testing.T) {
 	cases := []struct {
 		name string
-		meta map[string]interface{}
+		meta map[string]any
 		want string
 	}{
-		{"failed relay", map[string]interface{}{"relay_accepted": false}, ""},
-		{"confirmation disabled", map[string]interface{}{"relay_accepted": true, "telegram_state": "unconfirmed"}, ""},
-		{"delivered", map[string]interface{}{"relay_accepted": true, "telegram_state": "delivered"}, "delivered"},
-		{"pending", map[string]interface{}{"relay_accepted": true, "telegram_state": "pending"}, "queued"},
-		{"non-relay path", map[string]interface{}{}, ""},
+		{"failed relay", map[string]any{"relay_accepted": false}, ""},
+		{"confirmation disabled", map[string]any{"relay_accepted": true, "telegram_state": "unconfirmed"}, ""},
+		{"delivered", map[string]any{"relay_accepted": true, "telegram_state": "delivered"}, "delivered"},
+		{"pending", map[string]any{"relay_accepted": true, "telegram_state": "pending"}, "queued"},
+		{"non-relay path", map[string]any{}, ""},
 	}
 	for _, c := range cases {
 		got := telegramDeliverySubstate(&notify.NotificationResult{Metadata: c.meta})
@@ -263,7 +263,7 @@ func TestTelegramOutcome_NonRelayKeepsGenericLine(t *testing.T) {
 		Success:  true,
 		Method:   "telegram",
 		Duration: 10 * time.Millisecond,
-		Metadata: map[string]interface{}{}, // no relay_accepted key
+		Metadata: map[string]any{}, // no relay_accepted key
 	})
 	if !strings.Contains(out, "notification completed successfully") {
 		t.Fatalf("expected generic single line for the non-relay path: %q", out)

@@ -2,7 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -54,7 +54,7 @@ func buildRestorePlanText(config *SelectiveRestoreConfig) string {
 
 	b.WriteString("\nFiles/directories that will be restored:\n")
 	allPaths := GetSelectedPaths(planRestoredCategories(config.SelectedCategories))
-	sort.Strings(allPaths)
+	slices.Sort(allPaths)
 	for _, path := range allPaths {
 		fsPath := strings.TrimPrefix(path, "./")
 		if isBootNeverLivePath(normalizeArchiveEntryPath(path)) {

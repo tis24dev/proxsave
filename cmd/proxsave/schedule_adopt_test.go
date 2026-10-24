@@ -43,7 +43,7 @@ func assertLines(t *testing.T, got, want []string) {
 
 // logLineLevel returns the level column of the first log line that contains msg, or "".
 func logLineLevel(out, msg string) string {
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if !strings.Contains(line, msg) {
 			continue
 		}

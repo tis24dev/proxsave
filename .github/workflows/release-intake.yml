@@ -59,7 +59,8 @@ jobs:
           # changed in lockstep with this file.
           export GIT_CONFIG_COUNT=1
           export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
 
           # SECURITY: source the release policy from the TRUSTED base (origin/main),
           # NEVER from the checked-out tag tree. On a `push: tags` event the default

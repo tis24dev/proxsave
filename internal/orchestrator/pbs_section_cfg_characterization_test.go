@@ -644,7 +644,7 @@ func runPBSSectionCharScenario(t *testing.T, k pbsSectionCharKind, sc pbsSection
 	err := k.apply(ctx, logger, pbsSectionCharStageRoot, sc.strict)
 
 	var lines []string
-	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
 		if line == "" {
 			continue
 		}
@@ -671,7 +671,7 @@ func renderPBSSectionChar(sc pbsSectionCharScenario, run pbsSectionCharRun) stri
 		b.WriteString("staged: (no file)\n")
 	} else {
 		b.WriteString("staged:\n")
-		for _, line := range strings.Split(*sc.staged, "\n") {
+		for line := range strings.SplitSeq(*sc.staged, "\n") {
 			fmt.Fprintf(&b, "  %s\n", strconv.Quote(line))
 		}
 	}
@@ -776,7 +776,6 @@ func checkPBSSectionCharInvariants(t *testing.T, k pbsSectionCharKind, run pbsSe
 
 func TestPBSSectionCfgCharacterization(t *testing.T) {
 	for _, k := range pbsSectionCharKinds {
-		k := k
 		t.Run(k.key, func(t *testing.T) {
 			goldenPath := filepath.Join("testdata", "pbs_section_cfg_characterization", k.key+".golden")
 			scenarios := pbsSectionCharScenarios(k)
@@ -789,7 +788,6 @@ func TestPBSSectionCfgCharacterization(t *testing.T) {
 
 			blocks := make([]string, 0, len(scenarios))
 			for _, sc := range scenarios {
-				sc := sc
 				t.Run(sc.name, func(t *testing.T) {
 					first := runPBSSectionCharScenario(t, k, sc)
 					got := renderPBSSectionChar(sc, first)
@@ -865,7 +863,7 @@ func loadPBSSectionCharGolden(t *testing.T, path string) (map[string]string, []s
 		}
 		blocks[current] = strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if strings.HasPrefix(line, "### ") {
 			flush()
 			current = strings.TrimPrefix(line, "### ")

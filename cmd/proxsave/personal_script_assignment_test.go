@@ -275,7 +275,7 @@ func TestTheAdvisoryLevelFollowsWhetherTheProtectionIsInForce(t *testing.T) {
 			diagnostic.HardlinkProtectionInForce = tc.inForce
 
 			var advisoryLine string
-			for _, line := range strings.Split(captureDaemonDiagnosticLine(t, diagnostic), "\n") {
+			for line := range strings.SplitSeq(captureDaemonDiagnosticLine(t, diagnostic), "\n") {
 				if strings.Contains(line, "fs.protected_hardlinks") {
 					advisoryLine = line
 				}

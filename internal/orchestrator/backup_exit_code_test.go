@@ -303,8 +303,7 @@ func backupExitCodeAsCmd(stats *BackupStats, err error) int {
 	if err == nil {
 		return stats.ExitCode
 	}
-	var be *BackupError
-	if errors.As(err, &be) {
+	if be, ok := errors.AsType[*BackupError](err); ok {
 		return be.Code.Int()
 	}
 	return types.ExitBackupError.Int()
@@ -319,7 +318,7 @@ func backupExitIssueLines(logPath string) string {
 		return fmt.Sprintf("  (run log unreadable: %v)", err)
 	}
 	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		if kind, msg := classifyLogLine(line); kind != "" && msg != "" {
 			lines = append(lines, "  "+strings.TrimSpace(line))
 		}

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -120,9 +122,7 @@ func NewEmailNotifier(config EmailConfig, proxmoxType types.ProxmoxType, logger 
 	}
 
 	// Validate from address
-	if config.From == "" {
-		config.From = "no-reply@proxmox.tis24.it"
-	}
+	config.From = cmp.Or(config.From, "no-reply@proxmox.tis24.it")
 
 	return &EmailNotifier{
 		config:      config,
@@ -151,7 +151,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 	startTime := time.Now()
 	result := &NotificationResult{
 		Method:   "email",
-		Metadata: make(map[string]interface{}),
+		Metadata: make(map[string]any),
 	}
 
 	if !e.config.Enabled {
@@ -371,9 +371,7 @@ func (e *EmailNotifier) Send(ctx context.Context, data *NotificationData) (*Noti
 		}
 
 		recipientHint := redactEmail(strings.TrimSpace(recipient))
-		if recipientHint == "" {
-			recipientHint = "(recipient not set - routed by Proxmox Notifications)"
-		}
+		recipientHint = cmp.Or(recipientHint, "(recipient not set - routed by Proxmox Notifications)")
 		e.logger.Info("Email notification handed off to %s for %s", backend, recipientHint)
 	}
 
@@ -706,8 +704,8 @@ func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID s
 		return "", fmt.Errorf("failed to read %s: %w", cfgPath, err)
 	}
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(data), "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -1104,8 +1102,8 @@ func (e *EmailNotifier) inspectMailLogStatus(ctx context.Context, queueID string
 		}
 	}
 
-	for i := len(relevant) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(relevant[i])
+	for _, r := range slices.Backward(relevant) {
+		line := strings.TrimSpace(r)
 		if line == "" {
 			continue
 		}
@@ -1259,13 +1257,9 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 	// Build email headers and body
 	var email strings.Builder
 	toHeader = sanitizeHeaderValue(recipient)
-	if toHeader == "" {
-		toHeader = "root"
-	}
+	toHeader = cmp.Or(toHeader, "root")
 	fromHeader := sanitizeHeaderValue(e.config.From)
-	if fromHeader == "" {
-		fromHeader = "no-reply@proxmox.tis24.it"
-	}
+	fromHeader = cmp.Or(fromHeader, "no-reply@proxmox.tis24.it")
 	messageID = newMessageID(fromHeader)
 	e.logger.Debug("email message-id: <%s>", messageID)
 	fmt.Fprintf(&email, "To: %s\n", toHeader)
@@ -1330,10 +1324,7 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 			encoded := base64.StdEncoding.EncodeToString(content)
 			const maxLineLength = 76
 			for i := 0; i < len(encoded); i += maxLineLength {
-				end := i + maxLineLength
-				if end > len(encoded) {
-					end = len(encoded)
-				}
+				end := min(i+maxLineLength, len(encoded))
 				email.WriteString(encoded[i:end])
 				email.WriteString("\n")
 			}
@@ -1615,7 +1606,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 				}
 			} else {
 				e.logger.Debug("Recent mail log entries (%d found, showing first 5):", len(recentErrors))
-				for i := 0; i < 5; i++ {
+				for i := range 5 {
 					errLine := recentErrors[i]
 					if len(errLine) > 200 {
 						errLine = errLine[:200] + "..."
