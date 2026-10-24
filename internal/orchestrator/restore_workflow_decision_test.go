@@ -16,14 +16,16 @@ import (
 
 func stubPreparedRestoreBundle(archivePath string, manifest *backup.Manifest) func(context.Context, *config.Config, *logging.Logger, string, RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
 	return func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
-		return &backupCandidate{
-				DisplayBase: "test",
-				Manifest:    manifest,
-			}, &preparedBundle{
-				ArchivePath: archivePath,
-				Manifest:    backup.Manifest{ArchivePath: archivePath},
-				cleanup:     func() {},
-			}, nil
+		candidate := &backupCandidate{
+			DisplayBase: "test",
+			Manifest:    manifest,
+		}
+		bundle := &preparedBundle{
+			ArchivePath: archivePath,
+			Manifest:    backup.Manifest{ArchivePath: archivePath},
+			cleanup:     func() {},
+		}
+		return candidate, bundle, nil
 	}
 }
 
@@ -40,20 +42,22 @@ func TestRunRestoreWorkflow_CleansPreparedBundleWhenPlanningFails(t *testing.T) 
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 	cleanupCalls := 0
 	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
-		return &backupCandidate{
-				DisplayBase: "test",
-				Manifest: &backup.Manifest{
-					CreatedAt:     time.Unix(1700000000, 0),
-					ProxmoxType:   "pve",
-					ScriptVersion: "vtest",
-				},
-			}, &preparedBundle{
-				ArchivePath: "/bundle.tar",
-				Manifest:    backup.Manifest{ArchivePath: "/bundle.tar"},
-				cleanup: func() {
-					cleanupCalls++
-				},
-			}, nil
+		candidate := &backupCandidate{
+			DisplayBase: "test",
+			Manifest: &backup.Manifest{
+				CreatedAt:     time.Unix(1700000000, 0),
+				ProxmoxType:   "pve",
+				ScriptVersion: "vtest",
+			},
+		}
+		bundle := &preparedBundle{
+			ArchivePath: "/bundle.tar",
+			Manifest:    backup.Manifest{ArchivePath: "/bundle.tar"},
+			cleanup: func() {
+				cleanupCalls++
+			},
+		}
+		return candidate, bundle, nil
 	}
 	analyzeRestoreArchiveFunc = func(archivePath string, logger *logging.Logger) ([]Category, *RestoreDecisionInfo, error) {
 		return nil, &RestoreDecisionInfo{BackupType: SystemTypePVE}, nil
