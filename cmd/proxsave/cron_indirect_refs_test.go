@@ -339,6 +339,36 @@ func TestScriptProbeSkipsHereDocumentBodies(t *testing.T) {
 	}
 }
 
+// A "<<" with no word after it opens no here-document. It is a trailing comment ("# see <<"),
+// which the shell runs fine, or a broken redirection; either way there is no delimiter. The
+// probe used to index the first word of an empty remainder and panic, on a goroutine no
+// recover covers, so one such line in an operator script crashed install, upgrade and the
+// daemon setup.
+func TestHereDocDelimiterWithNoWordOpensNoBody(t *testing.T) {
+	for _, line := range []string{"cat <<", "cat <<-", "cat <<   ", "cat <<\t", "run_backup # see notes <<"} {
+		t.Run(line, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("hereDocDelimiter(%q) panicked: %v", line, r)
+				}
+			}()
+			if got := hereDocDelimiter(line); got != "" {
+				t.Fatalf("hereDocDelimiter(%q) = %q, want \"\"", line, got)
+			}
+		})
+	}
+
+	// Through the real probe: the line after the comment is code, so the call is still seen.
+	p := filepath.Join(t.TempDir(), "wrapper.sh")
+	body := "#!/bin/sh\nrun_backup # see notes <<\n/usr/local/bin/proxsave --backup\n"
+	if err := os.WriteFile(p, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if refs := indirectProxsaveCronRefs([]string{"0 2 * * * " + p}, cronProbeReadScripts); len(refs) == 0 {
+		t.Fatalf("the call after a trailing \"<<\" comment was not flagged:\n%s", body)
+	}
+}
+
 // An option that takes a VALUE hid the command behind it. skipLauncherOptions dropped words
 // starting with "-" and stopped at the first that did not, which for "flock -w 600 /lock cmd" is
 // the option's value 600: that got mistaken for the lock file, and the command position landed

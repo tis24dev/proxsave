@@ -901,10 +901,14 @@ func hereDocDelimiter(line string) string {
 		return ""
 	}
 	rest = strings.TrimPrefix(rest, "-")
-	rest = strings.TrimLeft(rest, " \t")
+	// No word after the operator ("# see <<", a broken "cat <<"): no delimiter, so no body.
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return ""
+	}
 	// All three quoting forms mean the same thing - the body is literal - so all three have to be
 	// recognised, or the body is read as code.
-	word := strings.TrimPrefix(strings.Trim(strings.Fields(rest + " ")[0], "\"'"), "\\")
+	word := strings.TrimPrefix(strings.Trim(fields[0], "\"'"), "\\")
 	if word == "" {
 		return ""
 	}
