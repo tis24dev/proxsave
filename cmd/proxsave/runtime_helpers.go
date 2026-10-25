@@ -714,7 +714,11 @@ const (
 // as an os.Root, with the bare entry name: the directory comes from PATH, and the
 // Lstat, Readlink and Remove all act on that one directory entry.
 func cleanupEntrypointCandidate(cand, execPath string, bootstrap *logging.BootstrapLogger) entrypointOutcome {
-	root, err := os.OpenRoot(filepath.Dir(cand))
+	// os.OpenRoot opens its argument without O_DIRECTORY, so a PATH entry that is a FIFO
+	// would block until a writer comes. The trailing "/." makes the kernel resolve the
+	// entry as a directory first: anything else fails at once with ENOTDIR, as the plain
+	// Lstat of "<entry>/<name>" did.
+	root, err := os.OpenRoot(filepath.Dir(cand) + string(os.PathSeparator) + ".")
 	if err != nil {
 		return entrypointAbsent
 	}

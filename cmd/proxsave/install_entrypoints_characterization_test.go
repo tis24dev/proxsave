@@ -7,7 +7,9 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -269,6 +271,73 @@ func TestEntrypointCleanupSkipsRelativePathEntries(t *testing.T) {
 		"INFO Global proxsave/proxmox-backup entrypoint scan: removed=1 kept=0",
 	})
 	assertPresence(t, []string{staleDot, staleBin}, []string{staleAbs})
+}
+
+// TestEntrypointCleanupSkipsNonDirectoryPathEntries: a PATH entry that is a FIFO or a
+// device is skipped at once, as the plain Lstat of "<entry>/proxsave" did. Opening it
+// as an os.Root without forcing a directory blocked on the FIFO until a writer came,
+// so the installer hung with no message.
+func TestEntrypointCleanupSkipsNonDirectoryPathEntries(t *testing.T) {
+	base := entrypointBase(t)
+	execPath := filepath.Join(base, "proxsave-bin")
+	mustWriteFile(t, execPath, "current binary")
+	fifo := filepath.Join(base, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	abs := filepath.Join(base, "abs")
+	mustMkdir(t, abs)
+	staleAbs := filepath.Join(abs, "proxsave")
+	mustSymlink(t, filepath.Join(base, "gone"), staleAbs)
+
+	prev := globalEntrypointDirs
+	globalEntrypointDirs = nil
+	t.Cleanup(func() { globalEntrypointDirs = prev })
+	t.Setenv("PATH", strings.Join([]string{fifo, "/dev/null", abs}, string(os.PathListSeparator)))
+
+	boot := logging.NewBootstrapLogger()
+	boot.SetConsoleQuiet(true)
+	buf := &bytes.Buffer{}
+	mirror := logging.New(types.LogLevelDebug, false)
+	mirror.SetOutput(buf)
+	boot.SetMirrorLogger(mirror)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cleanupGlobalProxmoxBackupEntrypoints(execPath, boot)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		// Keep opening the FIFO as a writer until the cleanup ends (it blocks once per
+		// entrypoint name), then fail.
+		for blocked := true; blocked; {
+			select {
+			case <-done:
+				blocked = false
+			default:
+				if w, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+					_ = w.Close()
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		t.Fatal("entrypoint cleanup blocked on a FIFO listed in PATH")
+	}
+
+	var got []string
+	for raw := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if m := entrypointLogLine.FindStringSubmatch(raw); m != nil {
+			got = append(got, m[1]+" "+strings.ReplaceAll(m[2], base, "<base>"))
+		}
+	}
+	assertEntrypointLines(t, got, []string{
+		"INFO Scanning for existing proxsave/proxmox-backup commands on PATH before installation",
+		"INFO Removed existing proxsave/proxmox-backup symlink: <base>/abs/proxsave",
+		"INFO Global proxsave/proxmox-backup entrypoint scan: removed=1 kept=0",
+	})
+	assertPresence(t, []string{fifo}, []string{staleAbs})
 }
 
 // TestEntrypointCleanupEmptyPathEntryCharacterization: an empty PATH entry is skipped,
