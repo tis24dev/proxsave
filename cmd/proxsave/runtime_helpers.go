@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -673,48 +674,12 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		}
 		seen[cand] = struct{}{}
 
-		info, err := os.Lstat(cand)
-		if err != nil {
-			continue
-		}
-
-		// If this entry *is* the current Go executable, keep it.
-		if execPath != "" {
-			if cand == execPath {
-				bootstrap.Info("Keeping proxsave/proxmox-backup entrypoint (current Go binary): %s", cand)
-				kept++
-				continue
-			}
-			if info.Mode()&os.ModeSymlink != 0 {
-				if target, err := os.Readlink(cand); err == nil {
-					if !filepath.IsAbs(target) {
-						target = filepath.Join(filepath.Dir(cand), target)
-					}
-					if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved == execPath {
-						bootstrap.Info("Keeping proxsave/proxmox-backup symlink pointing to Go binary: %s -> %s", cand, resolved)
-						kept++
-						continue
-					}
-				}
-			}
-		}
-
-		// cand is an existing entrypoint that does not resolve to the current Go
-		// binary. Only remove it if it is a SYMLINK (the form proxsave creates).
-		// A real file may be a distro/package-managed binary (e.g. a packaged
-		// /usr/bin/proxsave) that recreation never restores, so removing it would
-		// permanently break the command — leave it in place and log it.
-		if info.Mode()&os.ModeSymlink == 0 {
-			logBootstrapInfo(bootstrap, "Leaving %s in place: not a symlink created by proxsave (a real/package-managed file is never removed)", cand)
+		switch cleanupEntrypointCandidate(cand, execPath, bootstrap) {
+		case entrypointKept:
 			kept++
-			continue
+		case entrypointRemoved:
+			removed++
 		}
-		if err := os.Remove(cand); err != nil {
-			logBootstrapWarning(bootstrap, "Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, err)
-			continue
-		}
-		bootstrap.Info("Removed existing proxsave/proxmox-backup symlink: %s", cand)
-		removed++
 	}
 
 	if removed == 0 && kept == 0 {
@@ -722,6 +687,82 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 	} else {
 		bootstrap.Info("Global proxsave/proxmox-backup entrypoint scan: removed=%d kept=%d", removed, kept)
 	}
+}
+
+// entrypointOutcome is what cleanupEntrypointCandidate did with one candidate.
+type entrypointOutcome int
+
+const (
+	// entrypointAbsent: nothing there, or its directory could not be opened.
+	entrypointAbsent entrypointOutcome = iota
+	entrypointKept
+	entrypointRemoved
+	// entrypointFailed: a stale symlink that could not be removed (warned).
+	entrypointFailed
+)
+
+// cleanupEntrypointCandidate inspects one candidate entrypoint path and keeps or
+// removes it. Every filesystem call goes through the candidate's directory opened
+// as an os.Root, with the bare entry name: the directory comes from PATH, and the
+// Lstat, Readlink and Remove all act on that one directory entry.
+func cleanupEntrypointCandidate(cand, execPath string, bootstrap *logging.BootstrapLogger) entrypointOutcome {
+	root, err := os.OpenRoot(filepath.Dir(cand))
+	if err != nil {
+		return entrypointAbsent
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(cand)
+
+	info, err := root.Lstat(name)
+	if err != nil {
+		return entrypointAbsent
+	}
+
+	// If this entry *is* the current Go executable, keep it.
+	if execPath != "" {
+		if cand == execPath {
+			bootstrap.Info("Keeping proxsave/proxmox-backup entrypoint (current Go binary): %s", cand)
+			return entrypointKept
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target, err := root.Readlink(name); err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(cand), target)
+				}
+				if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved == execPath {
+					bootstrap.Info("Keeping proxsave/proxmox-backup symlink pointing to Go binary: %s -> %s", cand, resolved)
+					return entrypointKept
+				}
+			}
+		}
+	}
+
+	// cand is an existing entrypoint that does not resolve to the current Go
+	// binary. Only remove it if it is a SYMLINK (the form proxsave creates).
+	// A real file may be a distro/package-managed binary (e.g. a packaged
+	// /usr/bin/proxsave) that recreation never restores, so removing it would
+	// permanently break the command — leave it in place and log it.
+	if info.Mode()&os.ModeSymlink == 0 {
+		logBootstrapInfo(bootstrap, "Leaving %s in place: not a symlink created by proxsave (a real/package-managed file is never removed)", cand)
+		return entrypointKept
+	}
+	if err := root.Remove(name); err != nil {
+		logBootstrapWarning(bootstrap, "Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, entrypointRemoveError(cand, err))
+		return entrypointFailed
+	}
+	bootstrap.Info("Removed existing proxsave/proxmox-backup symlink: %s", cand)
+	return entrypointRemoved
+}
+
+// entrypointRemoveError reports a failed root.Remove the way os.Remove does: the
+// os.Root error names only the bare entry, while the warning must name the full
+// path of the entry that could not be removed.
+func entrypointRemoveError(cand string, err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return &os.PathError{Op: "remove", Path: cand, Err: pathErr.Err}
+	}
+	return err
 }
 
 func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
