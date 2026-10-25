@@ -766,8 +766,7 @@ func cleanupEntrypointCandidate(cand, execPath string, bootstrap *logging.Bootst
 // os.Root error names only the bare entry, while the warning must name the full
 // path of the entry that could not be removed.
 func entrypointRemoveError(cand string, err error) error {
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
 		return &os.PathError{Op: "remove", Path: cand, Err: pathErr.Err}
 	}
 	return err
