@@ -644,6 +644,14 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		if dir == "" {
 			continue
 		}
+		// A relative entry names a directory under wherever the installer was
+		// started, not a global entrypoint location: cleaning it would remove a
+		// symlink from the working directory. Go's own command lookup refuses
+		// relative PATH entries for the same reason.
+		if !filepath.IsAbs(dir) {
+			logBootstrapDebug(bootstrap, "Skipping relative PATH entry %q: only absolute directories are scanned for proxsave/proxmox-backup entrypoints", dir)
+			continue
+		}
 		for _, name := range names {
 			candidates = append(candidates, filepath.Join(dir, name))
 		}

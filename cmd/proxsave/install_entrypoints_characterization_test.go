@@ -238,27 +238,37 @@ func TestEntrypointCleanupRemoveFailureCharacterization(t *testing.T) {
 	assertPresence(t, []string{stale}, nil)
 }
 
-// TestEntrypointCleanupRelativePathEntryCharacterization pins TODAY's handling of a
-// relative PATH entry: it is resolved against the working directory, so a stale
-// symlink there is removed and logged by its relative name.
-func TestEntrypointCleanupRelativePathEntryCharacterization(t *testing.T) {
+// TestEntrypointCleanupSkipsRelativePathEntries: a relative PATH entry names a
+// directory under wherever the installer was started, not a global entrypoint
+// location, so it is skipped with a DEBUG line and nothing under it is touched,
+// while the absolute entries of the same PATH are still cleaned.
+func TestEntrypointCleanupSkipsRelativePathEntries(t *testing.T) {
 	base := entrypointBase(t)
 	execPath := filepath.Join(base, "proxsave-bin")
 	mustWriteFile(t, execPath, "current binary")
 	cwd := filepath.Join(base, "cwd")
-	mustMkdir(t, cwd)
-	stale := filepath.Join(cwd, "proxsave")
-	mustSymlink(t, filepath.Join(base, "gone"), stale)
+	mustMkdir(t, filepath.Join(cwd, "bin"))
+	staleDot := filepath.Join(cwd, "proxsave")
+	mustSymlink(t, filepath.Join(base, "gone"), staleDot)
+	staleBin := filepath.Join(cwd, "bin", "proxmox-backup")
+	mustSymlink(t, filepath.Join(base, "gone"), staleBin)
+	abs := filepath.Join(base, "abs")
+	mustMkdir(t, abs)
+	staleAbs := filepath.Join(abs, "proxsave")
+	mustSymlink(t, filepath.Join(base, "gone"), staleAbs)
 	t.Chdir(cwd)
 
-	got := runEntrypointCleanup(t, base, execPath, ".", nil)
+	pathEnv := strings.Join([]string{".", " bin ", abs}, string(os.PathListSeparator))
+	got := runEntrypointCleanup(t, base, execPath, pathEnv, nil)
 
 	assertEntrypointLines(t, got, []string{
 		"INFO Scanning for existing proxsave/proxmox-backup commands on PATH before installation",
-		"INFO Removed existing proxsave/proxmox-backup symlink: proxsave",
+		`DEBUG Skipping relative PATH entry ".": only absolute directories are scanned for proxsave/proxmox-backup entrypoints`,
+		`DEBUG Skipping relative PATH entry "bin": only absolute directories are scanned for proxsave/proxmox-backup entrypoints`,
+		"INFO Removed existing proxsave/proxmox-backup symlink: <base>/abs/proxsave",
 		"INFO Global proxsave/proxmox-backup entrypoint scan: removed=1 kept=0",
 	})
-	assertPresence(t, nil, []string{stale})
+	assertPresence(t, []string{staleDot, staleBin}, []string{staleAbs})
 }
 
 // TestEntrypointCleanupEmptyPathEntryCharacterization: an empty PATH entry is skipped,
