@@ -166,9 +166,11 @@ func TestReadFirstLinePermissionDeniedCharacterization(t *testing.T) {
 	}
 }
 
-// TODAY readFirstLine follows a symlink wherever it points: an absolute one, and a
-// relative one that leaves its directory.
-func TestReadFirstLineEscapingSymlinksCharacterization(t *testing.T) {
+// An input other than the four fixed host files is read through its own directory
+// opened as an os.Root, so a symlink that leaves that directory, absolute or "../",
+// is not followed and the input is unreadable. In production the only such input is
+// a per-interface sysfs attribute, which is a regular file.
+func TestReadFirstLineDoesNotFollowEscapingSymlinksForNonFixedInputs(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
 	if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
@@ -187,8 +189,8 @@ func TestReadFirstLineEscapingSymlinksCharacterization(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 	for _, link := range []string{absLink, upLink} {
-		if got, state := readFirstLine(link, 0); got != "outside" || state != systemFilePresent {
-			t.Errorf("readFirstLine(%s) = (%q, %s), want (\"outside\", present)", link, got, state)
+		if got, state := readFirstLine(link, 0); got != "" || state != systemFileUnreadable {
+			t.Errorf("readFirstLine(%s) = (%q, %s), want (\"\", unreadable)", link, got, state)
 		}
 	}
 }

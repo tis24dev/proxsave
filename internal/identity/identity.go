@@ -1388,7 +1388,7 @@ func classifyReadError(err error) systemFileState {
 }
 
 func readFirstLine(path string, limit int) (string, systemFileState) {
-	data, err := os.ReadFile(path)
+	data, err := readIdentityInput(path)
 	if err != nil {
 		return "", classifyReadError(err)
 	}
@@ -1400,6 +1400,31 @@ func readFirstLine(path string, limit int) (string, systemFileState) {
 		return "", systemFileAbsent
 	}
 	return line, systemFilePresent
+}
+
+// readIdentityInput reads one input of the host identity.
+//
+// THE FOUR FIXED HOST FILES ARE READ BY THEIR CONSTANT PATH, exactly as the system
+// exposes them, symlinks included: /var/lib/dbus/machine-id is commonly an absolute
+// symlink to /etc/machine-id, which an os.Root refuses to follow, and refusing it would
+// turn an absent machine-id into an unreadable one and switch the identity check off.
+//
+// Every other input is a per-interface sysfs attribute, read through its own directory
+// opened as an os.Root: /sys/class/net/<iface> is itself a symlink, followed when the
+// root is opened, and the attribute inside it is a regular file.
+func readIdentityInput(path string) ([]byte, error) {
+	switch path {
+	case machineIDPath:
+		return os.ReadFile(machineIDPath)
+	case dbusMachineIDPath:
+		return os.ReadFile(dbusMachineIDPath)
+	case productUUIDPath:
+		return os.ReadFile(productUUIDPath)
+	case procVersionPath:
+		return os.ReadFile(procVersionPath)
+	default:
+		return readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
+	}
 }
 
 // readMachineID returns the host machine-id and how it was classified.
