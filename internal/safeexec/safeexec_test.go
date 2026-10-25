@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"syscall"
 	"testing"
 )
 
@@ -199,25 +201,54 @@ func TestValidateRemoteRelativePath(t *testing.T) {
 	}
 }
 
-func TestProcPath(t *testing.T) {
-	valid := map[string]string{
-		"status": "/proc/123/status",
-		"comm":   "/proc/123/comm",
-		"exe":    "/proc/123/exe",
-	}
-	for leaf, want := range valid {
-		got, err := ProcPath(123, leaf)
-		if err != nil {
-			t.Fatalf("ProcPath(%s) valid error: %v", leaf, err)
-		}
-		if got != want {
-			t.Fatalf("ProcPath(%s) = %q; want %q", leaf, got, want)
+func TestOpenProcDirRejectsNonPositivePIDs(t *testing.T) {
+	for _, pid := range []int{0, -1} {
+		root, err := OpenProcDir(pid)
+		if err == nil || root != nil {
+			t.Fatalf("OpenProcDir(%d) = (%v, %v), want (nil, error)", pid, root, err)
 		}
 	}
-	if _, err := ProcPath(0, "status"); err == nil {
-		t.Fatalf("expected pid 0 to be rejected")
+}
+
+func TestOpenProcDirReadsThisProcess(t *testing.T) {
+	root, err := OpenProcDir(os.Getpid())
+	if err != nil {
+		t.Fatalf("OpenProcDir(self): %v", err)
 	}
-	if _, err := ProcPath(123, "../status"); err == nil {
-		t.Fatalf("expected unsupported leaf to be rejected")
+	defer func() { _ = root.Close() }()
+	got, err := root.ReadFile("comm")
+	if err != nil {
+		t.Fatalf("read comm: %v", err)
+	}
+	want, err := os.ReadFile("/proc/self/comm")
+	if err != nil {
+		t.Fatalf("read /proc/self/comm: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("comm = %q, want %q", got, want)
+	}
+}
+
+// The handle stays bound to the process it was opened for: after that process
+// exits, reads through it fail with ESRCH.
+func TestOpenProcDirStaysBoundToItsProcess(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("sleep not runnable: %v", err)
+	}
+	root, err := OpenProcDir(cmd.Process.Pid)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("OpenProcDir(child): %v", err)
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := root.ReadFile("status"); err != nil {
+		t.Fatalf("read status while alive: %v", err)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if _, err := root.ReadFile("status"); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("read status after exit: err=%v, want ESRCH", err)
 	}
 }

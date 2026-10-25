@@ -467,19 +467,12 @@ func ValidateRemoteRelativePath(value, field string) error {
 	return nil
 }
 
-// ProcPath returns a safe /proc path for a supported PID leaf.
-func ProcPath(pid int, leaf string) (string, error) {
+// OpenProcDir opens /proc/<pid> as an os.Root. Every file read through it comes
+// from that one process: once the process exits, reads through the handle fail
+// with ESRCH instead of reaching a newer process that reused the pid.
+func OpenProcDir(pid int) (*os.Root, error) {
 	if pid <= 0 {
-		return "", fmt.Errorf("pid must be positive")
+		return nil, fmt.Errorf("pid must be positive")
 	}
-	switch leaf {
-	case "comm":
-		return fmt.Sprintf("/proc/%d/comm", pid), nil
-	case "status":
-		return fmt.Sprintf("/proc/%d/status", pid), nil
-	case "exe":
-		return fmt.Sprintf("/proc/%d/exe", pid), nil
-	default:
-		return "", fmt.Errorf("unsupported proc leaf: %s", leaf)
-	}
+	return os.OpenRoot(fmt.Sprintf("/proc/%d", pid))
 }
