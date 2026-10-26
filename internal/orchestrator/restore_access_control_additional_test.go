@@ -561,21 +561,13 @@ func TestApplyPVEAccessControlFromStage_AdditionalBranches(t *testing.T) {
 		restoreFS = fakeFS
 
 		stageRoot := "/stage"
-		stagedUser := strings.Join([]string{
-			"user: alice@pve",
-			"  enable 1",
-			"",
-		}, "\n")
+		stagedUser := "user:alice@pve:1:0::::::\n"
 		stagedDomains := strings.Join([]string{
 			"pam: pam",
 			"  comment backup-pam",
 			"",
 		}, "\n")
-		stagedTFA := strings.Join([]string{
-			"webauthn: alice-key",
-			"  user alice@pve",
-			"",
-		}, "\n")
+		stagedTFA := `{"users":{"alice@pve":{"webauthn":[{"id":"k1"}]}}}`
 
 		if err := fakeFS.WriteFile(stageRoot+"/etc/pve/user.cfg", []byte(stagedUser), 0o640); err != nil {
 			t.Fatalf("write staged user.cfg: %v", err)
@@ -595,11 +587,11 @@ func TestApplyPVEAccessControlFromStage_AdditionalBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read merged user.cfg: %v", err)
 		}
-		if !strings.Contains(string(gotUser), "user: root@pam") || !strings.Contains(string(gotUser), "enable 1") {
+		if !strings.Contains(string(gotUser), "user:root@pam:1:0::::::\n") {
 			t.Fatalf("expected root@pam bootstrap user to be present, got:\n%s", string(gotUser))
 		}
-		if !strings.Contains(string(gotUser), "acl: proxsave-root-admin") {
-			t.Fatalf("expected root admin ACL to be injected, got:\n%s", string(gotUser))
+		if !strings.Contains(string(gotUser), "acl:1:/:root@pam:Administrator:\n") {
+			t.Fatalf("expected root admin ACL to be added, got:\n%s", string(gotUser))
 		}
 
 		gotDomains, err := fakeFS.ReadFile(pveDomainsCfgPath)
@@ -765,22 +757,9 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 		if listContains("   ", "root@pam") {
 			t.Fatalf("listContains should reject empty haystack")
 		}
-
-		if !hasRootAdminOnRoot([]proxmoxNotificationSection{
-			{
-				Type: "acl",
-				Name: "rule /",
-				Entries: []proxmoxNotificationEntry{
-					{Key: "users", Value: "root@pam"},
-					{Key: "roles", Value: "Administrator"},
-				},
-			},
-		}) {
-			t.Fatalf("hasRootAdminOnRoot should detect root Administrator ACL on /")
-		}
 	})
 
-	t.Run("token/tfa/shadow identity helpers", func(t *testing.T) {
+	t.Run("token identity helpers", func(t *testing.T) {
 		if user := tokenSectionUserID(proxmoxNotificationSection{Type: "role", Name: "x"}); user != "" {
 			t.Fatalf("tokenSectionUserID for non-token should be empty, got %q", user)
 		}
@@ -789,40 +768,6 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 		}
 		if user := tokenSectionUserID(proxmoxNotificationSection{Type: "token", Name: "alice@pve!tok1"}); user != "alice@pve" {
 			t.Fatalf("tokenSectionUserID=%q want alice@pve", user)
-		}
-
-		if user := tfaSectionUserID(proxmoxNotificationSection{Name: "alice@pve"}); user != "alice@pve" {
-			t.Fatalf("tfaSectionUserID by name=%q want alice@pve", user)
-		}
-		if user := tfaSectionUserID(proxmoxNotificationSection{
-			Name: "entry-only",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "user", Value: "bob@pve"},
-			},
-		}); user != "bob@pve" {
-			t.Fatalf("tfaSectionUserID by entry=%q want bob@pve", user)
-		}
-		if user := tfaSectionUserID(proxmoxNotificationSection{Name: "no-user"}); user != "" {
-			t.Fatalf("tfaSectionUserID expected empty, got %q", user)
-		}
-
-		if user := shadowSectionUserID(proxmoxNotificationSection{Type: "user", Name: "alice@pve"}); user != "alice@pve" {
-			t.Fatalf("shadowSectionUserID by user type=%q want alice@pve", user)
-		}
-		if user := shadowSectionUserID(proxmoxNotificationSection{Type: "hash", Name: "bob@pve"}); user != "bob@pve" {
-			t.Fatalf("shadowSectionUserID by name=%q want bob@pve", user)
-		}
-		if user := shadowSectionUserID(proxmoxNotificationSection{
-			Type: "hash",
-			Name: "fallback",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "userid", Value: "carol@pve"},
-			},
-		}); user != "carol@pve" {
-			t.Fatalf("shadowSectionUserID by userid entry=%q want carol@pve", user)
-		}
-		if user := shadowSectionUserID(proxmoxNotificationSection{Name: "nobody"}); user != "" {
-			t.Fatalf("shadowSectionUserID expected empty, got %q", user)
 		}
 
 		if _, _, ok := splitPVETokenSectionName("invalid"); ok {
@@ -844,17 +789,6 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 	})
 
 	t.Run("webauthn extractors and misc helpers", func(t *testing.T) {
-		pveUsers := extractWebAuthnUsersFromPVETFA([]proxmoxNotificationSection{
-			{Type: "webauthn", Name: "k1", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "alice@pve"}}},
-			{Type: "u2f", Name: "k2", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "alice@pve"}}},
-			{Type: "webauthn", Name: "k3", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "root@pam"}}},
-			{Type: "totp", Name: "k4", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "bob@pve"}}},
-			{Type: "u2f", Name: "k5", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "carol@pve"}}},
-		})
-		if len(pveUsers) != 2 || pveUsers[0] != "alice@pve" || pveUsers[1] != "carol@pve" {
-			t.Fatalf("extractWebAuthnUsersFromPVETFA unexpected users: %v", pveUsers)
-		}
-
 		pbsUsers := map[string]json.RawMessage{
 			"root@pam":  json.RawMessage(`{"webauthn":[{}]}`),
 			"alice@pbs": json.RawMessage(`{"webauthn":[{"id":"a"}]}`),
@@ -1100,25 +1034,25 @@ func TestApplyPVEAccessControlFromStage_WriteErrorBranches(t *testing.T) {
 		{
 			name:     "user write failure",
 			stageRel: "etc/pve/user.cfg",
-			content:  "user: alice@pve\n  enable 1\n",
+			content:  "user:alice@pve:1:0::::::\n",
 			wantPath: pveUserCfgPath,
 		},
 		{
 			name:     "shadow write failure",
 			stageRel: "etc/pve/priv/shadow.cfg",
-			content:  "user: alice@pve\n  hash abc\n",
+			content:  "alice:abc:\n",
 			wantPath: pveShadowCfgPath,
 		},
 		{
 			name:     "token write failure",
 			stageRel: "etc/pve/priv/token.cfg",
-			content:  "token: alice@pve!tok\n  comment x\n",
+			content:  "alice@pve!tok 00000000-0000-0000-0000-000000000000\n",
 			wantPath: pveTokenCfgPath,
 		},
 		{
 			name:     "tfa write failure",
 			stageRel: "etc/pve/priv/tfa.cfg",
-			content:  "totp: alice@pve\n  user alice@pve\n",
+			content:  "{\"users\":{}}\n",
 			wantPath: pveTFACfgPath,
 		},
 	}

@@ -725,68 +725,34 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 		return nil
 	}
 
-	backupUserSections, err := parseProxmoxNotificationSections(userCfgRaw)
-	if err != nil {
-		return fmt.Errorf("parse staged user.cfg: %w", err)
-	}
+	// user.cfg, token.cfg, shadow.cfg and tfa.cfg have formats of their own
+	// (restore_access_control_pve.go); domains.cfg is a section config. Everything is
+	// read and merged before the first write.
 	backupDomainSections, err := parseProxmoxNotificationSections(domainsCfgRaw)
 	if err != nil {
 		return fmt.Errorf("parse staged domains.cfg: %w", err)
 	}
-	backupShadowSections, err := parseProxmoxNotificationSections(shadowRaw)
-	if err != nil {
-		return fmt.Errorf("parse staged priv/shadow.cfg: %w", err)
-	}
-	backupTokenSections, err := parseProxmoxNotificationSections(tokenRaw)
-	if err != nil {
-		return fmt.Errorf("parse staged priv/token.cfg: %w", err)
-	}
-	backupTFASections, err := parseProxmoxNotificationSections(tfaRaw)
-	if err != nil {
-		return fmt.Errorf("parse staged priv/tfa.cfg: %w", err)
-	}
-
-	currentUserSections, _ := readProxmoxConfigSectionsOptional(pveUserCfgPath)
 	currentDomainSections, _ := readProxmoxConfigSectionsOptional(pveDomainsCfgPath)
-	currentShadowSections, _ := readProxmoxConfigSectionsOptional(pveShadowCfgPath)
-	currentTokenSections, _ := readProxmoxConfigSectionsOptional(pveTokenCfgPath)
-	currentTFASections, _ := readProxmoxConfigSectionsOptional(pveTFACfgPath)
 
-	rootUser := findSection(currentUserSections, "user", "root@pam")
-	if rootUser == nil {
-		rootUser = &proxmoxNotificationSection{
-			Type: "user",
-			Name: "root@pam",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "enable", Value: "1"},
-			},
-		}
-	}
-
-	// Merge user.cfg: restore 1:1 except root@pam (preserve from fresh install), and ensure root has Administrator on "/".
-	mergedUser := make([]proxmoxNotificationSection, 0, len(backupUserSections)+2)
-	for _, s := range backupUserSections {
-		if strings.EqualFold(strings.TrimSpace(s.Type), "user") && strings.TrimSpace(s.Name) == "root@pam" {
-			continue
-		}
-		mergedUser = append(mergedUser, s)
-	}
-	mergedUser = append(mergedUser, *rootUser)
-	if !hasRootAdminOnRoot(mergedUser) {
-		mergedUser = append(mergedUser, proxsaveRootAdminACLSection())
-	}
-
-	needsPVERealm := anyUserInRealm(mergedUser, "pve")
+	// user.cfg: restore 1:1 except root@pam (its user line, tokens and their ACLs are
+	// this host's), and ensure root has Administrator on "/".
+	mergedUser, needsPVERealm := mergePVEUserCfg(userCfgRaw, readCurrentPVEFile(pveUserCfgPath))
 	requiredRealms := []string{"pam"}
 	if needsPVERealm {
 		requiredRealms = append(requiredRealms, "pve")
 	}
 	mergedDomains := mergeRequiredRealms(backupDomainSections, currentDomainSections, requiredRealms)
 
-	// Merge secrets: restore 1:1 except root@pam token/TFA entries (preserve from fresh install).
-	mergedTokens := mergeUserBoundSectionsExcludeRoot(backupTokenSections, currentTokenSections, tokenSectionUserID, "root@pam")
-	mergedTFA := mergeUserBoundSectionsExcludeRoot(backupTFASections, currentTFASections, tfaSectionUserID, "root@pam")
-	mergedShadow := mergeUserBoundSectionsExcludeRoot(backupShadowSections, currentShadowSections, shadowSectionUserID, "root@pam")
+	// Secrets: restore 1:1 except root@pam's tokens and TFA (this host's). shadow.cfg
+	// holds only users of the pve realm, never root@pam, and is restored as it is.
+	mergedTokens := mergePVETokenCfg(tokenRaw, readCurrentPVEFile(pveTokenCfgPath))
+	var mergedTFA []byte
+	var tfaUsers map[string]json.RawMessage
+	if tfaPresent {
+		if mergedTFA, tfaUsers, err = mergePVETFAJSON(tfaRaw, readCurrentPVEFile(pveTFACfgPath)); err != nil {
+			return err
+		}
+	}
 
 	if domainsCfgPresent {
 		if err := writeFileAtomic(pveDomainsCfgPath, []byte(renderProxmoxConfig(mergedDomains)), 0o640); err != nil {
@@ -794,22 +760,26 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 		}
 	}
 	if userCfgPresent {
-		if err := writeFileAtomic(pveUserCfgPath, []byte(renderProxmoxConfig(mergedUser)), 0o640); err != nil {
+		if err := writeFileAtomic(pveUserCfgPath, []byte(mergedUser), 0o640); err != nil {
 			return fmt.Errorf("write %s: %w", pveUserCfgPath, err)
 		}
 	}
 	if shadowPresent {
-		if err := writeFileAtomic(pveShadowCfgPath, []byte(renderProxmoxConfig(mergedShadow)), 0o600); err != nil {
+		shadow := strings.TrimSpace(shadowRaw)
+		if shadow != "" {
+			shadow += "\n"
+		}
+		if err := writeFileAtomic(pveShadowCfgPath, []byte(shadow), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", pveShadowCfgPath, err)
 		}
 	}
 	if tokenPresent {
-		if err := writeFileAtomic(pveTokenCfgPath, []byte(renderProxmoxConfig(mergedTokens)), 0o600); err != nil {
+		if err := writeFileAtomic(pveTokenCfgPath, []byte(mergedTokens), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", pveTokenCfgPath, err)
 		}
 	}
 	if tfaPresent {
-		if err := writeFileAtomic(pveTFACfgPath, []byte(renderProxmoxConfig(mergedTFA)), 0o600); err != nil {
+		if err := writeFileAtomic(pveTFACfgPath, mergedTFA, 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", pveTFACfgPath, err)
 		}
 	}
@@ -817,12 +787,22 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	logger.Warning("PVE access control: restored 1:1 from backup via pmxcfs; root@pam preserved from fresh install and kept Administrator on /")
 	logger.Warning("PVE access control: TFA was restored 1:1; users with WebAuthn may require re-enrollment if origin/hostname changed (for best compatibility, keep the same FQDN/origin and restore network+ssl; default behavior is warn, not disable)")
 	if tfaPresent {
-		webauthnUsers := extractWebAuthnUsersFromPVETFA(mergedTFA)
+		webauthnUsers := extractWebAuthnUsersFromPBSTFAUsers(tfaUsers)
 		if len(webauthnUsers) > 0 {
 			logger.Warning("PVE TFA/WebAuthn: detected %d enrolled user(s): %s", len(webauthnUsers), summarizeUserIDs(webauthnUsers, 8))
 		}
 	}
 	return nil
+}
+
+// readCurrentPVEFile returns this host's copy of a PVE access control file, empty
+// when it is absent or unreadable (a fresh node may not have token.cfg or tfa.cfg).
+func readCurrentPVEFile(path string) string {
+	data, err := restoreFS.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func readStageFileOptional(stageRoot, relPath string) (content string, present bool, err error) {
@@ -1017,34 +997,6 @@ func tokenSectionUserID(s proxmoxNotificationSection) string {
 	return userID
 }
 
-func tfaSectionUserID(s proxmoxNotificationSection) string {
-	name := strings.TrimSpace(s.Name)
-	if strings.Contains(name, "@") {
-		return name
-	}
-	for _, kv := range s.Entries {
-		if strings.EqualFold(strings.TrimSpace(kv.Key), "user") && strings.Contains(strings.TrimSpace(kv.Value), "@") {
-			return strings.TrimSpace(kv.Value)
-		}
-	}
-	return ""
-}
-
-func shadowSectionUserID(s proxmoxNotificationSection) string {
-	if strings.EqualFold(strings.TrimSpace(s.Type), "user") && strings.Contains(strings.TrimSpace(s.Name), "@") {
-		return strings.TrimSpace(s.Name)
-	}
-	if strings.Contains(strings.TrimSpace(s.Name), "@") {
-		return strings.TrimSpace(s.Name)
-	}
-	for _, kv := range s.Entries {
-		if strings.EqualFold(strings.TrimSpace(kv.Key), "userid") && strings.Contains(strings.TrimSpace(kv.Value), "@") {
-			return strings.TrimSpace(kv.Value)
-		}
-	}
-	return ""
-}
-
 func splitPVETokenSectionName(name string) (userID, tokenID string, ok bool) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -1060,41 +1012,6 @@ func splitPVETokenSectionName(name string) (userID, tokenID string, ok bool) {
 		return "", "", false
 	}
 	return userID, tokenID, true
-}
-
-func hasRootAdminOnRoot(sections []proxmoxNotificationSection) bool {
-	for _, s := range sections {
-		if strings.TrimSpace(s.Type) != "acl" {
-			continue
-		}
-		path := strings.TrimSpace(findSectionEntryValue(s.Entries, "path"))
-		if path == "" {
-			path = aclPathFromSectionName(s.Name)
-		}
-		if path != "/" {
-			continue
-		}
-
-		users := strings.TrimSpace(findSectionEntryValue(s.Entries, "users"))
-		roles := strings.TrimSpace(findSectionEntryValue(s.Entries, "roles"))
-		if listContains(users, "root@pam") && listContains(roles, "Administrator") {
-			return true
-		}
-	}
-	return false
-}
-
-func proxsaveRootAdminACLSection() proxmoxNotificationSection {
-	return proxmoxNotificationSection{
-		Type: "acl",
-		Name: "proxsave-root-admin",
-		Entries: []proxmoxNotificationEntry{
-			{Key: "path", Value: "/"},
-			{Key: "users", Value: "root@pam"},
-			{Key: "roles", Value: "Administrator"},
-			{Key: "propagate", Value: "1"},
-		},
-	}
 }
 
 func findSectionEntryValue(entries []proxmoxNotificationEntry, key string) string {
@@ -1132,31 +1049,6 @@ func aclPathFromSectionName(name string) string {
 		}
 	}
 	return ""
-}
-
-func extractWebAuthnUsersFromPVETFA(sections []proxmoxNotificationSection) []string {
-	if len(sections) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	out := make([]string, 0, 8)
-	for _, s := range sections {
-		typ := strings.ToLower(strings.TrimSpace(s.Type))
-		if typ != "webauthn" && typ != "u2f" {
-			continue
-		}
-		userID := strings.TrimSpace(tfaSectionUserID(s))
-		if userID == "" || userID == "root@pam" {
-			continue
-		}
-		if _, ok := seen[userID]; ok {
-			continue
-		}
-		seen[userID] = struct{}{}
-		out = append(out, userID)
-	}
-	slices.Sort(out)
-	return out
 }
 
 func extractWebAuthnUsersFromPBSTFAUsers(users map[string]json.RawMessage) []string {

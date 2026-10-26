@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+// The PVE access control files in the formats PVE writes them (measured on PVE 9.1.9
+// with pveum, 2026-10-26): user.cfg and its colon lines, token.cfg "<id> <secret>",
+// shadow.cfg "<name>:<hash>:", tfa.cfg JSON. The backup is restored 1:1 except
+// root@pam: its user line, its tokens with their secrets and ACL entries, and its TFA
+// are this host's, and root@pam keeps Administrator on "/".
 func TestApplyPVEAccessControlFromStage_Restores1To1ExceptRoot(t *testing.T) {
 	origFS := restoreFS
 	t.Cleanup(func() { restoreFS = origFS })
@@ -16,192 +21,77 @@ func TestApplyPVEAccessControlFromStage_Restores1To1ExceptRoot(t *testing.T) {
 	restoreFS = fakeFS
 
 	stageRoot := "/stage"
-
-	// Fresh-install baseline (must be preserved for root@pam safety rail).
-	currentDomains := `
-pam: pam
-  comment freshpam
-
-pve: pve
-  comment freshpve
-`
-	currentUser := `
-user: root@pam
-  comment FreshRoot
-  enable 1
-`
-	currentToken := `
-token: root@pam!fresh
-  comment fresh-token
-`
-	currentTFA := `
-totp: root@pam
-  user root@pam
-  comment fresh-tfa
-`
-	currentShadow := `
-user: root@pam
-  hash fresh-hash
-`
-
-	if err := fakeFS.WriteFile(pveDomainsCfgPath, []byte(currentDomains), 0o640); err != nil {
-		t.Fatalf("write current domains.cfg: %v", err)
+	files := map[string]string{
+		// This host.
+		pveDomainsCfgPath: "pam: pam\n\tcomment freshpam\n\npve: pve\n\tcomment freshpve\n",
+		pveUserCfgPath: "user:carol@pve:1:0::::::\n" +
+			"user:root@pam:1:0:::fresh@host.example:FreshRoot::\n" +
+			"token:root@pam!fresh:0:1:fresh token:\n\n" +
+			"acl:1:/:root@pam!fresh:PVEAuditor:\n" +
+			"acl:1:/vms:carol@pve:PVEAuditor:\n",
+		pveTokenCfgPath:  "carol@pve!c 22222222-2222-2222-2222-222222222222\nroot@pam!fresh 11111111-1111-1111-1111-111111111111\n",
+		pveShadowCfgPath: "carol:freshhash:\n",
+		pveTFACfgPath:    `{"users":{"carol@pve":{"totp":[{"id":"c"}]},"root@pam":{"totp":[{"id":"fresh"}]}}}`,
+		// The backup.
+		stageRoot + "/etc/pve/domains.cfg": "pam: pam\n\tcomment backup-pam\n\nldap: myldap\n\tbase_dn dc=example,dc=com\n",
+		stageRoot + "/etc/pve/user.cfg": "user:alice@pve:1:0:::a@x.y:Alice:x:\n" +
+			"token:alice@pve!mytoken:0:1:alice token:\n" +
+			"user:root@pam:0:0:::old@x.y:OldRoot::\n" +
+			"token:root@pam!old:0:1:old token:\n\n" +
+			"group:admins:alice@pve:Admins:\n\n" +
+			"pool:prod:production:100,101:local-lvm:\n\n" +
+			"role:MyRole:VM.Audit:\n\n" +
+			"acl:1:/:root@pam!old,alice@pve:MyRole:\n" +
+			"acl:1:/storage:root@pam!old:PVEAuditor:\n",
+		stageRoot + "/etc/pve/priv/token.cfg":  "alice@pve!mytoken 33333333-3333-3333-3333-333333333333\nroot@pam!old 44444444-4444-4444-4444-444444444444\n",
+		stageRoot + "/etc/pve/priv/shadow.cfg": "alice:alicehash:\n",
+		stageRoot + "/etc/pve/priv/tfa.cfg":    `{"users":{"alice@pve":{"totp":[{"id":"a"}]},"root@pam":{"totp":[{"id":"old"}]}},"webauthn":{"rp":"pve.example"}}`,
 	}
-	if err := fakeFS.WriteFile(pveUserCfgPath, []byte(currentUser), 0o640); err != nil {
-		t.Fatalf("write current user.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(pveTokenCfgPath, []byte(currentToken), 0o600); err != nil {
-		t.Fatalf("write current token.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(pveTFACfgPath, []byte(currentTFA), 0o600); err != nil {
-		t.Fatalf("write current tfa.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(pveShadowCfgPath, []byte(currentShadow), 0o600); err != nil {
-		t.Fatalf("write current shadow.cfg: %v", err)
-	}
-
-	// Backup/stage includes a conflicting root@pam definition (must NOT be applied), plus a @pve user.
-	stagedDomains := `
-pam: pam
-  comment backup-pam-should-not-win
-
-ldap: myldap
-  base_dn dc=example,dc=com
-`
-	stagedUser := `
-role: MyRole
-  privs VM.Audit
-
-user: root@pam
-  enable 0
-
-user: alice@pve
-  enable 1
-
-acl: 1
-  path /
-  roles MyRole
-  users alice@pve
-  propagate 1
-`
-	stagedToken := `
-token: root@pam!old
-  comment old-token-should-not-win
-
-token: alice@pve!mytoken
-  comment alice-token
-`
-	stagedTFA := `
-totp: root@pam
-  user root@pam
-  comment old-tfa-should-not-win
-
-totp: alice@pve
-  user alice@pve
-`
-	stagedShadow := `
-user: root@pam
-  hash old-hash-should-not-win
-
-user: alice@pve
-  hash alice-hash
-`
-
-	if err := fakeFS.WriteFile(stageRoot+"/etc/pve/domains.cfg", []byte(stagedDomains), 0o640); err != nil {
-		t.Fatalf("write staged domains.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(stageRoot+"/etc/pve/user.cfg", []byte(stagedUser), 0o640); err != nil {
-		t.Fatalf("write staged user.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(stageRoot+"/etc/pve/priv/token.cfg", []byte(stagedToken), 0o600); err != nil {
-		t.Fatalf("write staged token.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(stageRoot+"/etc/pve/priv/tfa.cfg", []byte(stagedTFA), 0o600); err != nil {
-		t.Fatalf("write staged tfa.cfg: %v", err)
-	}
-	if err := fakeFS.WriteFile(stageRoot+"/etc/pve/priv/shadow.cfg", []byte(stagedShadow), 0o600); err != nil {
-		t.Fatalf("write staged shadow.cfg: %v", err)
+	for path, content := range files {
+		if err := fakeFS.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
 	}
 
 	if err := applyPVEAccessControlFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
 		t.Fatalf("applyPVEAccessControlFromStage error: %v", err)
 	}
 
-	// Root realm safety: pam realm must be preserved from fresh install (comment should match currentDomains).
-	gotDomains, err := fakeFS.ReadFile(pveDomainsCfgPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", pveDomainsCfgPath, err)
+	read := func(path string) string {
+		t.Helper()
+		got, err := fakeFS.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return string(got)
 	}
-	if !strings.Contains(string(gotDomains), "comment freshpam") {
-		t.Fatalf("expected fresh pam realm to be preserved, got:\n%s", string(gotDomains))
+	wantUser := "user:alice@pve:1:0:::a@x.y:Alice:x:\n" +
+		"token:alice@pve!mytoken:0:1:alice token:\n" +
+		"user:root@pam:1:0:::fresh@host.example:FreshRoot::\n" +
+		"token:root@pam!fresh:0:1:fresh token:\n\n" +
+		"group:admins:alice@pve:Admins:\n\n" +
+		"pool:prod:production:100,101:local-lvm:\n\n" +
+		"role:MyRole:VM.Audit:\n\n" +
+		"acl:1:/:alice@pve:MyRole:\n" +
+		"acl:1:/:root@pam!fresh:PVEAuditor:\n" +
+		"acl:1:/:root@pam:Administrator:\n"
+	if got := read(pveUserCfgPath); got != wantUser {
+		t.Fatalf("user.cfg\n--- got ---\n%s--- want ---\n%s", got, wantUser)
 	}
-	// pve realm should be present because alice@pve exists.
-	if !strings.Contains(string(gotDomains), "pve: pve") {
-		t.Fatalf("expected pve realm to be present, got:\n%s", string(gotDomains))
+	if got, want := read(pveTokenCfgPath), "alice@pve!mytoken 33333333-3333-3333-3333-333333333333\nroot@pam!fresh 11111111-1111-1111-1111-111111111111\n"; got != want {
+		t.Fatalf("token.cfg\n--- got ---\n%s--- want ---\n%s", got, want)
 	}
-
-	// Root user safety: root@pam must be preserved from currentUser and not disabled.
-	gotUser, err := fakeFS.ReadFile(pveUserCfgPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", pveUserCfgPath, err)
+	if got, want := read(pveShadowCfgPath), "alice:alicehash:\n"; got != want {
+		t.Fatalf("shadow.cfg = %q, want %q", got, want)
 	}
-	if !strings.Contains(string(gotUser), "comment FreshRoot") {
-		t.Fatalf("expected root@pam section preserved from fresh install, got:\n%s", string(gotUser))
+	if got, want := read(pveTFACfgPath), `{"users":{"alice@pve":{"totp":[{"id":"a"}]},"root@pam":{"totp":[{"id":"fresh"}]}},"webauthn":{"rp":"pve.example"}}`+"\n"; got != want {
+		t.Fatalf("tfa.cfg\n--- got ---\n%s--- want ---\n%s", got, want)
 	}
-	if strings.Contains(string(gotUser), "user: root@pam\n  enable 0") {
-		t.Fatalf("expected staged root@pam not to be applied, got:\n%s", string(gotUser))
-	}
-	// Root admin ACL safety rail should be present.
-	if !strings.Contains(string(gotUser), "acl: proxsave-root-admin") ||
-		!strings.Contains(string(gotUser), "users root@pam") ||
-		!strings.Contains(string(gotUser), "roles Administrator") ||
-		!strings.Contains(string(gotUser), "path /") {
-		t.Fatalf("expected proxsave root admin ACL to be injected, got:\n%s", string(gotUser))
-	}
-
-	// Token safety rail: keep fresh root token, do not import staged root token.
-	gotToken, err := fakeFS.ReadFile(pveTokenCfgPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", pveTokenCfgPath, err)
-	}
-	if !strings.Contains(string(gotToken), "token: root@pam!fresh") {
-		t.Fatalf("expected fresh root token to be preserved, got:\n%s", string(gotToken))
-	}
-	if strings.Contains(string(gotToken), "token: root@pam!old") {
-		t.Fatalf("expected staged root token to be excluded, got:\n%s", string(gotToken))
-	}
-	if !strings.Contains(string(gotToken), "token: alice@pve!mytoken") {
-		t.Fatalf("expected alice token to be restored, got:\n%s", string(gotToken))
-	}
-
-	// TFA safety rail: keep fresh root TFA, restore alice TFA.
-	gotTFA, err := fakeFS.ReadFile(pveTFACfgPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", pveTFACfgPath, err)
-	}
-	if !strings.Contains(string(gotTFA), "comment fresh-tfa") {
-		t.Fatalf("expected fresh root TFA to be preserved, got:\n%s", string(gotTFA))
-	}
-	if strings.Contains(string(gotTFA), "comment old-tfa-should-not-win") {
-		t.Fatalf("expected staged root TFA to be excluded, got:\n%s", string(gotTFA))
-	}
-	if !strings.Contains(string(gotTFA), "totp: alice@pve") {
-		t.Fatalf("expected alice TFA to be restored, got:\n%s", string(gotTFA))
-	}
-
-	// Shadow safety rail: keep fresh root hash, restore alice hash.
-	gotShadow, err := fakeFS.ReadFile(pveShadowCfgPath)
-	if err != nil {
-		t.Fatalf("read %s: %v", pveShadowCfgPath, err)
-	}
-	if !strings.Contains(string(gotShadow), "hash fresh-hash") {
-		t.Fatalf("expected fresh root shadow to be preserved, got:\n%s", string(gotShadow))
-	}
-	if strings.Contains(string(gotShadow), "hash old-hash-should-not-win") {
-		t.Fatalf("expected staged root shadow to be excluded, got:\n%s", string(gotShadow))
-	}
-	if !strings.Contains(string(gotShadow), "hash alice-hash") {
-		t.Fatalf("expected alice shadow to be restored, got:\n%s", string(gotShadow))
+	domains := read(pveDomainsCfgPath)
+	for _, want := range []string{"comment freshpam", "pve: pve", "ldap: myldap"} {
+		if !strings.Contains(domains, want) {
+			t.Fatalf("domains.cfg lacks %q:\n%s", want, domains)
+		}
 	}
 }
 
