@@ -291,3 +291,72 @@ func TestCreatePBSDatastoreStructureCompletesAHalfBuiltChunkStore(t *testing.T) 
 		t.Fatalf(".lock: %v", err)
 	}
 }
+
+// PBS reopens an existing chunk store ("datastore create --reuse-datastore", a
+// later restore through the PBS API) only with the modes it creates: the datastore
+// directory 0755, .chunks and its hash directories 0750, .lock 0644, all
+// backup:backup; any other mode is refused with "permissions or owner not correct"
+// (measured on pve-test, PBS 4.2.8). The recreation leaves those modes, over a new
+// path and over the scaffold of an earlier version (0750, .lock 0600) alike.
+func TestCreatePBSDatastoreStructureLeavesTheModesPBSReopens(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, base string)
+	}{
+		{name: "new-path", setup: func(*testing.T, string) {}},
+		{name: "earlier-scaffold", setup: func(t *testing.T, base string) {
+			if err := os.MkdirAll(filepath.Join(base, ".chunks"), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(base, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(base, ".lock"), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := filepath.Join(t.TempDir(), "ds1")
+			tc.setup(t, base)
+			if _, err := createPBSDatastoreStructure(base, "ds1", newDirTestLogger()); err != nil {
+				t.Fatalf("createPBSDatastoreStructure: %v", err)
+			}
+			for path, want := range map[string]os.FileMode{
+				base:                           0o755,
+				filepath.Join(base, ".chunks"): 0o750,
+				filepath.Join(base, ".chunks", pbsChunkStoreDirName(0)): 0o750,
+				filepath.Join(base, ".lock"):                            0o644,
+			} {
+				st, err := os.Stat(path)
+				if err != nil || st.Mode().Perm() != want {
+					t.Fatalf("%s: mode %v err %v, want %o", path, st.Mode().Perm(), err, want)
+				}
+			}
+		})
+	}
+}
+
+// The modes are changed inside the datastore directory only: a .lock that is a
+// symlink to a file outside it leaves that file as it is.
+func TestSetPBSChunkStoreModesStaysInsideTheDatastore(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside")
+	if err := os.WriteFile(outside, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(dir, "ds1")
+	if err := os.MkdirAll(filepath.Join(base, ".chunks"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, ".lock")); err != nil {
+		t.Fatal(err)
+	}
+	setPBSChunkStoreModes(base, newDirTestLogger())
+	if st, err := os.Stat(outside); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("the file outside the datastore: mode %v err %v, want 600 untouched", st.Mode().Perm(), err)
+	}
+	if st, err := os.Stat(base); err != nil || st.Mode().Perm() != 0o755 {
+		t.Fatalf("datastore directory: mode %v err %v, want 755", st.Mode().Perm(), err)
+	}
+}

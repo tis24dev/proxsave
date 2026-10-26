@@ -213,8 +213,58 @@ func initializePBSDatastore(basePath, datastoreName string, logger *logging.Logg
 	if lockErr != nil {
 		logger.Warning("PBS datastore lock file: %v", lockErr)
 	}
+	modesChanged := setPBSChunkStoreModes(basePath, logger)
 
-	return changed || subdirChanged || chunkDirsChanged || lockChanged, nil
+	return changed || subdirChanged || chunkDirsChanged || lockChanged || modesChanged, nil
+}
+
+// pbsChunkStoreModes are the modes PBS creates a chunk store with, and the only
+// ones it reopens an existing one with: "datastore create --reuse-datastore"
+// refuses any other, "permissions or owner not correct" (measured on PBS 4.2.8).
+// The hash directories are created 0750 by ensurePBSChunkStoreDirs.
+var pbsChunkStoreModes = []struct {
+	rel  string
+	mode os.FileMode
+}{
+	{".", 0o755},
+	{".chunks", 0o750},
+	{".lock", 0o644},
+}
+
+// setPBSChunkStoreModes gives the datastore directory, .chunks and .lock the modes
+// of pbsChunkStoreModes. They are changed through an os.Root of the datastore
+// directory, so a symlink put in place of .chunks or .lock (the datastore belongs
+// to the backup user) cannot lead the chmod outside it. A chmod that fails is
+// reported like the other datastore permission changes and does not stop the
+// recreation.
+func setPBSChunkStoreModes(basePath string, logger *logging.Logger) bool {
+	root, err := os.OpenRoot(basePath)
+	if err != nil {
+		logger.Debug("PBS datastore permissions: cannot open %s: %v", basePath, err)
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	changed := false
+	for _, m := range pbsChunkStoreModes {
+		path := filepath.Join(basePath, m.rel)
+		info, err := root.Lstat(m.rel)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		current := info.Mode().Perm()
+		if current == m.mode {
+			continue
+		}
+		logger.Debug("PBS datastore permissions: chmod %s from %o to %o", path, current, m.mode)
+		if err := root.Chmod(m.rel, m.mode); err != nil {
+			if err := handleDatastoreModeError(path, current, m.mode, err, logger); err != nil {
+				logger.Warning("Could not set datastore ownership for %s: %v", path, err)
+			}
+			continue
+		}
+		changed = true
+	}
+	return changed
 }
 
 // pbsChunkStoreDirTotal is the number of hash directories PBS creates in .chunks,
