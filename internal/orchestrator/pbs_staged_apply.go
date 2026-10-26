@@ -1055,7 +1055,10 @@ var (
 		outcome: "PBS metric server configuration",
 	}
 	// pbsTapeFileBlocks are the tape files, written as staged (the drives and
-	// changers need their device, the keys are secret material).
+	// changers need their device). The modes are the ones PBS writes: the keys
+	// 0600, the key configuration 0640 for the backup group, as
+	// proxmox-backup-proxy (user backup) reads it to list the keys and to label
+	// an encrypted media set.
 	pbsTapeFileBlocks = []pbsConfigFileBlock{
 		{rel: "etc/proxmox-backup/tape.cfg", debug: "PBS tape drives restore: ",
 			opening: "Restoring PBS tape drives and changers...", config: "The tape drives and changers", outcome: "PBS tape drives and changers"},
@@ -1068,7 +1071,7 @@ var (
 			json: true, perm: 0o600},
 		{rel: "etc/proxmox-backup/tape-encryption-key-config.json", debug: "PBS tape encryption key configuration restore: ",
 			opening: "Restoring PBS tape encryption key configuration...", config: "The tape encryption key configuration", outcome: "PBS tape encryption key configuration",
-			json: true, perm: 0o600},
+			json: true, perm: 0o640},
 	}
 	pbsProxyFileBlock = pbsConfigFileBlock{
 		rel:     "etc/proxmox-backup/proxy.cfg",

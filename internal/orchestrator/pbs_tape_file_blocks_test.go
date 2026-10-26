@@ -6,8 +6,8 @@ import (
 )
 
 // The tape files, one block each, the same in Clean and Merge mode: applied
-// (the keys and the key configuration 0600), the write refused, absent, and an
-// empty JSON file (target removed).
+// (the keys 0600, the key configuration 0640 as PBS writes them), the write
+// refused, absent, and an empty JSON file (target removed).
 func TestPBSTapeFileBlocks(t *testing.T) {
 	staged := map[string]string{
 		"etc/proxmox-backup/tape.cfg":                        "lto: drive0\n\tpath /dev/tape/by-id/x\n",
@@ -28,9 +28,12 @@ func TestPBSTapeFileBlocks(t *testing.T) {
 		if got := pbsVisibleLines(log); strings.Join(got, "\n") != strings.Join(want, "\n") || warned {
 			t.Fatalf("%v: warned=%v visible\n%s", behavior, warned, strings.Join(got, "\n"))
 		}
-		for _, f := range []string{"tape-encryption-keys.json", "tape-encryption-key-config.json"} {
-			if st, err := fakeFS.Stat("/etc/proxmox-backup/" + f); err != nil || st.Mode().Perm() != 0o600 {
-				t.Fatalf("%s: %v, want mode 0600", f, err)
+		// PBS writes the keys 0600 root:root and the key configuration 0640
+		// root:backup, which proxmox-backup-proxy (user backup) reads to list the
+		// keys and to label an encrypted media set (measured on pve-test, PBS 4.2.8).
+		for f, perm := range map[string]uint32{"tape-encryption-keys.json": 0o600, "tape-encryption-key-config.json": 0o640} {
+			if st, err := fakeFS.Stat("/etc/proxmox-backup/" + f); err != nil || uint32(st.Mode().Perm()) != perm {
+				t.Fatalf("%s: %v, want mode %o", f, err, perm)
 			}
 		}
 	}
