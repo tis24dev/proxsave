@@ -467,3 +467,27 @@ func TestLocalRetentionKeepsALogHeldOpen(t *testing.T) {
 		}
 	}
 }
+
+// The logs remaining of a destination are this host's run logs and the logs of the
+// archives its retention pass works on: an archive adopted by server identity keeps
+// the host name it was written under (pve.home.arpa while the host now answers
+// only to pve), and deleteAssociatedLog deletes that archive's log with it.
+func TestCountOwnRunLogsCountsTheLogsOfAdoptedArchives(t *testing.T) {
+	names := []string{
+		"backup-pve-20240101-120000.log",
+		"backup-pve.home.arpa-20240102-120000.log",
+		"backup-pve.home.arpa-20240103-120000.log",
+		"backup-other-20240104-120000.log",
+		"notes.txt",
+	}
+	archives := []*types.BackupMetadata{
+		{BackupFile: "/backups/pve.home.arpa-backup-20240102-120000.tar.zst"},
+		{BackupFile: "/backups/pve-backup-20240101-120000.tar.zst"},
+	}
+	if got := countOwnRunLogs(names, "pve", nil, nil); got != 1 {
+		t.Fatalf("without archives = %d, want 1", got)
+	}
+	if got := countOwnRunLogs(names, "pve", nil, archives); got != 3 {
+		t.Fatalf("with the adopted archive = %d, want 3", got)
+	}
+}

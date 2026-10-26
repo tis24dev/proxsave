@@ -2359,7 +2359,7 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	return true
 }
 
-func (c *CloudStorage) countLogFiles(ctx context.Context) int {
+func (c *CloudStorage) countLogFiles(ctx context.Context, archives []*types.BackupMetadata) int {
 	if c == nil || c.config == nil {
 		return -1
 	}
@@ -2402,7 +2402,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 			names = append(names, name)
 		}
 	}
-	return countOwnRunLogs(names, c.hostname, c.hostAliases)
+	return countOwnRunLogs(names, c.hostname, c.hostAliases, archives)
 }
 
 func (c *CloudStorage) cloudLogBase(basePath string) string {
@@ -2666,7 +2666,7 @@ func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 	})
 
 	// Delete in batches to avoid API rate limits
-	return c.deleteBatched(ctx, toDelete, len(backups))
+	return c.deleteBatched(ctx, toDelete, backups)
 }
 
 // applySimpleRetention applies simple count-based retention policy
@@ -2696,17 +2696,20 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 	oldBackups := backups[maxBackups:]
 
 	// Delete in batches to avoid API rate limits
-	return c.deleteBatched(ctx, oldBackups, totalBackups)
+	return c.deleteBatched(ctx, oldBackups, backups)
 }
 
-// deleteBatched deletes backups in batches to avoid API rate limits
-func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.BackupMetadata, totalBackups int) (int, error) {
+// deleteBatched deletes backups in batches to avoid API rate limits. all is every
+// backup the policy looked at: its count is the total, and its archives name the
+// logs counted as this destination's.
+func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.BackupMetadata, all []*types.BackupMetadata) (int, error) {
+	totalBackups := len(all)
 	deleted := 0
 	logsDeleted := 0
 	c.retTally.planned = len(backups)
 	batchSize := c.config.CloudBatchSize
 	batchPause := time.Duration(c.config.CloudBatchPause) * time.Second
-	initialLogs := c.countLogFiles(ctx)
+	initialLogs := c.countLogFiles(ctx, all)
 
 	for i, backup := range backups {
 		if err := ctx.Err(); err != nil {

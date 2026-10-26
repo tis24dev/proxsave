@@ -245,7 +245,7 @@ func (r fsRetention) deleteAssociatedLog(ctx context.Context, backupFile string)
 	return true
 }
 
-func (r fsRetention) countLogFiles(ctx context.Context) int {
+func (r fsRetention) countLogFiles(ctx context.Context, archives []*types.BackupMetadata) int {
 	logPath := ""
 	if r.config != nil {
 		logPath = strings.TrimSpace(r.logPath)
@@ -262,7 +262,7 @@ func (r fsRetention) countLogFiles(ctx context.Context) int {
 		r.logger.Debug("%s: failed to count log files: %v", r.text.logs, err)
 		return -1
 	}
-	return countOwnRunLogs(names, r.hostname, r.aliases)
+	return countOwnRunLogs(names, r.hostname, r.aliases, archives)
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on the destination's log
@@ -304,7 +304,7 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 	r.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 
-	initialLogs := r.countLogFiles(ctx)
+	initialLogs := r.countLogFiles(ctx, backups)
 
 	// Classify backups according to GFS scheme
 	classification := ClassifyBackupsGFS(backups, config)
@@ -367,7 +367,7 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 	r.tally.planned = toDelete
 
 	// Delete oldest backups (already sorted newest first)
-	initialLogs := r.countLogFiles(ctx)
+	initialLogs := r.countLogFiles(ctx, backups)
 	oldest := make([]*types.BackupMetadata, 0, toDelete)
 	for i := totalBackups - 1; i >= maxBackups; i-- {
 		oldest = append(oldest, backups[i])
