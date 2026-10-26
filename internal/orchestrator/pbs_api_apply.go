@@ -1265,11 +1265,17 @@ func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent 
 }
 
 // pbsChunkStoreExistsError reports whether PBS refused a datastore create because
-// the path already holds a chunk store: "unable to create chunk store 'ds1' subdir
-// "/srv/ds1/.chunks" - ... - EEXIST: File exists" (PBS 4.2.8, measured on VM 201).
+// the path already holds a chunk store. PBS 4.2.8 says so in two ways: for a chunk
+// store without backups "unable to create chunk store 'ds1' subdir
+// "/srv/ds1/.chunks" - ... - EEXIST: File exists" (measured on VM 201), and for one
+// with backups, whose vm/, ct/, host/ or ns/ directories sit next to .chunks,
+// "datastore path not empty" (measured on pve-test). The second also answers a
+// path that holds other files; there the --reuse-datastore retry is refused as
+// well, "unable to open existing chunk store path", and changes nothing.
 func pbsChunkStoreExistsError(err error) bool {
 	text := pbsManagerErrorText(err)
-	return strings.Contains(text, "unable to create chunk store") && strings.Contains(text, "EEXIST")
+	return strings.Contains(text, "unable to create chunk store") && strings.Contains(text, "EEXIST") ||
+		strings.Contains(text, "datastore path not empty")
 }
 
 // createDatastore creates the datastore name at path. When PBS refuses the create
