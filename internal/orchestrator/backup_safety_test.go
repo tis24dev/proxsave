@@ -1199,3 +1199,60 @@ func TestGlobFSExpandsARelativeTopLevelGlob(t *testing.T) {
 		t.Fatalf("globFS(*.conf) = %v, want [a.conf]", got)
 	}
 }
+
+// The PBS file fallback of datastore_pbs removes a datastore's jobs and acl.cfg
+// entries with it (removePBSDatastoreJobsAndACL), so the safety backup of a restore
+// that selects datastore_pbs holds those files too, which the category itself
+// does not restore.
+func TestCreateSafetyBackupHoldsTheFilesTheDatastoreFallbackRewrites(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
+	origFS := safetyFS
+	safetyFS = fake
+	t.Cleanup(func() { safetyFS = origFS })
+
+	destRoot := "/"
+	files := []string{"datastore.cfg", "prune.cfg", "verification.cfg", "sync.cfg", "tape-job.cfg", "acl.cfg"}
+	for _, f := range files {
+		if err := fake.AddFile(filepath.Join(destRoot, "etc/proxmox-backup", f), []byte(f)); err != nil {
+			t.Fatalf("add %s: %v", f, err)
+		}
+	}
+	cat := GetCategoryByID("datastore_pbs", GetAllCategories())
+	if cat == nil {
+		t.Fatal("datastore_pbs category not found")
+	}
+
+	result, err := CreateSafetyBackup(logging.New(types.LogLevelInfo, false), []Category{*cat}, destRoot)
+	if err != nil {
+		t.Fatalf("CreateSafetyBackup error: %v", err)
+	}
+	archiveFile, err := os.Open(fake.onDisk(result.BackupPath))
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer func() { _ = archiveFile.Close() }()
+	gzr, err := gzip.NewReader(archiveFile)
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer func() { _ = gzr.Close() }()
+	tr := tar.NewReader(gzr)
+	var entries []string
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		entries = append(entries, hdr.Name)
+	}
+	slices.Sort(entries)
+	var want []string
+	for _, f := range files {
+		want = append(want, "etc/proxmox-backup/"+f)
+	}
+	slices.Sort(want)
+	if strings.Join(entries, ",") != strings.Join(want, ",") {
+		t.Fatalf("archive entries %v, want %v", entries, want)
+	}
+}

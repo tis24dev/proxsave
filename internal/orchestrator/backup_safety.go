@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,7 +77,7 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 		Timestamp:  safetyNow(),
 	}
 
-	pathsToBackup := GetSelectedPaths(selectedCategories)
+	pathsToBackup := safetyBackupPaths(selectedCategories)
 
 	for _, catPath := range pathsToBackup {
 		fsPath := strings.TrimPrefix(catPath, "./")
@@ -163,6 +164,23 @@ func createSafetyBackup(logger *logging.Logger, selectedCategories []Category, d
 	}
 
 	return result, nil
+}
+
+// safetyBackupPaths are the paths of the selected categories plus the files a
+// category's restore rewrites without restoring them from the backup: the PBS
+// file fallback of datastore_pbs removes a datastore's jobs and acl.cfg entries
+// with it (removePBSDatastoreJobsAndACL).
+func safetyBackupPaths(categories []Category) []string {
+	paths := GetSelectedPaths(categories)
+	if !hasCategoryID(categories, "datastore_pbs") {
+		return paths
+	}
+	for _, p := range append(slices.Clone(pbsDatastoreJobFiles), pbsACLCfgPath) {
+		if rel := "." + p; !slices.Contains(paths, rel) {
+			paths = append(paths, rel)
+		}
+	}
+	return paths
 }
 
 // CreateSafetyBackup creates a backup of files that will be overwritten
