@@ -369,8 +369,10 @@ go build -mod=vendor -o build/proxsave ./cmd/proxsave
 
 ### Lint and structural guards
 
-`make lint` runs `go vet ./...`, `golint` if installed, and two repo-specific
-guards that fail the build on an architectural regression:
+`make lint` runs `go vet ./...`, `golangci-lint run ./...` if golangci-lint is
+installed (any finding fails the target; use the version pinned in
+`.github/workflows/lint.yml`, since an older one misses findings the CI reports),
+and two repo-specific guards that fail the build on an architectural regression:
 
 - `check-no-tview`: fails if any `cmd`, `internal`, or `pkg` code imports the legacy
   `rivo/tview` or `gdamore/tcell` stack. The Charm rebuild removed them and they must
