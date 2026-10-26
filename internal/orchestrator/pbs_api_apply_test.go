@@ -145,6 +145,30 @@ func TestRunPBSManagerRedacted_RedactsFlagsAndIndexes(t *testing.T) {
 	}
 }
 
+// A secret passed as one "--flag=value" argument is redacted as "--flag=<redacted>".
+func TestRunPBSManagerRedacted_RedactsJoinedFlag(t *testing.T) {
+	orig := restoreCmd
+	t.Cleanup(func() { restoreCmd = orig })
+
+	runner := &fakeCommandRunner{
+		outputs: map[string][]byte{},
+		errs:    map[string]error{},
+	}
+	restoreCmd = runner
+
+	args := []string{"remote", "create", "r1", "--password=-S3cret", "--comment=-dash"}
+	runner.errs["proxmox-backup-manager "+strings.Join(args, " ")] = errors.New("exit 1")
+
+	_, err := runPBSManagerRedacted(context.Background(), args, []string{"--password"}, nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	want := "proxmox-backup-manager remote create r1 --password=<redacted> --comment=-dash failed: exit 1"
+	if err.Error() != want {
+		t.Fatalf("err = %q want %q", err.Error(), want)
+	}
+}
+
 func TestUnwrapPBSJSONData(t *testing.T) {
 	if got := unwrapPBSJSONData([]byte("   ")); got != nil {
 		t.Fatalf("expected nil for empty input, got %q", string(got))
@@ -836,6 +860,66 @@ func TestApplyPBSRemoteCfgViaAPI_KeepsSpacesOfDecodedPassword(t *testing.T) {
 	want := []string{"remote", "create", "r1", "--host", "pbs.example", "--password", plain}
 	if got := runner.calls[0].args; !reflect.DeepEqual(got, want) {
 		t.Fatalf("args=%q want %q", got, want)
+	}
+}
+
+// proxmox-backup-manager reads a separate argument that begins with '-' as an
+// option: "--password -S3cret" is refused with "'password': missing parameter
+// value." and "'S3cret': missing parameter value.", while "--password=-S3cret" is
+// accepted and stored as "LVMzY3JldA==" (measured on pve-test, PBS 4.2.8,
+// 2026-10-26). A value that begins with '-' goes as one "--key=value" argument,
+// decoded or not, and stays redacted.
+func TestApplyPBSRemoteCfgViaAPI_DashValueGoesAsOneArgument(t *testing.T) {
+	stageRoot, fs, _ := setupPBSAPIApplyTestDeps(t)
+	runner := &pbsSectionCharRunner{}
+	restoreCmd = runner
+	logger := logging.New(types.LogLevelDebug, false)
+
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+		"remote: r1\n"+
+			"    host pbs.example\n"+
+			"    comment -dash\n"+
+			"    password LVMzY3JldA==\n",
+		0o640,
+	)
+
+	if err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+		t.Fatalf("applyPBSRemoteCfgViaAPI error: %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one command, got %d: %+v", len(runner.calls), runner.calls)
+	}
+	want := []string{"remote", "create", "r1", "--host", "pbs.example", "--comment=-dash", "--password=-S3cret"}
+	if got := runner.calls[0].args; !reflect.DeepEqual(got, want) {
+		t.Fatalf("args=%q want %q", got, want)
+	}
+}
+
+func TestApplyPBSRemoteCfgViaAPI_DashPasswordStaysRedacted(t *testing.T) {
+	stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
+	logger := logging.New(types.LogLevelDebug, false)
+	var logBuf bytes.Buffer
+	logger.SetOutput(&logBuf)
+
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/remote.cfg",
+		"remote: r1\n"+
+			"    host pbs.example\n"+
+			"    password LVMzY3JldA==\n",
+		0o640,
+	)
+	runner.errs = map[string]error{
+		"proxmox-backup-manager remote create r1 --host pbs.example --password=-S3cret": errors.New("create failed"),
+		"proxmox-backup-manager remote update r1 --host pbs.example --password=-S3cret": errors.New("update failed"),
+	}
+
+	err := applyPBSRemoteCfgViaAPI(context.Background(), logger, stageRoot, false)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	for _, secret := range []string{"S3cret", "LVMzY3JldA=="} {
+		if strings.Contains(err.Error(), secret) || strings.Contains(logBuf.String(), secret) {
+			t.Fatalf("password form %q leaked:\nerr: %s\nlog: %s", secret, err.Error(), logBuf.String())
+		}
 	}
 }
 

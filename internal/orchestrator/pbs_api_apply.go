@@ -28,6 +28,16 @@ func buildProxmoxManagerFlags(entries []proxmoxNotificationEntry, skipKeys ...st
 	if len(entries) == 0 {
 		return nil
 	}
+	args := make([]string, 0, len(entries)*2)
+	for _, kv := range proxmoxManagerFlagEntries(entries, skipKeys...) {
+		args = append(args, proxmoxManagerFlag(kv.Key, kv.Value)...)
+	}
+	return args
+}
+
+// proxmoxManagerFlagEntries returns the entries that become flags, the key
+// normalized and the value trimmed, without the skipped and no-op keys.
+func proxmoxManagerFlagEntries(entries []proxmoxNotificationEntry, skipKeys ...string) []proxmoxNotificationEntry {
 	skip := make(map[string]struct{}, len(skipKeys)+2)
 	for _, k := range skipKeys {
 		skip[normalizeProxmoxCfgKey(k)] = struct{}{}
@@ -36,7 +46,7 @@ func buildProxmoxManagerFlags(entries []proxmoxNotificationEntry, skipKeys ...st
 	skip["digest"] = struct{}{}
 	skip["name"] = struct{}{}
 
-	args := make([]string, 0, len(entries)*2)
+	out := make([]proxmoxNotificationEntry, 0, len(entries))
 	for _, kv := range entries {
 		key := normalizeProxmoxCfgKey(kv.Key)
 		if key == "" {
@@ -45,11 +55,21 @@ func buildProxmoxManagerFlags(entries []proxmoxNotificationEntry, skipKeys ...st
 		if _, ok := skip[key]; ok {
 			continue
 		}
-		value := strings.TrimSpace(kv.Value)
-		args = append(args, "--"+key)
-		args = append(args, value)
+		out = append(out, proxmoxNotificationEntry{Key: key, Value: strings.TrimSpace(kv.Value)})
 	}
-	return args
+	return out
+}
+
+// proxmoxManagerFlag returns the arguments that pass value to the flag named key.
+// A value that begins with '-' goes as one "--key=value" argument:
+// proxmox-backup-manager reads a separate argument that begins with '-' as an
+// option, refuses the command and names the value in its refusal ("'S3cret':
+// missing parameter value.", measured on PBS 4.2.8).
+func proxmoxManagerFlag(key, value string) []string {
+	if strings.HasPrefix(value, "-") {
+		return []string{"--" + key + "=" + value}
+	}
+	return []string{"--" + key, value}
 }
 
 func popEntryValue(entries []proxmoxNotificationEntry, keys ...string) (value string, remaining []proxmoxNotificationEntry, ok bool) {
@@ -355,23 +375,18 @@ func pbsSectionFlags(debug func(format string, args ...any), key, id string, ent
 		decode[normalizeProxmoxCfgKey(k)] = struct{}{}
 	}
 	args := make([]string, 0, len(entries)*2)
-	for _, kv := range entries {
-		// One entry gives one "--key value" pair, or nothing when the key is skipped.
-		flag := buildProxmoxManagerFlags([]proxmoxNotificationEntry{kv})
-		if len(flag) != 2 {
-			continue
-		}
-		name := strings.TrimPrefix(flag[0], "--")
-		if _, ok := decode[name]; ok {
-			decoded, err := base64.StdEncoding.DecodeString(flag[1])
+	for _, kv := range proxmoxManagerFlagEntries(entries) {
+		value := kv.Value
+		if _, ok := decode[kv.Key]; ok {
+			decoded, err := base64.StdEncoding.DecodeString(value)
 			if err != nil {
-				debug("%s=%s %s is not valid base64, passing the staged value unchanged", key, id, name)
+				debug("%s=%s %s is not valid base64, passing the staged value unchanged", key, id, kv.Key)
 			} else {
-				debug("%s=%s %s decoded from base64", key, id, name)
-				flag[1] = string(decoded)
+				debug("%s=%s %s decoded from base64", key, id, kv.Key)
+				value = string(decoded)
 			}
 		}
-		args = append(args, flag...)
+		args = append(args, proxmoxManagerFlag(kv.Key, value)...)
 	}
 	return args
 }

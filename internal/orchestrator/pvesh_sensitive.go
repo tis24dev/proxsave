@@ -42,6 +42,13 @@ func redactCLIArgs(args []string, redactFlags []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		// A secret passed as one "--flag=value" argument.
+		if name, _, joined := strings.Cut(arg, "="); joined {
+			if _, ok := redact[name]; ok {
+				out = append(out, name+"=<redacted>")
+				continue
+			}
+		}
 		out = append(out, arg)
 		if _, ok := redact[arg]; ok && i+1 < len(args) {
 			i++
