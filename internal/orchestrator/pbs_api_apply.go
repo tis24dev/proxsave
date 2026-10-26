@@ -244,8 +244,8 @@ type pbsSectionCfg struct {
 	updateVerb     string
 	createWithType bool
 	// dataFileFlag is the flag whose value create takes as the path of a file
-	// holding it decoded from the staged base64, while update takes it as staged
-	// (ACME plugin --data).
+	// holding it decoded from the staged base64, while update takes it in
+	// standard base64 (ACME plugin --data).
 	dataFileFlag string
 	// builtin are the objects PBS provides itself: never applied, removed,
 	// counted or named.
@@ -473,13 +473,41 @@ func (r *pbsSectionRestore) removeStale(id string) error {
 	return nil
 }
 
-// pbsDecodeStoredBase64 decodes a value PBS stores base64-encoded, with or without
-// the padding: PBS 4.2.8 writes the ACME plugin data without it.
+// pbsDecodeStoredBase64 decodes a value PBS stores base64-encoded, in the standard
+// or the URL-safe alphabet, with or without the padding: PBS 4.2.8 writes the ACME
+// plugin data as base64url without it ("CF_Token=ab?\n" is stored as
+// "Q0ZfVG9rZW49YWI_Cg").
 func pbsDecodeStoredBase64(value string) ([]byte, error) {
 	if data, err := base64.StdEncoding.DecodeString(value); err == nil {
 		return data, nil
 	}
-	return base64.RawStdEncoding.DecodeString(strings.TrimRight(value, "="))
+	trimmed := strings.TrimRight(value, "=")
+	if data, err := base64.RawURLEncoding.DecodeString(trimmed); err == nil {
+		return data, nil
+	}
+	return base64.RawStdEncoding.DecodeString(trimmed)
+}
+
+// updateData returns the update flags of an object whose dataFileFlag value
+// update takes as standard base64, which "acme plugin set" requires: the staged
+// value is decoded and encoded again in the standard alphabet. A value that is
+// not valid base64 is passed as staged (dataFile has said so at DEBUG).
+func (r *pbsSectionRestore) updateData(flags []string) []string {
+	if r.cfg.dataFileFlag == "" {
+		return flags
+	}
+	flag := "--" + r.cfg.dataFileFlag
+	out := append([]string(nil), flags...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] != flag {
+			continue
+		}
+		if data, err := pbsDecodeStoredBase64(out[i+1]); err == nil {
+			out[i+1] = base64.StdEncoding.EncodeToString(data)
+		}
+		return out
+	}
+	return out
 }
 
 // dataFile returns the create flags of an object whose dataFileFlag value create
@@ -540,7 +568,7 @@ func (r *pbsSectionRestore) apply(id string, s proxmoxNotificationSection) error
 	}
 	cleanup()
 	if createErr != nil {
-		return r.update(id, flags, createErr)
+		return r.update(id, r.updateData(flags), createErr)
 	}
 	r.debug("%s=%s created", r.key(), id)
 	r.applied(id)
@@ -1047,8 +1075,9 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 // pbsAcmePluginsSectionCfg is the section config of acme/plugins.cfg. PBS 4.2.8
 // creates a plugin with "acme plugin add <type> <id> --data <file>", the file
 // holding the plugin data decoded, and updates it with "acme plugin set <id>
-// --data <base64>", the form plugins.cfg stores. The standalone plugin is built
-// in: it cannot be added, set or removed.
+// --data <base64>", in standard base64 only, while plugins.cfg stores it as
+// base64url. The standalone plugin is built in: it cannot be added, set or
+// removed.
 func pbsAcmePluginsSectionCfg() pbsSectionCfg {
 	return pbsSectionCfg{
 		file:           "etc/proxmox-backup/acme/plugins.cfg",
