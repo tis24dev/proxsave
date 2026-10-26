@@ -18,7 +18,7 @@ func TestPBSNodeCfgBlock(t *testing.T) {
 		target   = "/etc/proxmox-backup/node.cfg"
 		opening  = "INFO     Restoring PBS node configuration..."
 		outcome  = "PBS node configuration: "
-		refusedC = "proxmox-backup-manager node update --task-log-max-days -5"
+		refusedC = "proxmox-backup-manager node update --task-log-max-days=-5"
 	)
 	bad := "task-log-max-days: -5\n"
 	mode := func(m string) string {
@@ -167,5 +167,20 @@ func TestPBSNodeCfgBlock_CleanDeletesSettingsTheBackupLacks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A node.cfg value that begins with '-', a description whose first line is a
+// markdown bullet included, goes as one "--key=value" argument: PBS reads a
+// separate argument that begins with '-' as an option and refuses the whole
+// "node update" ("'description': missing parameter value.").
+func TestPBSNodeUpdateFlags_DashValues(t *testing.T) {
+	flags, keys := pbsNodeUpdateFlags("email-from: pbs@example.com\ntask-log-max-days: -5\n#- primary PBS\n#second line\n")
+	want := []string{"--email-from", "pbs@example.com", "--task-log-max-days=-5", "--description=- primary PBS\nsecond line"}
+	if strings.Join(flags, "|") != strings.Join(want, "|") {
+		t.Fatalf("flags %q, want %q", flags, want)
+	}
+	if strings.Join(keys, ",") != "email-from,task-log-max-days,description" {
+		t.Fatalf("keys %v", keys)
 	}
 }

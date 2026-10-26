@@ -1844,11 +1844,11 @@ func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
 		if !ok || key == "" {
 			continue
 		}
-		flags = append(flags, "--"+key, strings.TrimSpace(value))
+		flags = append(flags, proxmoxManagerFlag(key, strings.TrimSpace(value))...)
 		keys = append(keys, key)
 	}
 	if len(description) > 0 {
-		flags = append(flags, "--description", strings.Join(description, "\n"))
+		flags = append(flags, proxmoxManagerFlag("description", strings.Join(description, "\n"))...)
 		keys = append(keys, "description")
 	}
 	return flags, keys
