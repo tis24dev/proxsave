@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -994,7 +995,7 @@ func identityKeyArms(f hostFacts, macs []string, primaryMAC string) []identityKe
 		orderedMACs = append(orderedMACs, mac)
 	}
 	if len(orderedMACs) > 1 {
-		sort.Strings(orderedMACs[1:])
+		slices.Sort(orderedMACs[1:])
 	}
 
 	arms := make([]identityKeyArm, 0, len(orderedMACs)*2+3)
@@ -1082,14 +1083,14 @@ func splitKeyFieldEntries(keyField string) []identityKeyArm {
 		if token == "" {
 			continue
 		}
-		idx := strings.IndexByte(token, '=')
-		if idx < 0 {
+		before, after, ok := strings.Cut(token, "=")
+		if !ok {
 			out = append(out, identityKeyArm{Prefix: token})
 			continue
 		}
 		out = append(out, identityKeyArm{
-			Label:  strings.TrimSpace(token[:idx]),
-			Prefix: strings.TrimSpace(token[idx+1:]),
+			Label:  strings.TrimSpace(before),
+			Prefix: strings.TrimSpace(after),
 		})
 	}
 	return out
@@ -1387,7 +1388,7 @@ func classifyReadError(err error) systemFileState {
 }
 
 func readFirstLine(path string, limit int) (string, systemFileState) {
-	data, err := os.ReadFile(path)
+	data, err := readIdentityInput(path)
 	if err != nil {
 		return "", classifyReadError(err)
 	}
@@ -1399,6 +1400,31 @@ func readFirstLine(path string, limit int) (string, systemFileState) {
 		return "", systemFileAbsent
 	}
 	return line, systemFilePresent
+}
+
+// readIdentityInput reads one input of the host identity.
+//
+// THE FOUR FIXED HOST FILES ARE READ BY THEIR CONSTANT PATH, exactly as the system
+// exposes them, symlinks included: /var/lib/dbus/machine-id is commonly an absolute
+// symlink to /etc/machine-id, which an os.Root refuses to follow, and refusing it would
+// turn an absent machine-id into an unreadable one and switch the identity check off.
+//
+// Every other input is a per-interface sysfs attribute, read through its own directory
+// opened as an os.Root: /sys/class/net/<iface> is itself a symlink, followed when the
+// root is opened, and the attribute inside it is a regular file.
+func readIdentityInput(path string) ([]byte, error) {
+	switch path {
+	case machineIDPath:
+		return os.ReadFile(machineIDPath)
+	case dbusMachineIDPath:
+		return os.ReadFile(dbusMachineIDPath)
+	case productUUIDPath:
+		return os.ReadFile(productUUIDPath)
+	case procVersionPath:
+		return os.ReadFile(procVersionPath)
+	default:
+		return readFileUnderRoot(filepath.Dir(path), filepath.Base(path))
+	}
 }
 
 // readMachineID returns the host machine-id and how it was classified.
@@ -1568,13 +1594,13 @@ func isAllDigits(value string) bool {
 	return true
 }
 
-func logWarning(logger *logging.Logger, format string, args ...interface{}) {
+func logWarning(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Warning(format, args...)
 	}
 }
 
-func logDebug(logger *logging.Logger, format string, args ...interface{}) {
+func logDebug(logger *logging.Logger, format string, args ...any) {
 	if logger != nil {
 		logger.Debug(format, args...)
 	}

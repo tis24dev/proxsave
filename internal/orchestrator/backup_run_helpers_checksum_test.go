@@ -37,7 +37,7 @@ func TestGenerateArchiveChecksum_ThreadsFsIoTimeout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := o.generateArchiveChecksum(context.Background(), fifo)
+		_, err := o.generateArchiveChecksum(t.Context(), fifo)
 		done <- err
 	}()
 	select {

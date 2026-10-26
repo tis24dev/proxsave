@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -252,7 +252,7 @@ func missingNameSet(expected, actual map[string]struct{}) []string {
 		for name := range expected {
 			out = append(out, name)
 		}
-		sort.Strings(out)
+		slices.Sort(out)
 		return out
 	}
 
@@ -263,7 +263,7 @@ func missingNameSet(expected, actual map[string]struct{}) []string {
 		}
 		out = append(out, name)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

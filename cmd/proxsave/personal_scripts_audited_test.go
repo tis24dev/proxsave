@@ -94,7 +94,6 @@ func TestPersonalScriptCommandsExecuteTheOpenedFileAfterPathReplacement(t *testi
 				t.Fatalf("the per-run gate refused a script it must accept: %v", refusal)
 			}
 			for _, file := range cmd.ExtraFiles {
-				file := file
 				t.Cleanup(func() { _ = file.Close() })
 			}
 			if err := os.Rename(replacement, path); err != nil {
@@ -380,7 +379,7 @@ func TestStartedScriptsGetNoShellNoArgumentsAndAnUnchangedEnvironment(t *testing
 			parent[kv] = true
 		}
 		seen := map[string]bool{}
-		for _, kv := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+		for kv := range strings.SplitSeq(strings.TrimRight(string(raw), "\n"), "\n") {
 			if kv == "" {
 				continue
 			}
@@ -479,7 +478,7 @@ func TestAbandonedWaitGoroutineDoesNotLeak(t *testing.T) {
 	script := writePersonalScript(t, dir, "slow.sh", `trap "" TERM`+"\nsleep 2")
 
 	before := runtime.NumGoroutine()
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		runPersonalScript(script, nil)
 	}
 
@@ -764,7 +763,7 @@ func parkedParentOpens(t *testing.T) int {
 	buf := make([]byte, 1<<20)
 	stacks := string(buf[:runtime.Stack(buf, true)])
 	parked := 0
-	for _, goroutine := range strings.Split(stacks, "\n\n") {
+	for goroutine := range strings.SplitSeq(stacks, "\n\n") {
 		if strings.Contains(goroutine, "os.openRootNolog") || strings.Contains(goroutine, "os.OpenRoot(") {
 			parked++
 		}
@@ -805,7 +804,7 @@ func TestATimedOutOpenLeavesOneProbeNoMatterHowManyRuns(t *testing.T) {
 	script := fifoParentScript(t)
 	base := parkedParentOpens(t)
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if file, refusal := openPersonalScriptForExecution(script); refusal == nil {
 			_ = file.Close()
 			t.Fatalf("run %d opened a script whose parent is a FIFO", i)

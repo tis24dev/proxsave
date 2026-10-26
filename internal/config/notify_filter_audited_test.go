@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -100,7 +101,7 @@ func TestTheShippedTemplateAssignsNotifyOnAtTheDefault(t *testing.T) {
 	}
 
 	var active []string
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "NOTIFY_ON=") {
 			active = append(active, line)
 		}
@@ -118,11 +119,8 @@ func TestTheShippedTemplateAssignsNotifyOnAtTheDefault(t *testing.T) {
 // because of the shell rather than because the code agrees.
 func TestNotifyOnHonoursTheEnvironmentOverride(t *testing.T) {
 	var listed bool
-	for _, key := range envOverrideKeys {
-		if key == "NOTIFY_ON" {
-			listed = true
-			break
-		}
+	if slices.Contains(envOverrideKeys, "NOTIFY_ON") {
+		listed = true
 	}
 	if !listed {
 		t.Fatal("NOTIFY_ON must be in envOverrideKeys, or the shell cannot override the file and loadEnvForTest cannot neutralise it")

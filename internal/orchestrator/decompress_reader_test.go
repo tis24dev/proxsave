@@ -109,7 +109,6 @@ func TestCreateDecompressionReaderUsesStreamingRunnerForCompressedFormats(t *tes
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.ext, func(t *testing.T) {
 			fake.calls = nil
 

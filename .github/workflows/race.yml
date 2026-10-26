@@ -54,4 +54,6 @@ jobs:
         run: go mod download
 
       - name: Run race detector
-        run: go test -race -count=1 ./...
+        # -shuffle=on randomizes test order. A failing package's output starts
+        # with "-test.shuffle N"; -shuffle=N replays that order.
+        run: go test -race -shuffle=on -count=1 ./...

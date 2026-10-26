@@ -35,8 +35,8 @@ func IsDevBuild(current string) bool {
 	}
 	if pre := v.Prerelease(); pre != "" {
 		first := pre
-		if i := strings.IndexByte(pre, '.'); i >= 0 {
-			first = pre[:i]
+		if before, _, ok := strings.Cut(pre, "."); ok {
+			first = before
 		}
 		if first == "dev" {
 			return true // "X.Y.Z-dev" or "X.Y.Z-dev.N" development prerelease

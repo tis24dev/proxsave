@@ -2,8 +2,9 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -112,22 +113,14 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 // lowercase against 645 uppercase), and without the symbol rank a "✗ ... backup not
 // saved" sorted after every plain label, at the bottom of a long list.
 func sortLogCategories(list []notify.LogCategory) {
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		if a.Type != b.Type {
-			// "ERROR" < "WARNING" lexicographically.
-			return a.Type < b.Type
-		}
-		if ra, rb := logCategorySymbolRank(a.Label), logCategorySymbolRank(b.Label); ra != rb {
-			return ra < rb
-		}
-		if a.Count != b.Count {
-			return a.Count > b.Count
-		}
-		if la, lb := strings.ToLower(a.Label), strings.ToLower(b.Label); la != lb {
-			return la < lb
-		}
-		return a.Label < b.Label
+	slices.SortStableFunc(list, func(a, b notify.LogCategory) int {
+		return cmp.Or(
+			strings.Compare(a.Type, b.Type), // "ERROR" < "WARNING" lexicographically.
+			cmp.Compare(logCategorySymbolRank(a.Label), logCategorySymbolRank(b.Label)),
+			cmp.Compare(b.Count, a.Count),
+			strings.Compare(strings.ToLower(a.Label), strings.ToLower(b.Label)),
+			strings.Compare(a.Label, b.Label),
+		)
 	})
 }
 
@@ -168,8 +161,8 @@ func classifyLogLine(line string) (entryType, message string) {
 
 	// 2) Go logger format with timestamp prefix.
 	if strings.HasPrefix(line, "[") {
-		if closeIdx := strings.Index(line, "]"); closeIdx != -1 {
-			rest := strings.TrimSpace(line[closeIdx+1:])
+		if _, after, ok := strings.Cut(line, "]"); ok {
+			rest := strings.TrimSpace(after)
 			if rest == "" {
 				return "", ""
 			}
@@ -281,9 +274,7 @@ func sanitizeLogMessage(msg string) string {
 func splitCategoryAndExample(msg string) (label, example string) {
 	parts := strings.SplitN(msg, " - ", 2)
 	label = strings.TrimSpace(parts[0])
-	if label == "" {
-		label = msg
-	}
+	label = cmp.Or(label, msg)
 	label = truncateString(label, 120)
 
 	if len(parts) == 2 {

@@ -1,7 +1,7 @@
 package health
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -127,7 +127,7 @@ func SensorRows(st Status, heartbeatInterval, updateInterval time.Duration, now 
 			notifyKeys = append(notifyKeys, k)
 		}
 	}
-	sort.Strings(notifyKeys)
+	slices.Sort(notifyKeys)
 	for _, k := range notifyKeys {
 		rec := st.Records[k]
 		lvl, state, age := sensorLevel(rec, 0, now)

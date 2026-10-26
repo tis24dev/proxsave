@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -200,13 +201,7 @@ func TestStopPVEClusterServices_UsesNoBlock(t *testing.T) {
 		"systemctl stop --no-block pvestatd",
 	}
 	for _, cmd := range wantStops {
-		found := false
-		for _, call := range fake.Calls {
-			if call == cmd {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(fake.Calls, cmd)
 		if !found {
 			t.Fatalf("expected %s to be called, calls: %#v", cmd, fake.Calls)
 		}
@@ -262,13 +257,7 @@ func TestStopPBSServices_AggressiveRetry(t *testing.T) {
 		t.Fatalf("expected success with aggressive retry, got %v", err)
 	}
 
-	foundKill := false
-	for _, call := range fake.Calls {
-		if call == "systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy" {
-			foundKill = true
-			break
-		}
-	}
+	foundKill := slices.Contains(fake.Calls, "systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy")
 	if !foundKill {
 		t.Fatalf("expected systemctl kill --signal=SIGTERM --kill-who=all proxmox-backup-proxy to be invoked, calls: %#v", fake.Calls)
 	}
@@ -293,13 +282,7 @@ func TestStartPBSServices_AggressiveRetry(t *testing.T) {
 		t.Fatalf("expected success with aggressive restart, got %v", err)
 	}
 
-	foundRestart := false
-	for _, call := range fake.Calls {
-		if call == "systemctl restart proxmox-backup" {
-			foundRestart = true
-			break
-		}
-	}
+	foundRestart := slices.Contains(fake.Calls, "systemctl restart proxmox-backup")
 	if !foundRestart {
 		t.Fatalf("expected systemctl restart proxmox-backup to be invoked, calls: %#v", fake.Calls)
 	}
@@ -427,8 +410,7 @@ func TestEnsureWritablePath_Overwrite(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	reader := bufio.NewReader(strings.NewReader("1\n"))
 
 	got, err := ensureWritablePath(ctx, reader, existing, "test")
@@ -451,8 +433,7 @@ func TestEnsureWritablePath_EnterNewPath(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	reader := bufio.NewReader(strings.NewReader("2\n" + filepath.Join(tmp, "new.txt") + "\n"))
 
 	got, err := ensureWritablePath(ctx, reader, existing, "test")
@@ -476,8 +457,7 @@ func TestEnsureWritablePath_Abort(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	reader := bufio.NewReader(strings.NewReader("0\n"))
 
 	_, err := ensureWritablePath(ctx, reader, existing, "test")
@@ -1552,13 +1532,7 @@ func TestUnmountEtcPVE_MountedAndUnmounts(t *testing.T) {
 	}
 
 	// Check that umount was called
-	found := false
-	for _, call := range fake.Calls {
-		if call == "umount /etc/pve" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(fake.Calls, "umount /etc/pve")
 	if !found {
 		t.Fatalf("expected umount to be called, got: %v", fake.Calls)
 	}

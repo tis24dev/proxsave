@@ -228,7 +228,6 @@ func TestPBSAPIApply_ReadStageFileOptionalErrors(t *testing.T) {
 		{name: "prune", relPath: "etc/proxmox-backup/prune.cfg", apply: applyPBSPruneCfgViaAPI},
 		{name: "traffic-control", relPath: "etc/proxmox-backup/traffic-control.cfg", apply: applyPBSTrafficControlCfgViaAPI},
 	} {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stageRoot, fs, _ := setupPBSAPIApplyTestDeps(t)
 			if err := fs.AddDir(stageRoot + "/" + tt.relPath); err != nil {
@@ -268,7 +267,6 @@ func TestPBSAPIApply_NoFileBranches(t *testing.T) {
 		{name: "prune", apply: applyPBSPruneCfgViaAPI},
 		{name: "traffic-control", apply: applyPBSTrafficControlCfgViaAPI},
 	} {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stageRoot, _, runner := setupPBSAPIApplyTestDeps(t)
 			if err := tt.apply(context.Background(), logger, stageRoot, true); err != nil {
@@ -336,7 +334,6 @@ func TestPBSAPIApply_StrictListCommandErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 			writeStageFile(t, fs, stageRoot, tt.relPath, tt.content, 0o640)
@@ -410,7 +407,6 @@ func TestPBSAPIApply_StrictListParseErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 			writeStageFile(t, fs, stageRoot, tt.relPath, tt.content, 0o640)
@@ -466,7 +462,6 @@ func TestPBSAPIApply_CreateUpdateBothFailErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 			writeStageFile(t, fs, stageRoot, tt.relPath, tt.content, 0o640)
@@ -799,7 +794,7 @@ func TestApplyPBSRemoteCfgViaAPI_DecodesBase64Password(t *testing.T) {
 			t.Fatalf("calls=%v want %v", runner.calls, want)
 		}
 		var lines []string
-		for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimRight(logBuf.String(), "\n"), "\n") {
 			if strings.Contains(line, "base64") {
 				lines = append(lines, line)
 			}
@@ -1458,8 +1453,7 @@ func TestApplyPBSNodeCfgViaAPI_NoFileAndEmptyAndError(t *testing.T) {
 // pbsTestHasNotRemoved reports whether err is the incomplete error of a section or
 // datastore block that names a stale object it did not remove.
 func pbsTestHasNotRemoved(err error) bool {
-	var section *pbsSectionRestoreIncompleteError
-	if errors.As(err, &section) {
+	if section, ok := errors.AsType[*pbsSectionRestoreIncompleteError](err); ok {
 		return len(section.notRemoved) > 0
 	}
 	var datastore *pbsDatastoreRestoreIncompleteError

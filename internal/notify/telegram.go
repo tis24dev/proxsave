@@ -161,7 +161,7 @@ func (t *TelegramNotifier) Send(ctx context.Context, data *NotificationData) (*N
 	startTime := time.Now()
 	result := &NotificationResult{
 		Method:   "telegram",
-		Metadata: make(map[string]interface{}),
+		Metadata: make(map[string]any),
 	}
 	// One idempotent id per notification, reused across the relay POST and the
 	// delivery-status poll (and any relay retry after a stale-secret reprovision) so

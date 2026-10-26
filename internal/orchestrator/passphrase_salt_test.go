@@ -220,7 +220,7 @@ func TestPassphraseSaltForManifest(t *testing.T) {
 // recipient-file body.
 func countSaltCommentLines(content string) int {
 	n := 0
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), passphraseSaltCommentPrefix) {
 			n++
 		}
@@ -648,8 +648,7 @@ func TestWriteArchiveManifestAbortsOnUnreadableSalt(t *testing.T) {
 	if err == nil {
 		t.Fatalf("writeArchiveManifest must abort when the salt is unreadable")
 	}
-	var be *BackupError
-	if !errors.As(err, &be) {
+	if _, ok := errors.AsType[*BackupError](err); !ok {
 		t.Fatalf("want *BackupError, got %T: %v", err, err)
 	}
 	if run.stats.ManifestPath != "" {

@@ -3,9 +3,11 @@ package orchestrator
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -136,15 +138,9 @@ func loadFstabDeviceInventory(logger *logging.Logger, backupRoot string) map[str
 				continue
 			}
 			existing := out[dev]
-			if existing.UUID == "" {
-				existing.UUID = id.UUID
-			}
-			if existing.PartUUID == "" {
-				existing.PartUUID = id.PartUUID
-			}
-			if existing.Label == "" {
-				existing.Label = id.Label
-			}
+			existing.UUID = cmp.Or(existing.UUID, id.UUID)
+			existing.PartUUID = cmp.Or(existing.PartUUID, id.PartUUID)
+			existing.Label = cmp.Or(existing.Label, id.Label)
 			out[dev] = existing
 		}
 	}
@@ -188,22 +184,14 @@ func parsePBSDatastoreInventoryForDevices(logger *logging.Logger, content string
 	}
 
 	if blkid := strings.TrimSpace(report.Commands["blkid"].Output); blkid != "" {
-		for dev, id := range parseBlkidInventory(blkid) {
-			out[dev] = id
-		}
+		maps.Copy(out, parseBlkidInventory(blkid))
 	}
 	if lsblk := strings.TrimSpace(report.Commands["lsblk_json"].Output); lsblk != "" {
 		for dev, id := range parseLsblkJSONInventory(lsblk) {
 			existing := out[dev]
-			if existing.UUID == "" {
-				existing.UUID = id.UUID
-			}
-			if existing.PartUUID == "" {
-				existing.PartUUID = id.PartUUID
-			}
-			if existing.Label == "" {
-				existing.Label = id.Label
-			}
+			existing.UUID = cmp.Or(existing.UUID, id.UUID)
+			existing.PartUUID = cmp.Or(existing.PartUUID, id.PartUUID)
+			existing.Label = cmp.Or(existing.Label, id.Label)
 			out[dev] = existing
 		}
 	}
@@ -253,7 +241,7 @@ var blkidKVRe = regexp.MustCompile(`([A-Za-z0-9_]+)=\"([^\"]*)\"`)
 
 func parseBlkidInventory(content string) map[string]fstabDeviceIdentity {
 	out := make(map[string]fstabDeviceIdentity)
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -687,7 +675,7 @@ func ensureFstabOption(options, option string) string {
 		return opt
 	}
 
-	for _, part := range strings.Split(opts, ",") {
+	for part := range strings.SplitSeq(opts, ",") {
 		if strings.TrimSpace(part) == opt {
 			return opts
 		}

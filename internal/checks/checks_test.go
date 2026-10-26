@@ -310,9 +310,9 @@ func TestCheckLockFile_WritesExpectedContent(t *testing.T) {
 	}
 
 	var ts string
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "time=") {
-			ts = strings.TrimPrefix(line, "time=")
+	for line := range strings.SplitSeq(text, "\n") {
+		if after, ok := strings.CutPrefix(line, "time="); ok {
+			ts = after
 			break
 		}
 	}
@@ -348,7 +348,7 @@ func TestCheckLockFile_ConcurrentCalls_OnlyOnePasses(t *testing.T) {
 
 	passed := make(chan bool, workers)
 
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
 			<-start
@@ -532,7 +532,6 @@ func TestCheckerConfigValidate(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.cfg.Validate()
 			if err == nil {

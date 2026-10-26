@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -734,7 +734,7 @@ func setBackupEnvKeys(configPath string, kv map[string]string) error {
 	for k := range kv {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys) // deterministic apply order
+	slices.Sort(keys) // deterministic apply order
 	for _, k := range keys {
 		content = utils.SetEnvValue(content, k, kv[k])
 	}

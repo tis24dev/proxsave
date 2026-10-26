@@ -452,7 +452,7 @@ func parseProxmoxNotificationSections(content string) ([]proxmoxNotificationSect
 		current = nil
 	}
 
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue

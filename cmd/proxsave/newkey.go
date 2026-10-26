@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -170,9 +171,7 @@ func loadNewKeyConfig(configPath, baseDir string) (*config.Config, string, error
 	}
 
 	recipientPath := strings.TrimSpace(cfg.AgeRecipientFile)
-	if recipientPath == "" {
-		recipientPath = defaultRecipientPath
-	}
+	recipientPath = cmp.Or(recipientPath, defaultRecipientPath)
 	cfg.AgeRecipientFile = recipientPath
 
 	return cfg, recipientPath, nil

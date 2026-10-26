@@ -480,7 +480,7 @@ var elapsedRe = regexp.MustCompile(`elapsed=\d+ms`)
 // with the elapsed milliseconds of a relay answer written as "elapsed=N".
 func blockLines(out string) []string {
 	var lines []string
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
 		if i := strings.Index(line, "] "); strings.HasPrefix(line, "[") && i >= 0 {
 			line = line[i+2:]
 		}

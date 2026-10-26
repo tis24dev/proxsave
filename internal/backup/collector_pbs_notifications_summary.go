@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -494,12 +494,7 @@ func (e pbsSecretEvidence) incompleteClause() string {
 }
 
 func containsPBSString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, want)
 }
 
 func joinPBSAnd(items []string) string { return joinPBSList(items, " and ") }
@@ -636,7 +631,7 @@ func summarizePBSNotificationSnapshot(path string) pbsNotificationSnapshotSummar
 		}
 	}
 
-	sort.Strings(names)
+	slices.Sort(names)
 	if len(names) > 100 {
 		names = names[:100]
 	}

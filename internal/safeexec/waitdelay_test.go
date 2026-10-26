@@ -45,7 +45,7 @@ func TestTrustedCommandContextBoundsAnInheritedPipe(t *testing.T) {
 	done := make(chan error, 1)
 	start := time.Now()
 	go func() {
-		cmd, err := TrustedCommandContext(context.Background(), path)
+		cmd, err := TrustedCommandContext(t.Context(), path)
 		if err != nil {
 			done <- err
 			return

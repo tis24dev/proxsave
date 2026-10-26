@@ -2,13 +2,14 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -211,7 +212,7 @@ func appendDirSnapshot(logger *logging.Logger, label string, b *strings.Builder,
 		}
 		list = append(list, entryInfo{name: e.Name(), mode: info.Mode()})
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+	slices.SortFunc(list, func(a, b entryInfo) int { return strings.Compare(a.name, b.name) })
 	if logger != nil {
 		names := make([]string, 0, len(list))
 		for _, e := range list {
@@ -334,9 +335,7 @@ func writeNetworkHealthReportFileNamed(diagnosticsDir, filename string, report n
 		return "", fmt.Errorf("empty diagnostics directory")
 	}
 	name := strings.TrimSpace(filename)
-	if name == "" {
-		name = "health.txt"
-	}
+	name = cmp.Or(name, "health.txt")
 	path := filepath.Join(diagnosticsDir, name)
 	if err := restoreFS.WriteFile(path, []byte(report.Details()+"\n"), 0o600); err != nil {
 		return "", err
@@ -360,9 +359,7 @@ func writeNetworkIfqueryDiagnosticReportFile(diagnosticsDir, filename string, re
 		return "", fmt.Errorf("empty diagnostics directory")
 	}
 	name := strings.TrimSpace(filename)
-	if name == "" {
-		name = "ifquery_check.txt"
-	}
+	name = cmp.Or(name, "ifquery_check.txt")
 	path := filepath.Join(diagnosticsDir, name)
 	var b strings.Builder
 	b.WriteString("NOTE: ifquery --check compares the running state vs the config.\n")
@@ -380,9 +377,7 @@ func writeNetworkTextReportFile(diagnosticsDir, filename, content string) (strin
 		return "", fmt.Errorf("empty diagnostics directory")
 	}
 	name := strings.TrimSpace(filename)
-	if name == "" {
-		name = "report.txt"
-	}
+	name = cmp.Or(name, "report.txt")
 	path := filepath.Join(diagnosticsDir, name)
 	if err := restoreFS.WriteFile(path, []byte(content), 0o600); err != nil {
 		return "", err

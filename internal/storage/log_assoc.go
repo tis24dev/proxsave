@@ -45,9 +45,6 @@ func computeRemaining(initial, deleted int) (int, bool) {
 	if initial < 0 {
 		return 0, false
 	}
-	remaining := initial - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(initial-deleted, 0)
 	return remaining, true
 }

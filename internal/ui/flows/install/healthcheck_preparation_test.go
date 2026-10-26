@@ -69,7 +69,7 @@ func TestHealthcheckPreparationIsNotRepeatedBySelfRecheck(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunHealthcheckSetup(context.Background(), d.session, "/base", "/cfg", false, installer.HealthcheckSetupOptions{BeforeBootstrap: func(context.Context) error { prepared++; return nil }})
+		_, err := RunHealthcheckSetup(t.Context(), d.session, "/base", "/cfg", false, installer.HealthcheckSetupOptions{BeforeBootstrap: func(context.Context) error { prepared++; return nil }})
 		done <- err
 	}()
 	d.waitScreen("Backup monitoring (healthchecks)")

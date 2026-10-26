@@ -24,12 +24,12 @@ const adoptBin = " /usr/local/bin/proxsave --backup"
 // so a logged block can be compared line by line.
 func logBlock(out string) []string {
 	var lines []string
-	for _, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		i := strings.Index(l, "] ")
-		if i < 0 {
+	for l := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
+		_, after, ok := strings.Cut(l, "] ")
+		if !ok {
 			continue
 		}
-		rest := l[i+2:]
+		rest := after
 		if len(rest) < 9 {
 			lines = append(lines, strings.TrimSpace(rest))
 			continue

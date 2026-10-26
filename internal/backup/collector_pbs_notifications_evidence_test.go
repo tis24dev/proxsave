@@ -3,6 +3,7 @@ package backup
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -261,5 +262,20 @@ func TestPBSNotificationPrivFindings_NotFoundWithEndpointsWarns(t *testing.T) {
 	}
 	if len(s.Notes) != 0 {
 		t.Fatalf("the finding must not also be filed as a note, got: %v", s.Notes)
+	}
+}
+
+// The summary lists the notification object names in sorted order, whatever order the
+// listing returned them in.
+func TestSummarizePBSNotificationSnapshotSortsNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notification_targets.json")
+	listing := `{"data":[{"name":"mail-to-root"},{"name":"gotify-ops"},{"name":"webhook-ci"}]}`
+	if err := os.WriteFile(path, []byte(listing), 0o600); err != nil {
+		t.Fatalf("write listing: %v", err)
+	}
+
+	got := summarizePBSNotificationSnapshot(path).Names
+	if want := []string{"gotify-ops", "mail-to-root", "webhook-ci"}; !slices.Equal(got, want) {
+		t.Fatalf("Names = %v, want %v", got, want)
 	}
 }

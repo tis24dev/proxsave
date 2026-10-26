@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -213,9 +214,7 @@ func (o *Orchestrator) dispatchNotifications(ctx context.Context, stats *BackupS
 		if !ok || channel == nil {
 			if entry.name == "Email" && cfg != nil {
 				method := strings.TrimSpace(cfg.EmailDeliveryMethod)
-				if method == "" {
-					method = "relay"
-				}
+				method = cmp.Or(method, "relay")
 				o.logger.Warning("%s: enabled but not initialized (EMAIL_DELIVERY_METHOD=%q; allowed: relay|sendmail|pmf)", entry.name, method)
 
 				if stats != nil && strings.TrimSpace(stats.EmailStatus) == "" {

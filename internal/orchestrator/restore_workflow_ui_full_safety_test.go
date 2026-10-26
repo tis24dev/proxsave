@@ -201,3 +201,10 @@ func TestFullRestoreFallbackNeverWritesClusterDB(t *testing.T) {
 		t.Fatalf("fallback overwrote the live cluster database under a running pmxcfs: %q", string(live))
 	}
 }
+
+// An empty destination root resolves category paths under /.
+func TestResolveCategoryPathDefaultsAnEmptyDestRoot(t *testing.T) {
+	if got := resolveCategoryPath("./etc/fstab", ""); got != "/etc/fstab" {
+		t.Fatalf("resolveCategoryPath() = %q, want %q", got, "/etc/fstab")
+	}
+}

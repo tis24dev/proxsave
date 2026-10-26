@@ -1,9 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -35,18 +37,8 @@ type ExecInfo struct {
 	HasBase  bool
 }
 
-var (
-	execInfo     = &ExecInfo{}
-	execInfoOnce = &sync.Once{}
-)
-
-func getExecInfo() ExecInfo {
-	execInfoOnce.Do(func() {
-		info := detectExecInfo()
-		execInfo = &info
-	})
-	return *execInfo
-}
+// getExecInfo detects the running executable once per process.
+var getExecInfo = sync.OnceValue(detectExecInfo)
 
 func detectExecInfo() ExecInfo {
 	candidates := collectExecPathCandidates()
@@ -422,9 +414,7 @@ func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	}
 
 	mount := info.MountPoint
-	if mount == "" {
-		mount = "unknown"
-	}
+	mount = cmp.Or(mount, "unknown")
 
 	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
 }
@@ -589,7 +579,7 @@ func logStorageInitSummary(summary string, warn bool) {
 		return
 	}
 	lines := make([]string, 0, 8)
-	for _, line := range strings.Split(summary, "\n") {
+	for line := range strings.SplitSeq(summary, "\n") {
 		if strings.TrimSpace(line) != "" {
 			lines = append(lines, line)
 		}
@@ -654,6 +644,14 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		if dir == "" {
 			continue
 		}
+		// A relative entry names a directory under wherever the installer was
+		// started, not a global entrypoint location: cleaning it would remove a
+		// symlink from the working directory. Go's own command lookup refuses
+		// relative PATH entries for the same reason.
+		if !filepath.IsAbs(dir) {
+			logBootstrapDebug(bootstrap, "Skipping relative PATH entry %q: only absolute directories are scanned for proxsave/proxmox-backup entrypoints", dir)
+			continue
+		}
 		for _, name := range names {
 			candidates = append(candidates, filepath.Join(dir, name))
 		}
@@ -684,48 +682,12 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 		}
 		seen[cand] = struct{}{}
 
-		info, err := os.Lstat(cand)
-		if err != nil {
-			continue
-		}
-
-		// If this entry *is* the current Go executable, keep it.
-		if execPath != "" {
-			if cand == execPath {
-				bootstrap.Info("Keeping proxsave/proxmox-backup entrypoint (current Go binary): %s", cand)
-				kept++
-				continue
-			}
-			if info.Mode()&os.ModeSymlink != 0 {
-				if target, err := os.Readlink(cand); err == nil {
-					if !filepath.IsAbs(target) {
-						target = filepath.Join(filepath.Dir(cand), target)
-					}
-					if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved == execPath {
-						bootstrap.Info("Keeping proxsave/proxmox-backup symlink pointing to Go binary: %s -> %s", cand, resolved)
-						kept++
-						continue
-					}
-				}
-			}
-		}
-
-		// cand is an existing entrypoint that does not resolve to the current Go
-		// binary. Only remove it if it is a SYMLINK (the form proxsave creates).
-		// A real file may be a distro/package-managed binary (e.g. a packaged
-		// /usr/bin/proxsave) that recreation never restores, so removing it would
-		// permanently break the command — leave it in place and log it.
-		if info.Mode()&os.ModeSymlink == 0 {
-			logBootstrapInfo(bootstrap, "Leaving %s in place: not a symlink created by proxsave (a real/package-managed file is never removed)", cand)
+		switch cleanupEntrypointCandidate(cand, execPath, bootstrap) {
+		case entrypointKept:
 			kept++
-			continue
+		case entrypointRemoved:
+			removed++
 		}
-		if err := os.Remove(cand); err != nil {
-			logBootstrapWarning(bootstrap, "Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, err)
-			continue
-		}
-		bootstrap.Info("Removed existing proxsave/proxmox-backup symlink: %s", cand)
-		removed++
 	}
 
 	if removed == 0 && kept == 0 {
@@ -733,6 +695,85 @@ func cleanupGlobalProxmoxBackupEntrypoints(execPath string, bootstrap *logging.B
 	} else {
 		bootstrap.Info("Global proxsave/proxmox-backup entrypoint scan: removed=%d kept=%d", removed, kept)
 	}
+}
+
+// entrypointOutcome is what cleanupEntrypointCandidate did with one candidate.
+type entrypointOutcome int
+
+const (
+	// entrypointAbsent: nothing there, or its directory could not be opened.
+	entrypointAbsent entrypointOutcome = iota
+	entrypointKept
+	entrypointRemoved
+	// entrypointFailed: a stale symlink that could not be removed (warned).
+	entrypointFailed
+)
+
+// cleanupEntrypointCandidate inspects one candidate entrypoint path and keeps or
+// removes it. Every filesystem call goes through the candidate's directory opened
+// as an os.Root, with the bare entry name: the directory comes from PATH, and the
+// Lstat, Readlink and Remove all act on that one directory entry.
+func cleanupEntrypointCandidate(cand, execPath string, bootstrap *logging.BootstrapLogger) entrypointOutcome {
+	// os.OpenRoot opens its argument without O_DIRECTORY, so a PATH entry that is a FIFO
+	// would block until a writer comes. The trailing "/." makes the kernel resolve the
+	// entry as a directory first: anything else fails at once with ENOTDIR, as the plain
+	// Lstat of "<entry>/<name>" did.
+	root, err := os.OpenRoot(filepath.Dir(cand) + string(os.PathSeparator) + ".")
+	if err != nil {
+		return entrypointAbsent
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(cand)
+
+	info, err := root.Lstat(name)
+	if err != nil {
+		return entrypointAbsent
+	}
+
+	// If this entry *is* the current Go executable, keep it.
+	if execPath != "" {
+		if cand == execPath {
+			bootstrap.Info("Keeping proxsave/proxmox-backup entrypoint (current Go binary): %s", cand)
+			return entrypointKept
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target, err := root.Readlink(name); err == nil {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(cand), target)
+				}
+				if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved == execPath {
+					bootstrap.Info("Keeping proxsave/proxmox-backup symlink pointing to Go binary: %s -> %s", cand, resolved)
+					return entrypointKept
+				}
+			}
+		}
+	}
+
+	// cand is an existing entrypoint that does not resolve to the current Go
+	// binary. Only remove it if it is a SYMLINK (the form proxsave creates).
+	// A real file may be a distro/package-managed binary (e.g. a packaged
+	// /usr/bin/proxsave) that recreation never restores, so removing it would
+	// permanently break the command — leave it in place and log it.
+	if info.Mode()&os.ModeSymlink == 0 {
+		logBootstrapInfo(bootstrap, "Leaving %s in place: not a symlink created by proxsave (a real/package-managed file is never removed)", cand)
+		return entrypointKept
+	}
+	if err := root.Remove(name); err != nil {
+		logBootstrapWarning(bootstrap, "Failed to remove existing proxsave/proxmox-backup symlink %s: %v", cand, entrypointRemoveError(cand, err))
+		return entrypointFailed
+	}
+	bootstrap.Info("Removed existing proxsave/proxmox-backup symlink: %s", cand)
+	return entrypointRemoved
+}
+
+// entrypointRemoveError reports a failed root.Remove the way os.Remove does: the
+// os.Root error names only the bare entry, while the warning must name the full
+// path of the entry that could not be removed.
+func entrypointRemoveError(cand string, err error) error {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok {
+		return &os.PathError{Op: "remove", Path: cand, Err: pathErr.Err}
+	}
+	return err
 }
 
 func ensureGoSymlink(execPath string, bootstrap *logging.BootstrapLogger) {
@@ -934,9 +975,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	}
 
 	schedule := strings.TrimSpace(cronSchedule)
-	if schedule == "" {
-		schedule = "0 2 * * *"
-	}
+	schedule = cmp.Or(schedule, "0 2 * * *")
 
 	// (Re)install resets proxsave's schedule to the chosen one: every
 	// proxsave-managed entry is dropped and a single fresh entry is written at the
@@ -1121,7 +1160,7 @@ func buildReinstallCronLines(lines []string, baseDir string, correctPaths []stri
 	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
 }
 
-func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Warning(format, args...)
 		return
@@ -1129,7 +1168,7 @@ func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args
 	logging.Warning(format, args...)
 }
 
-func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Info(format, args...)
 		return
@@ -1137,7 +1176,7 @@ func logBootstrapInfo(bootstrap *logging.BootstrapLogger, format string, args ..
 	logging.Info(format, args...)
 }
 
-func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...interface{}) {
+func logBootstrapDebug(bootstrap *logging.BootstrapLogger, format string, args ...any) {
 	if bootstrap != nil {
 		bootstrap.Debug(format, args...)
 		return
@@ -1489,8 +1528,8 @@ func extractRemoteName(cloudRemote string) string {
 	if remote == "" {
 		return ""
 	}
-	if idx := strings.Index(remote, ":"); idx != -1 {
-		return remote[:idx]
+	if before, _, ok := strings.Cut(remote, ":"); ok {
+		return before
 	}
 	return remote
 }

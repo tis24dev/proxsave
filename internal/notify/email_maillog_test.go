@@ -15,7 +15,7 @@ import (
 
 func TestNewMessageID(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		id := newMessageID("no-reply@proxmox.example.com")
 		local, domain, ok := strings.Cut(id, "@")
 		if !ok || domain != "proxmox.example.com" || len(local) != len("proxsave-")+32 || !strings.HasPrefix(local, "proxsave-") {
@@ -221,7 +221,7 @@ EOF
 		if strings.Contains(text, "Detected queue ID") {
 			t.Fatalf("level %v: a mail queue ID was printed:\n%s", level, text)
 		}
-		for _, line := range strings.Split(text, "\n") {
+		for line := range strings.SplitSeq(text, "\n") {
 			if !strings.Contains(line, "queue ID") && !strings.Contains(line, "queue_id=") {
 				continue
 			}

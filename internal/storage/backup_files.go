@@ -55,8 +55,8 @@ func isBackupTempArtifact(path string) bool {
 // trimBundleSuffix removes the .bundle.tar suffix from a path if present.
 // It returns the trimmed path and whether the suffix was removed.
 func trimBundleSuffix(path string) (string, bool) {
-	if strings.HasSuffix(path, bundleSuffix) {
-		return strings.TrimSuffix(path, bundleSuffix), true
+	if before, ok := strings.CutSuffix(path, bundleSuffix); ok {
+		return before, true
 	}
 	return path, false
 }

@@ -231,7 +231,7 @@ var uuidV4Re = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][
 
 func TestNewRunIDIsUUIDv4(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		id := NewRunID()
 		if !uuidV4Re.MatchString(id) {
 			t.Fatalf("NewRunID %q is not a v4 UUID", id)

@@ -2,10 +2,11 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/installer"
@@ -27,9 +28,7 @@ func buildNewInstallPlan(configPath string) (newInstallPlan, error) {
 	}
 
 	buildSig := strings.TrimSpace(newInstallBuildSignature())
-	if buildSig == "" {
-		buildSig = "n/a"
-	}
+	buildSig = cmp.Or(buildSig, "n/a")
 
 	baseDir, _ := detectedBaseDirOrFallback()
 	return newInstallPlan{
@@ -46,7 +45,7 @@ func newInstallPreservedEntries() []string {
 	// safety backup, rollback archives and logs of past restores. daemon_state is the
 	// daemon's lock, pid and status files, which lived in identity/ before 0.41.0.
 	preserved := []string{"env", "identity", "daemon_state", "build", "guards", "restore"}
-	sort.Strings(preserved)
+	slices.Sort(preserved)
 	return preserved
 }
 

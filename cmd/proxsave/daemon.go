@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -527,9 +527,7 @@ func (d *daemon) run(ctx context.Context) int {
 	// nothing was handed off. It returns on loopCtx.Done() and joins the waitgroup; it does NOT
 	// signal.Stop -- that is owned by run()'s defer above so the disposition is reverted only after
 	// the pidfile is gone (see the signal.Stop comment).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-loopCtx.Done():
@@ -538,19 +536,15 @@ func (d *daemon) run(ctx context.Context) int {
 				d.processManualOutcome(loopCtx)
 			}
 		}
-	}()
+	})
 
 	if d.cfg.HealthcheckEnabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			d.heartbeatLoop(loopCtx)
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		})
+		wg.Go(func() {
 			d.updateCheckLoop(loopCtx)
-		}()
+		})
 	}
 
 	abandoned := d.scheduleLoop(loopCtx)
@@ -701,10 +695,7 @@ func (d *daemon) scheduleLoop(ctx context.Context) bool {
 			d.logScheduleNotAppliedAgain()
 		}
 		next := d.nextScheduledRun(d.now())
-		wait := next.Sub(d.now())
-		if wait < 0 {
-			wait = 0
-		}
+		wait := max(next.Sub(d.now()), 0)
 		logging.Info("daemon: next backup at %s (in %s)", next.Format("2006-01-02 15:04"), cron.WaitLabel(wait))
 
 		timer := time.NewTimer(wait)
@@ -1603,7 +1594,7 @@ func hostBootUnix() int64 {
 	if err != nil {
 		return 0
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		rest, ok := strings.CutPrefix(line, "btime ")
 		if !ok {
 			continue
@@ -2288,10 +2279,7 @@ const (
 // source or persisted state is needed. It uses up to 10% of Retry-After, capped at
 // five minutes. A stable spread is sufficient to avoid a synchronized retry herd.
 func daemonProvisionRetryJitter(serverID string, retryAfter time.Duration) time.Duration {
-	window := retryAfter / 10
-	if window > daemonProvisionMaxRetryJitter {
-		window = daemonProvisionMaxRetryJitter
-	}
+	window := min(retryAfter/10, daemonProvisionMaxRetryJitter)
 	if window <= 0 {
 		return 0
 	}
@@ -2340,15 +2328,13 @@ func provisionRelaySecretAttemptReach(
 		return "", 0, reachNone
 	}
 	if _, err := provisionRelaySecretFn(ctx, cfg.ServerAPIHost, serverID, baseDir, logger); err != nil {
-		var limited *notify.RelayProvisionRateLimitError
-		if errors.As(err, &limited) {
+		if limited, ok := errors.AsType[*notify.RelayProvisionRateLimitError](err); ok {
 			logging.Debug(
 				"daemon: relay-secret provisioning rate limited (server backoff honored)")
 			return "", limited.RetryAfter, reachNotReady
 		}
 		logging.Debug("daemon: relay-secret provisioning attempt failed (will retry later): %v", err)
-		var te *serverbot.TransportError
-		if errors.As(err, &te) {
+		if _, ok := errors.AsType[*serverbot.TransportError](err); ok {
 			return "", 0, reachNone
 		}
 		return "", 0, reachNotReady
@@ -2560,7 +2546,7 @@ func (d *daemon) reportNotifyOutcomes(ctx context.Context, r backupReporter, rid
 	for name := range nr.Results {
 		names = append(names, name)
 	}
-	sort.Strings(names) // deterministic ping/record order
+	slices.Sort(names) // deterministic ping/record order
 	keep := make([]string, 0, len(names))
 	for _, name := range names {
 		key := health.CheckKeyNotify(name)
@@ -2715,8 +2701,7 @@ func exitCodeFromErr(err error) int {
 	if err == nil {
 		return 0
 	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		return ee.ExitCode()
 	}
 	return 1

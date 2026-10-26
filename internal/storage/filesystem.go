@@ -383,7 +383,7 @@ func unescapeOctal(s string) string {
 			// Try to parse octal sequence (exactly 3 octal digits)
 			octal := s[i+1 : i+4]
 			valid := true
-			for j := 0; j < 3; j++ {
+			for j := range 3 {
 				if octal[j] < '0' || octal[j] > '7' {
 					valid = false
 					break

@@ -7,7 +7,7 @@ import (
 
 // DebugStartBootstrap logs a standardized debug start line and returns a function
 // that logs the end status (ok/error) with duration.
-func DebugStartBootstrap(logger *BootstrapLogger, operation string, format string, args ...interface{}) func(error) {
+func DebugStartBootstrap(logger *BootstrapLogger, operation string, format string, args ...any) func(error) {
 	if logger == nil {
 		return func(error) {}
 	}
@@ -33,7 +33,7 @@ func DebugStartBootstrap(logger *BootstrapLogger, operation string, format strin
 }
 
 // DebugStepBootstrap logs a standardized debug progress line for an operation.
-func DebugStepBootstrap(logger *BootstrapLogger, operation string, format string, args ...interface{}) {
+func DebugStepBootstrap(logger *BootstrapLogger, operation string, format string, args ...any) {
 	if logger == nil {
 		return
 	}

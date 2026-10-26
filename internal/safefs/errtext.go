@@ -79,7 +79,7 @@ func dropPathParts(text string) string {
 }
 
 func holdsAbsolutePath(part string) bool {
-	for _, field := range strings.Fields(part) {
+	for field := range strings.FieldsSeq(part) {
 		if strings.HasPrefix(field, "/") {
 			return true
 		}

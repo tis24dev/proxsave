@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -161,9 +162,7 @@ func (p *notifyGoldenPBS) install(t *testing.T) string {
 			notifyGoldenPBSRunSnapshotTime.UTC().Format("2006-01-02T15:04:05Z") + "    \n"},
 		"prune": {stdout: p.pruneJSON()},
 	}
-	for key, answer := range p.answers {
-		answers[key] = answer
-	}
+	maps.Copy(answers, p.answers)
 	for key, answer := range answers {
 		write(bin, key+".rc", strconv.Itoa(answer.rc), 0o600)
 		write(bin, key+".stdout", answer.stdout, 0o600)

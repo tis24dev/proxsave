@@ -49,7 +49,7 @@ func TestSecondaryCopyFileMidStreamWedge(t *testing.T) {
 
 	dst := filepath.Join(dir, "dst")
 	done := make(chan error, 1)
-	go func() { done <- s.copyFile(context.Background(), fifo, dst) }()
+	go func() { done <- s.copyFile(t.Context(), fifo, dst) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, safefs.ErrTimeout) {

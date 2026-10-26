@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"path/filepath"
 	"strings"
 )
@@ -16,9 +17,7 @@ const fallbackBaseDir = "/opt/proxsave"
 // back to fallbackBaseDir.
 func SetBaseDir(baseDir string) {
 	base := strings.TrimSpace(baseDir)
-	if base == "" {
-		base = fallbackBaseDir
-	}
+	base = cmp.Or(base, fallbackBaseDir)
 	base = filepath.Clean(base)
 
 	restoreRunDirMu.Lock()

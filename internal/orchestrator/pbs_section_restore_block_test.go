@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"maps"
 	"os"
 	"strings"
 	"testing"
@@ -682,12 +683,12 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 		wantTarget *string
 	}{
 		{
-			name: "non-empty-drops-one", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
+			name: "non-empty-drops-one", staged: twoStaged, current: new(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, openTwo, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
 				syncNone,
 			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written"}, dropOld, []string{applied}, tail(listErr)),
-			wantTarget: pbsStrPtr(strings.TrimSpace(twoStaged) + "\n"),
+			wantTarget: new(strings.TrimSpace(twoStaged) + "\n"),
 		},
 		{
 			name: "list-unparseable-no-current-file", staged: twoStaged, runner: &FakeCommandRunner{Outputs: map[string][]byte{pbsRemoteListCmd: []byte("not json")}},
@@ -698,10 +699,10 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 				syncNone,
 			}, helperOK, []string{"DEBUG    PBS remote restore: fallback written", applied},
 				tail("parse remote list: invalid character 'o' in literal null (expecting 'u')")),
-			wantTarget: pbsStrPtr(strings.TrimSpace(twoStaged) + "\n"),
+			wantTarget: new(strings.TrimSpace(twoStaged) + "\n"),
 		},
 		{
-			name: "empty", staged: "", current: pbsStrPtr(current), runner: listFails(),
+			name: "empty", staged: "", current: new(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, openNone, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
 				syncNone,
@@ -709,7 +710,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			}, dropOld, dropR1, []string{applied}, tail(listErr)),
 		},
 		{
-			name: "comments-only", staged: "# no remotes\n", current: pbsStrPtr(current), runner: listFails(),
+			name: "comments-only", staged: "# no remotes\n", current: new(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, openNone, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
 				syncNone,
@@ -717,7 +718,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 			}, dropOld, dropR1, []string{applied}, tail(listErr)),
 		},
 		{
-			name: "current-file-unreadable-names-nothing", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
+			name: "current-file-unreadable-names-nothing", staged: twoStaged, current: new(current), runner: listFails(),
 			fault: &pbsFaultFS{readFail: target},
 			want: join([]string{start, reading, listDebug}, openTwo, []string{
 				`DEBUG    PBS remote restore: fallback current file read failed error="injected read failure"`,
@@ -728,7 +729,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 		{
 			// "remote :r1" is a header for the section parser and not for the file
 			// write, which would skip the file: the block says it was not written.
-			name: "header-the-write-rejects", staged: "remote :r1\n\thost 10.0.0.1\n", current: pbsStrPtr(current), runner: listFails(),
+			name: "header-the-write-rejects", staged: "remote :r1\n\thost 10.0.0.1\n", current: new(current), runner: listFails(),
 			want: join([]string{start, reading, listDebug}, []string{
 				"INFO     Restoring PBS remotes...",
 				"DEBUG    PBS remote restore: mode=clean staged=/stage/etc/proxmox-backup/remote.cfg",
@@ -742,10 +743,10 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 				`INFO     The remote configuration could not be written to this PBS: "etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)"`,
 				"WARNING  ⚠ PBS remote configuration: not applied",
 			}, tail(listErr+"; file fallback: etc/proxmox-backup/remote.cfg does not look like a valid PBS config file (missing section header)")),
-			wantTarget: pbsStrPtr(current),
+			wantTarget: new(current),
 		},
 		{
-			name: "write-fails-names-nothing", staged: twoStaged, current: pbsStrPtr(current), runner: listFails(),
+			name: "write-fails-names-nothing", staged: twoStaged, current: new(current), runner: listFails(),
 			fault: &pbsFaultFS{renameFail: target},
 			want: join([]string{start, reading, listDebug}, openTwo, []string{
 				"DEBUG    PBS remote restore: fallback current file remotes=2 names=old,r1",
@@ -756,7 +757,7 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 				`INFO     The remote configuration could not be written to this PBS: "` + renameErr + `"`,
 				"WARNING  ⚠ PBS remote configuration: not applied",
 			}, tail(listErr+"; file fallback: "+renameErr)),
-			wantTarget: pbsStrPtr(current),
+			wantTarget: new(current),
 		},
 	}
 	for _, tc := range cases {
@@ -810,8 +811,6 @@ func TestPBSSectionRestoreBlock_CurrentUnreadable(t *testing.T) {
 	}
 }
 
-func pbsStrPtr(s string) *string { return &s }
-
 // With other items in the same step: an item whose API apply returned an error
 // the blocks do not return today gets its own block, and the section blocks are
 // not repeated; two blocks whose outcomes are logged both reach the DEBUG line of
@@ -859,9 +858,7 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 			"proxmox-backup-manager sync-job create s1 --store ds1": errors.New("exit status 255: Error: refused"),
 			"proxmox-backup-manager sync-job update s1 --store ds1": errors.New("exit status 255: Error: refused"),
 		}
-		for k, v := range refused {
-			errs[k] = v
-		}
+		maps.Copy(errs, refused)
 		runner := &FakeCommandRunner{Errors: errs}
 		log, warned, _ := runPBSSectionRestoreStep(t, PBSRestoreBehaviorMerge, []string{"pbs_remotes", "pbs_jobs"}, map[string]string{
 			"etc/proxmox-backup/remote.cfg": r1,

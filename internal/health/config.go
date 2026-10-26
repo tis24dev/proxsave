@@ -1,9 +1,11 @@
 package health
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -132,9 +134,7 @@ type PollLog struct {
 // error. With plog.Logger an answer other than 200 adds an excerpt of its body, secret masked.
 func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string, extra url.Values, plog PollLog) (CentralizedConfig, int, error) {
 	q := url.Values{"server_id": {serverID}}
-	for k, v := range extra {
-		q[k] = v
-	}
+	maps.Copy(q, extra)
 	if includeLogin {
 		q.Set("login", "1")
 	}
@@ -143,9 +143,7 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 	// value, which a proxy could drop and silently turn into "leave alone").
 	if channels != nil {
 		v := strings.Join(channels, ",")
-		if v == "" {
-			v = "none"
-		}
+		v = cmp.Or(v, "none")
 		q.Set("channels", v)
 	}
 	// Transport + auth (host normalize, X-Server-Auth, X-Proxsave-Version, timeout,

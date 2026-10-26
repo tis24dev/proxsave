@@ -203,7 +203,6 @@ func TestBaseNameFromRemoteRef(t *testing.T) {
 		{"gdrive:dir/sub/", "sub"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.in, func(t *testing.T) {
 			got := baseNameFromRemoteRef(tt.in)
 			if got != tt.want {
@@ -485,7 +484,6 @@ func TestSanitizeBundleEntryName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := sanitizeBundleEntryName(tt.input)
 			if tt.expectErr {
@@ -4652,4 +4650,27 @@ func parseIdentityInput(input string) ([]age.Identity, error) {
 func ensureWritablePath(ctx context.Context, reader *bufio.Reader, path, description string) (string, error) {
 	ui := newCLIWorkflowUI(reader, nil)
 	return ensureWritablePathWithUI(ctx, ui, path, description)
+}
+
+// A blank base name still yields a named output, "archive.decrypted-*".
+func TestCreateUniquePreparedArchivePathDefaultsABlankBaseName(t *testing.T) {
+	origFS := restoreFS
+	restoreFS = osFS{}
+	t.Cleanup(func() { restoreFS = origFS })
+
+	path, err := createUniquePreparedArchivePath(t.TempDir(), " ")
+	if err != nil {
+		t.Fatalf("createUniquePreparedArchivePath error: %v", err)
+	}
+	if base := filepath.Base(path); !strings.HasPrefix(base, "archive.decrypted-") {
+		t.Fatalf("output name = %q, want an archive.decrypted-* name", base)
+	}
+}
+
+// An .age archive with no encryption mode set names the mode as plain.
+func TestResolvePreparedArchivePathNamesAMissingModePlain(t *testing.T) {
+	_, err := resolvePreparedArchivePath(t.TempDir(), "/staging/backup.tar.age", "")
+	if err == nil || !strings.HasSuffix(err.Error(), "but encryption mode is plain") {
+		t.Fatalf("resolvePreparedArchivePath() error = %v; want it to name the plain mode", err)
+	}
 }

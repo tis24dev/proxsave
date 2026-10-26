@@ -98,7 +98,7 @@ type backupCharRecorder struct {
 	events []string
 }
 
-func (r *backupCharRecorder) add(format string, args ...interface{}) {
+func (r *backupCharRecorder) add(format string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, fmt.Sprintf(format, args...))
@@ -240,7 +240,7 @@ func (c *backupCharChannel) Notify(ctx context.Context, stats *BackupStats) erro
 	c.rec.add("notify %s", c.Name())
 	data, err := json.MarshalIndent(stats, "", "  ")
 	if err != nil {
-		c.snapshot = []byte(fmt.Sprintf("marshal error: %v", err))
+		c.snapshot = fmt.Appendf(nil, "marshal error: %v", err)
 		return nil
 	}
 	c.snapshot = data
@@ -584,8 +584,7 @@ func renderBackupCharacterization(t *testing.T, dirs backupCharDirs, res backupC
 			exitCode = res.stats.ExitCode
 		}
 	} else {
-		var be *BackupError
-		if errors.As(res.err, &be) {
+		if be, ok := errors.AsType[*BackupError](res.err); ok {
 			fmt.Fprintf(&b, "error: BackupError phase=%s code=%d\n", be.Phase, be.Code.Int())
 			exitCode = be.Code.Int()
 		} else {

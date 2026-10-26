@@ -163,7 +163,6 @@ func TestDoMaxBytesCoalesce(t *testing.T) {
 
 func TestDoNon2xxIsNotError(t *testing.T) {
 	for _, code := range []int{400, 401, 403, 404, 409, 413, 422, 426, 500, 503} {
-		code := code
 		c := clientWithRT(func(r *http.Request) (*http.Response, error) { return stubResp(code, "b"), nil })
 		resp, err := c.Do(context.Background(), Request{Path: "/x"})
 		if err != nil {

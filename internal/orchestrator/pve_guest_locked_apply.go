@@ -209,7 +209,7 @@ const pveGuestLockMarker = "proxsave-lock:"
 // PVE's own set (backup, migrate, clone, snapshot, rollback) fits and anything else
 // is dropped rather than put in a log line.
 func parseOverriddenGuestLock(out []byte) string {
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), pveGuestLockMarker)
 		if !ok {
 			continue

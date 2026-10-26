@@ -85,14 +85,16 @@ func setupRecoveryRestoreFixture(t *testing.T) (*FakeFS, *FakeCommandRunner, *fa
 	}
 
 	prepareRestoreBundleFunc = func(ctx context.Context, cfg *config.Config, logger *logging.Logger, version string, ui RestoreWorkflowUI) (*backupCandidate, *preparedBundle, error) {
-		return &backupCandidate{
-				DisplayBase: "test",
-				Manifest:    &backup.Manifest{CreatedAt: fakeNow.Now(), ClusterMode: "cluster", ProxmoxType: "pve", ScriptVersion: "vtest"},
-			}, &preparedBundle{
-				ArchivePath: "/bundle.tar",
-				Manifest:    backup.Manifest{ArchivePath: "/bundle.tar"},
-				cleanup:     func() {},
-			}, nil
+		candidate := &backupCandidate{
+			DisplayBase: "test",
+			Manifest:    &backup.Manifest{CreatedAt: fakeNow.Now(), ClusterMode: "cluster", ProxmoxType: "pve", ScriptVersion: "vtest"},
+		}
+		bundle := &preparedBundle{
+			ArchivePath: "/bundle.tar",
+			Manifest:    backup.Manifest{ArchivePath: "/bundle.tar"},
+			cleanup:     func() {},
+		}
+		return candidate, bundle, nil
 	}
 
 	ui := &fakeRestoreWorkflowUI{

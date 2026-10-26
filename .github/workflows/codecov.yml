@@ -5,6 +5,11 @@ on:
     branches: [ main, dev ]
   pull_request:
 
+# The upload authenticates with CODECOV_TOKEN (use_oidc is not set), so the job
+# needs no id-token: write; reading the repository is all it does with GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -36,7 +41,10 @@ jobs:
         env:
           GOTOOLCHAIN: ${{ env.COVER_GOTOOLCHAIN }}
         run: |
-          go test $(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$') -coverprofile=coverage.out
+          # One go test argument per package path: read the list into an array
+          # instead of word-splitting an unquoted command substitution.
+          mapfile -t pkgs < <(go list ./... | grep -v -E '/cmd/|/pbs$|/bech32$|^github.com/tis24dev/proxsave$')
+          go test "${pkgs[@]}" -coverprofile=coverage.out
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

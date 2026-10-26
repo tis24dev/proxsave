@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -124,18 +125,14 @@ func (u *cliWorkflowUI) SelectBackupCandidate(ctx context.Context, candidates []
 
 func (u *cliWorkflowUI) PromptDestinationDir(ctx context.Context, defaultDir string) (string, error) {
 	defaultDir = strings.TrimSpace(defaultDir)
-	if defaultDir == "" {
-		defaultDir = "./decrypt"
-	}
+	defaultDir = cmp.Or(defaultDir, "./decrypt")
 	fmt.Fprintf(u.w(), "Enter destination directory (default: %s): ", components.SanitizeLine(defaultDir))
 	line, err := input.ReadLineWithIdle(ctx, u.reader, cliIdleTimeout)
 	if err != nil {
 		return "", err
 	}
 	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		trimmed = defaultDir
-	}
+	trimmed = cmp.Or(trimmed, defaultDir)
 	return filepath.Clean(trimmed), nil
 }
 
@@ -146,9 +143,7 @@ func (u *cliWorkflowUI) ResolveExistingPath(ctx context.Context, path, descripti
 
 	current := filepath.Clean(path)
 	desc := strings.TrimSpace(description)
-	if desc == "" {
-		desc = "file"
-	}
+	desc = cmp.Or(desc, "file")
 
 	fmt.Fprintf(u.w(), "%s %s already exists.\n", titleCaser.String(desc), components.SanitizeLine(current))
 	fmt.Fprintln(u.w(), "  [1] Overwrite")

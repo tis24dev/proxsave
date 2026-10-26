@@ -133,7 +133,7 @@ func runSectionCallerCase(t *testing.T, tg sectionCallerTarget, behavior PBSRest
 		return regexp.MustCompile(`proxsave\.tmp\.[0-9]+`).ReplaceAllString(line, "proxsave.tmp.<n>")
 	}
 	var out strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
 		out.WriteString(normalize(sectionCallerStamp.ReplaceAllString(line, "")) + "\n")
 	}
 	out.WriteString(normalize(fmt.Sprintf("returned: %v", err)) + "\n")

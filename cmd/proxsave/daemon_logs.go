@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -101,7 +101,8 @@ func rotateDaemonLogs(ctx context.Context, logger *logging.Logger, current strin
 		}
 	}
 	// Same host and a fixed-width timestamp: the name order is the time order.
-	sort.Sort(sort.Reverse(sort.StringSlice(others)))
+	slices.Sort(others)
+	slices.Reverse(others)
 	var expired []string
 	if len(others) > daemonLogsKept-1 {
 		expired = others[daemonLogsKept-1:]

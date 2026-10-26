@@ -183,3 +183,33 @@ func TestRunNetworkHealthChecksIncludesDNSAndLocalPort(t *testing.T) {
 		t.Fatalf("expected local port check in report:\n%s", details)
 	}
 }
+
+// A local port check without a name or address is reported as "Local port" and
+// dialed on 127.0.0.1.
+func TestRunNetworkHealthChecksDefaultsABlankLocalPortCheck(t *testing.T) {
+	origCmd, origFS, origDial := restoreCmd, restoreFS, dialContextFunc
+	t.Cleanup(func() { restoreCmd, restoreFS, dialContextFunc = origCmd, origFS, origDial })
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+	restoreCmd = &fakeCommandRunner{outputs: map[string][]byte{"ip route show default": []byte("")}}
+	dialed := ""
+	dialContextFunc = func(_ context.Context, _, address string) (net.Conn, error) {
+		dialed = address
+		return nil, errors.New("connection refused")
+	}
+
+	report := runNetworkHealthChecks(context.Background(), networkHealthOptions{
+		CommandTimeout:  200 * time.Millisecond,
+		LocalPortChecks: []tcpPortCheck{{Port: 8007}},
+	})
+
+	if dialed != "127.0.0.1:8007" {
+		t.Fatalf("dialed %q, want 127.0.0.1:8007", dialed)
+	}
+	if want := "Local port: 127.0.0.1:8007"; !strings.Contains(report.Details(), want) {
+		t.Fatalf("report missing %q:\n%s", want, report.Details())
+	}
+}

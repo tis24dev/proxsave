@@ -79,31 +79,31 @@ func TestPollDeliveryStatusPendingTimesOutAsQueued(t *testing.T) {
 }
 
 func TestPollDeliveryStatus404IsUnknownAndDoesNotRetry(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return dsJSONResp(404, `{"error":"NOTIFY_NOT_FOUND"}`), nil
 	})}
 	ds := pollTelegramDeliveryStatus(context.Background(), client, "https://c.test", "srv", "sek", "", dsFastPollCfg(), dsTestLogger())
 	if ds.State != "unknown" {
 		t.Fatalf("got %+v, want unknown", ds)
 	}
-	if got := atomic.LoadInt32(&calls); got != 1 {
+	if got := calls.Load(); got != 1 {
 		t.Fatalf("404 must not be retried, got %d calls", got)
 	}
 }
 
 func TestPollDeliveryStatus401IsUnknownAndDoesNotReprovision(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return dsJSONResp(401, `{"error":"AUTH_REQUIRED"}`), nil
 	})}
 	ds := pollTelegramDeliveryStatus(context.Background(), client, "https://c.test", "srv", "stale", "", dsFastPollCfg(), dsTestLogger())
 	if ds.State != "unknown" {
 		t.Fatalf("got %+v, want unknown", ds)
 	}
-	if got := atomic.LoadInt32(&calls); got != 1 {
+	if got := calls.Load(); got != 1 {
 		t.Fatalf("401 must stop immediately, got %d calls", got)
 	}
 }
@@ -268,13 +268,13 @@ func TestSendRelay202PollFailedKeepsSuccessTrue(t *testing.T) {
 }
 
 func TestSendRelay202NoPollWhenConfirmDisabled(t *testing.T) {
-	var statusCalls int32
+	var statusCalls atomic.Int32
 	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/api/notify":
 			return dsJSONResp(202, `{"status":"accepted"}`), nil
 		case "/api/notify/status":
-			atomic.AddInt32(&statusCalls, 1)
+			statusCalls.Add(1)
 			return dsJSONResp(200, `{"state":"delivered"}`), nil
 		default:
 			t.Fatalf("unexpected path %s", req.URL.Path)
@@ -288,7 +288,7 @@ func TestSendRelay202NoPollWhenConfirmDisabled(t *testing.T) {
 	if !result.Success {
 		t.Fatalf("want Success=true")
 	}
-	if got := atomic.LoadInt32(&statusCalls); got != 0 {
+	if got := statusCalls.Load(); got != 0 {
 		t.Fatalf("ConfirmDelivery=false must NOT poll, got %d status calls", got)
 	}
 	if result.Metadata["telegram_state"] != "unconfirmed" {
@@ -297,13 +297,13 @@ func TestSendRelay202NoPollWhenConfirmDisabled(t *testing.T) {
 }
 
 func TestSendRelay200SyncLegacySkipsPoll(t *testing.T) {
-	var statusCalls int32
+	var statusCalls atomic.Int32
 	client := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
 		case "/api/notify":
 			return dsJSONResp(200, `{"status":"ok"}`), nil // sync legacy (killswitch off)
 		case "/api/notify/status":
-			atomic.AddInt32(&statusCalls, 1)
+			statusCalls.Add(1)
 			return dsJSONResp(200, `{"state":"delivered"}`), nil
 		default:
 			t.Fatalf("unexpected path %s", req.URL.Path)
@@ -314,7 +314,7 @@ func TestSendRelay200SyncLegacySkipsPoll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	if got := atomic.LoadInt32(&statusCalls); got != 0 {
+	if got := statusCalls.Load(); got != 0 {
 		t.Fatalf("HTTP 200 (sync legacy) must NOT poll, got %d status calls", got)
 	}
 	if result.Metadata["telegram_state"] != "delivered" {

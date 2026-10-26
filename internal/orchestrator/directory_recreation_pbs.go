@@ -230,7 +230,7 @@ func ensurePBSChunkStoreDirs(basePath string, logger *logging.Logger) (bool, err
 		}
 	}
 	created := 0
-	for i := 0; i < pbsChunkStoreDirCount; i++ {
+	for i := range pbsChunkStoreDirCount {
 		dir := filepath.Join(chunkDir, pbsChunkStoreDirName(i))
 		if err := os.Mkdir(dir, 0o750); err != nil {
 			if os.IsExist(err) {

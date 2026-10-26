@@ -215,7 +215,7 @@ func readTarEntry(ctx context.Context, archivePath, name string, maxBytes int64)
 }
 
 func hasNameserverEntries(content string) bool {
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
@@ -248,7 +248,7 @@ func fallbackDNSFromGateway(ctx context.Context, logger *logging.Logger) (string
 	if line == "" {
 		return dns2, dns2
 	}
-	first := strings.SplitN(line, "\n", 2)[0]
+	first, _, _ := strings.Cut(line, "\n")
 	fields := strings.Fields(first)
 	for i := 0; i < len(fields)-1; i++ {
 		if fields[i] == "via" {

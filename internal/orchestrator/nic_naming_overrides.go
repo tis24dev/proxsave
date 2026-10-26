@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -199,8 +200,8 @@ func parseUdevNetNamingOverrideLine(line string) (name, mac string) {
 		return "", ""
 	}
 
-	parts := strings.Split(trimmed, ",")
-	for _, part := range parts {
+	parts := strings.SplitSeq(trimmed, ",")
+	for part := range parts {
 		p := strings.TrimSpace(part)
 		if p == "" {
 			continue
@@ -286,7 +287,7 @@ func parseSystemdLinkNamingOverrides(source, content string) []nicNamingOverride
 		switch section {
 		case "match":
 			if key == "macaddress" {
-				for _, raw := range strings.Fields(value) {
+				for raw := range strings.FieldsSeq(value) {
 					normalized := normalizeMAC(raw)
 					if normalized != "" {
 						macs = append(macs, normalized)
@@ -305,7 +306,7 @@ func parseSystemdLinkNamingOverrides(source, content string) []nicNamingOverride
 		return nil
 	}
 
-	sort.Strings(macs)
+	slices.Sort(macs)
 	unique := make([]string, 0, len(macs))
 	seen := make(map[string]struct{}, len(macs))
 	for _, m := range macs {

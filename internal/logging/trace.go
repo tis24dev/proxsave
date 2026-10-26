@@ -7,7 +7,7 @@ import (
 
 // DebugStart logs a standardized debug start line and returns a function that
 // logs the end status (ok/error) with duration.
-func DebugStart(logger *Logger, operation string, format string, args ...interface{}) func(error) {
+func DebugStart(logger *Logger, operation string, format string, args ...any) func(error) {
 	if logger == nil {
 		return func(error) {}
 	}
@@ -33,7 +33,7 @@ func DebugStart(logger *Logger, operation string, format string, args ...interfa
 }
 
 // DebugStep logs a standardized debug progress line for an operation.
-func DebugStep(logger *Logger, operation string, format string, args ...interface{}) {
+func DebugStep(logger *Logger, operation string, format string, args ...any) {
 	if logger == nil {
 		return
 	}

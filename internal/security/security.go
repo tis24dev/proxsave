@@ -3,6 +3,7 @@ package security
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -327,13 +328,13 @@ func (c *Checker) binaryDependency(name string, binaries []string, required bool
 	}
 }
 
-func (c *Checker) addWarning(format string, args ...interface{}) {
+func (c *Checker) addWarning(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	c.logger.Warning("%s", msg)
 	c.result.add(severityWarning, msg)
 }
 
-func (c *Checker) addError(format string, args ...interface{}) {
+func (c *Checker) addError(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	c.logger.Error("%s", msg)
 	c.result.add(severityError, msg)
@@ -1133,9 +1134,7 @@ func extractPort(address string) (int, string) {
 	}
 
 	ip := addr[:lastColon]
-	if ip == "" {
-		ip = "0.0.0.0"
-	}
+	ip = cmp.Or(ip, "0.0.0.0")
 
 	return port, ip
 }
@@ -1192,8 +1191,8 @@ func matchesSafeProcessPattern(pattern, name string) bool {
 	// Exact or prefix match (case-insensitive)
 	lower := strings.ToLower(name)
 	pattern = strings.ToLower(pattern)
-	if strings.HasSuffix(pattern, "*") {
-		prefix := strings.TrimSuffix(pattern, "*")
+	if before, ok := strings.CutSuffix(pattern, "*"); ok {
+		prefix := before
 		return strings.HasPrefix(lower, prefix)
 	}
 	return lower == pattern
@@ -1213,7 +1212,7 @@ func commandLineMatches(signature, commandLine string) bool {
 		return false
 	}
 	usesPattern := strings.HasPrefix(sig, "regex:") || strings.Contains(sig, "*")
-	for _, tok := range strings.Fields(commandLine) {
+	for tok := range strings.FieldsSeq(commandLine) {
 		candidates := [2]string{tok, ""}
 		if base := filepath.Base(tok); base != tok {
 			candidates[1] = base
@@ -1371,9 +1370,7 @@ func (c *Checker) ensureOwnershipAndPermFromFD(f *os.File, info os.FileInfo, exp
 	}
 
 	path := f.Name()
-	if path == "" {
-		path = "<opened file>"
-	}
+	path = cmp.Or(path, "<opened file>")
 
 	var err error
 	if info == nil {
@@ -1436,9 +1433,7 @@ func (c *Checker) ensureExecutableOwnerWriteOnly(f *os.File, info os.FileInfo, d
 	}
 
 	path := f.Name()
-	if path == "" {
-		path = "<opened file>"
-	}
+	path = cmp.Or(path, "<opened file>")
 	fixed := perm &^ 0o022
 	c.bannerWarning(fmt.Sprintf("group/other-writable executable %s (current %o)", path, perm))
 	if c.cfg.AutoFixPermissions {

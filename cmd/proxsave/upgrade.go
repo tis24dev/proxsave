@@ -553,7 +553,7 @@ func parsableVersionCore(v string) bool {
 	if v == "" {
 		return false
 	}
-	for _, part := range strings.Split(v, ".") {
+	for part := range strings.SplitSeq(v, ".") {
 		if part == "" {
 			return false
 		}
@@ -752,12 +752,9 @@ func compareVersions(current, latest string) int {
 	a, aPre := normalize(current)
 	b, bPre := normalize(latest)
 
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
-	}
+	maxLen := max(len(b), len(a))
 
-	for i := 0; i < maxLen; i++ {
+	for i := range maxLen {
 		var av, bv int
 		if i < len(a) {
 			av = a[i]
@@ -831,8 +828,8 @@ func verifyChecksum(root *os.Root, checksumName, filename string, bootstrap *log
 	}
 
 	expected := ""
-	lines := bytes.Split(checksums, []byte("\n"))
-	for _, line := range lines {
+	lines := bytes.SplitSeq(checksums, []byte("\n"))
+	for line := range lines {
 		if len(line) == 0 {
 			continue
 		}

@@ -1,7 +1,9 @@
 package components
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -310,8 +312,8 @@ func (g *FormGrid) Update(msg tea.Msg) (shell.Screen, tea.Cmd) {
 		if onButtons {
 			// Jump back to the last active field (stay on the buttons row if none).
 			g.cursor = len(g.fields)
-			for i := len(g.fields) - 1; i >= 0; i-- {
-				if g.fields[i].active() {
+			for i, v := range slices.Backward(g.fields) {
+				if v.active() {
 					g.cursor = i
 					break
 				}
@@ -440,9 +442,7 @@ func (g *FormGrid) renderControl(f *FormField, focused bool, width int) string {
 		if f.Secret && val != "" {
 			val = strings.Repeat("*", len([]rune(val)))
 		}
-		if val == "" {
-			val = "-"
-		}
+		val = cmp.Or(val, "-")
 		val = ansi.Truncate(val, max(width, 10), "…")
 		if dim {
 			return theme.Subtle.Render(val)

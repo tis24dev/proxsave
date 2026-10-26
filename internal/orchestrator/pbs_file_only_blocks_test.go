@@ -67,13 +67,13 @@ func TestPBSConfigFileBlocks(t *testing.T) {
 		}{
 			{name: "applied", staged: staged, prepare: []func(){current},
 				want:   []string{"INFO     " + k.opening, evidence, "DEBUG    " + k.prefix + "written", "INFO     ✓ " + k.outcome + ": applied"},
-				target: pbsStrPtr(strings.TrimSpace(staged) + "\n")},
+				target: new(strings.TrimSpace(staged) + "\n")},
 			{name: "staged-unreadable", staged: pbsStagedUnreadable, prepare: []func(){current},
 				want: []string{"INFO     " + k.opening, evidence,
 					`DEBUG    ` + k.prefix + `staged read failed error="read staged ` + k.rel + `: read <fakefs>/stage/` + k.rel + `: is a directory"`,
 					`INFO     ` + k.config + ` in the backup could not be read: "read staged ` + k.rel + `: read <fakefs>/stage/` + k.rel + `: is a directory"`,
 					"WARNING  ⚠ " + k.outcome + ": not applied"},
-				warned: true, target: pbsStrPtr("x: current\n")},
+				warned: true, target: new("x: current\n")},
 			{name: "write-refused", staged: staged, prepare: []func(){func() {
 				if err := restoreFS.MkdirAll(target+"/x", 0o755); err != nil {
 					t.Fatal(err)
@@ -93,7 +93,7 @@ func TestPBSConfigFileBlocks(t *testing.T) {
 					`DEBUG    ` + k.prefix + `write failed error="` + k.rel + ` does not look like a valid PBS config file (missing section header)"`,
 					`INFO     ` + k.config + ` could not be written to this PBS: "` + k.rel + ` does not look like a valid PBS config file (missing section header)"`,
 					"WARNING  ⚠ " + k.outcome + ": not applied"},
-				warned: true, target: pbsStrPtr("x: current\n")},
+				warned: true, target: new("x: current\n")},
 		}
 		for _, tc := range cases {
 			t.Run(k.name+"/"+tc.name, func(t *testing.T) {

@@ -44,7 +44,7 @@ func TestCharmWorkflowUISelectBackupSource(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		opt, err := ui.SelectBackupSource(context.Background(), options)
+		opt, err := ui.SelectBackupSource(t.Context(), options)
 		resCh <- result{opt, err}
 	}()
 
@@ -60,7 +60,7 @@ func TestCharmWorkflowUISelectBackupSource(t *testing.T) {
 
 	// Esc aborts with the decrypt sentinel.
 	go func() {
-		_, err := ui.SelectBackupSource(context.Background(), options)
+		_, err := ui.SelectBackupSource(t.Context(), options)
 		resCh <- result{err: err}
 	}()
 	d.waitScreen("Select backup source")
@@ -109,7 +109,7 @@ func TestCharmWorkflowUIPromptDestinationDir(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		dir, err := ui.PromptDestinationDir(context.Background(), "./staging/../decrypt")
+		dir, err := ui.PromptDestinationDir(t.Context(), "./staging/../decrypt")
 		resCh <- result{dir, err}
 	}()
 	d.waitScreen("Destination directory")
@@ -123,7 +123,7 @@ func TestCharmWorkflowUIPromptDestinationDir(t *testing.T) {
 	}
 
 	go func() {
-		_, err := ui.PromptDestinationDir(context.Background(), "")
+		_, err := ui.PromptDestinationDir(t.Context(), "")
 		resCh <- result{err: err}
 	}()
 	d.waitScreen("Destination directory")
@@ -134,7 +134,7 @@ func TestCharmWorkflowUIPromptDestinationDir(t *testing.T) {
 
 	// Empty default falls back to ./decrypt (prefilled, cleaned on submit).
 	go func() {
-		dir, err := ui.PromptDestinationDir(context.Background(), "")
+		dir, err := ui.PromptDestinationDir(t.Context(), "")
 		resCh <- result{dir, err}
 	}()
 	d.waitScreen("Destination directory")
@@ -155,7 +155,7 @@ func TestCharmWorkflowUIResolveExistingPath(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func(failure string) {
 		go func() {
-			decision, path, err := ui.ResolveExistingPath(context.Background(), "/tmp/out.tar", "decrypted archive", failure)
+			decision, path, err := ui.ResolveExistingPath(t.Context(), "/tmp/out.tar", "decrypted archive", failure)
 			resCh <- result{decision, path, err}
 		}()
 	}
@@ -212,7 +212,7 @@ func TestCharmWorkflowUIPromptDecryptSecret(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func(previousError string) {
 		go func() {
-			secret, err := ui.PromptDecryptSecret(context.Background(), "backup.tar.xz.age", previousError)
+			secret, err := ui.PromptDecryptSecret(t.Context(), "backup.tar.xz.age", previousError)
 			resCh <- result{secret, err}
 		}()
 	}
@@ -250,7 +250,7 @@ func TestCharmWorkflowUIRunTaskAndNotices(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- ui.RunTask(context.Background(), "Scanning backups", "Starting...", func(ctx context.Context, report ProgressReporter) error {
+		errCh <- ui.RunTask(t.Context(), "Scanning backups", "Starting...", func(ctx context.Context, report ProgressReporter) error {
 			report("Listing local path: /srv/backups")
 			return nil
 		})
@@ -260,11 +260,43 @@ func TestCharmWorkflowUIRunTaskAndNotices(t *testing.T) {
 	}
 
 	go func() {
-		errCh <- ui.ShowError(context.Background(), "No backups found", "No backups found in /srv/backups.")
+		errCh <- ui.ShowError(t.Context(), "No backups found", "No backups found in /srv/backups.")
 	}()
 	d.waitScreen("No backups found")
 	d.keys("enter")
 	if err := <-errCh; err != nil {
 		t.Fatalf("ShowError error: %v", err)
+	}
+}
+
+// An existing path without a description is called a file.
+func TestCharmWorkflowUIResolveExistingPathDefaultsABlankDescription(t *testing.T) {
+	d, ui := newCharmUITestHarness(t)
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := ui.ResolveExistingPath(t.Context(), "/tmp/out.tar", " ", "")
+		errCh <- err
+	}()
+	d.waitScreen("Existing file")
+	d.waitOutput("The file /tmp/out.tar already exists.")
+	d.keys("esc")
+	if err := <-errCh; !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("expected ErrDecryptAborted on esc, got %v", err)
+	}
+}
+
+// A secret prompt without a display name refers to the selected backup.
+func TestCharmWorkflowUIPromptDecryptSecretDefaultsABlankName(t *testing.T) {
+	d, ui := newCharmUITestHarness(t)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ui.PromptDecryptSecret(t.Context(), " ", "")
+		errCh <- err
+	}()
+	d.waitScreen("Decrypt key")
+	d.waitOutput("passphrase used for selected backup.")
+	d.keys("esc")
+	if err := <-errCh; !errors.Is(err, ErrDecryptAborted) {
+		t.Fatalf("expected ErrDecryptAborted on esc, got %v", err)
 	}
 }

@@ -1,7 +1,6 @@
 package security
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +46,7 @@ func TestThePreflightIsBoundedWhenASystemToolLeavesAChildHoldingStdout(t *testin
 	done := make(chan struct{})
 	start := time.Now()
 	go func() {
-		c.checkOpenPorts(context.Background())
+		c.checkOpenPorts(t.Context())
 		close(done)
 	}()
 

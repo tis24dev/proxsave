@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -305,9 +306,7 @@ func revertDedupSymlink(r dedupReplacement) error {
 		return err
 	}
 	mode := r.mode.Perm()
-	if mode == 0 {
-		mode = 0o600
-	}
+	mode = cmp.Or(mode, 0o600)
 	tmp, err := os.CreateTemp(filepath.Dir(r.duplicate), ".proxsave-dedup-revert-*")
 	if err != nil {
 		return err

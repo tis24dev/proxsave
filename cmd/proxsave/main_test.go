@@ -9,18 +9,34 @@ import (
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
 
+// testProcRootEnv carries the fake process table to re-executions of this test binary.
+const testProcRootEnv = "PROXSAVE_TEST_PROC_ROOT"
+
 // TestMain points the open-log check at an empty process table: the tests run without
 // root, and the real one then cannot be read whole, which the check answers by
 // deleting no log at all.
+//
+// A re-execution of this test binary (a helper subprocess) inherits the table through
+// testProcRootEnv instead of making its own: it exits through os.Exit inside a test, so
+// a table of its own would never be removed.
 func TestMain(m *testing.M) {
-	root, err := os.MkdirTemp("", "proxsave-proc-")
-	if err != nil {
-		panic(err)
+	root, owned := os.Getenv(testProcRootEnv), false
+	if root == "" {
+		var err error
+		if root, err = os.MkdirTemp("", "proxsave-proc-"); err != nil {
+			panic(err)
+		}
+		owned = true
+		if err := os.Setenv(testProcRootEnv, root); err != nil {
+			panic(err)
+		}
 	}
 	restore := safefs.SetProcRootForTest(root)
 	code := m.Run()
 	restore()
-	_ = os.RemoveAll(root)
+	if owned {
+		_ = os.RemoveAll(root)
+	}
 	os.Exit(code)
 }
 

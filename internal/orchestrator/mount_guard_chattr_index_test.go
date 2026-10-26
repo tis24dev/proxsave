@@ -39,7 +39,7 @@ func readGuardIndexLines(t *testing.T) []string {
 		t.Fatalf("read guard index: %v", err)
 	}
 	var out []string
-	for _, l := range strings.Split(string(data), "\n") {
+	for l := range strings.SplitSeq(string(data), "\n") {
 		if strings.TrimSpace(l) != "" {
 			out = append(out, l)
 		}

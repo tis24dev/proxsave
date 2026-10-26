@@ -123,11 +123,11 @@ func TestConfigPollsOfOneTickAreSerialized(t *testing.T) {
 
 	const runs = 100
 	confirmed, overlapped := 0, 0
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		relay := newProvisioningRelay(t, "daily", 25*time.Millisecond)
 		d := negotiationDaemon(t, relay.server.URL, "weekly", "mon", "1", "02:00")
 		d.cfg.HealthcheckAliveURL, d.cfg.HealthcheckBackupURL = "", ""
-		ctx := context.Background()
+		ctx := t.Context()
 
 		if !d.logScheduleStart(ctx) {
 			t.Fatalf("run %d: the start sent no poll", i)

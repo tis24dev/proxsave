@@ -11,5 +11,5 @@ func checksumHexForBytes(data []byte) string {
 }
 
 func checksumLineForBytes(filename string, data []byte) []byte {
-	return []byte(fmt.Sprintf("%s  %s", checksumHexForBytes(data), filename))
+	return fmt.Appendf(nil, "%s  %s", checksumHexForBytes(data), filename)
 }

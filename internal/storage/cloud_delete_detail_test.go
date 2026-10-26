@@ -38,7 +38,7 @@ func TestKilledRcloneDeleteNamesTheKill(t *testing.T) {
 	_ = c.Delete(context.Background(), "gdrive:proxsave/backup/pve01-backup-20260825-020000.tar.zst")
 
 	var fact, detail string
-	for _, ln := range strings.Split(buf.String(), "\n") {
+	for ln := range strings.SplitSeq(buf.String(), "\n") {
 		if fact == "" && strings.Contains(ln, "INFO       Not deleted: pve01-backup-20260825-020000.tar.zst: ") {
 			fact = ln
 		}
@@ -90,7 +90,7 @@ func TestExitStatusDeleteKeepsTheSingleCause(t *testing.T) {
 
 	_ = c.Delete(context.Background(), "gdrive:proxsave/backup/pve01-backup-20260825-020000.tar.zst")
 
-	for _, ln := range strings.Split(buf.String(), "\n") {
+	for ln := range strings.SplitSeq(buf.String(), "\n") {
 		if strings.Contains(ln, "INFO       Not deleted: ") {
 			if strings.Contains(ln, "exit status") {
 				t.Fatalf("exit status N carries no information and came back:\n%s", ln)

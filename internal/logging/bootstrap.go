@@ -167,7 +167,7 @@ func (b *BootstrapLogger) Println(message string) {
 }
 
 // Debug records a debug message without printing it to the console.
-func (b *BootstrapLogger) Debug(format string, args ...interface{}) {
+func (b *BootstrapLogger) Debug(format string, args ...any) {
 	if b == nil {
 		return
 	}
@@ -177,7 +177,7 @@ func (b *BootstrapLogger) Debug(format string, args ...interface{}) {
 }
 
 // Printf records a formatted line as raw.
-func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
+func (b *BootstrapLogger) Printf(format string, args ...any) {
 	if b == nil {
 		return
 	}
@@ -190,7 +190,7 @@ func (b *BootstrapLogger) Printf(format string, args ...interface{}) {
 }
 
 // Info logs an early informational message.
-func (b *BootstrapLogger) Info(format string, args ...interface{}) {
+func (b *BootstrapLogger) Info(format string, args ...any) {
 	if b == nil {
 		return
 	}
@@ -207,7 +207,7 @@ func (b *BootstrapLogger) Info(format string, args ...interface{}) {
 }
 
 // Warning records an early warning message (printed to stderr).
-func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
+func (b *BootstrapLogger) Warning(format string, args ...any) {
 	if b == nil {
 		return
 	}
@@ -223,7 +223,7 @@ func (b *BootstrapLogger) Warning(format string, args ...interface{}) {
 }
 
 // Error records an early error message (stderr).
-func (b *BootstrapLogger) Error(format string, args ...interface{}) {
+func (b *BootstrapLogger) Error(format string, args ...any) {
 	if b == nil {
 		return
 	}

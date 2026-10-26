@@ -8,8 +8,8 @@ import (
 )
 
 type configStatusLogger interface {
-	Warning(format string, args ...interface{})
-	Info(format string, args ...interface{})
+	Warning(format string, args ...any)
+	Info(format string, args ...any)
 }
 
 func resolveInstallConfigPath(configPath string) (string, error) {

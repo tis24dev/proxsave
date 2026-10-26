@@ -1749,3 +1749,44 @@ func TestDispatchNotificationsAndLogsSkipsWithNoLog(t *testing.T) {
 		t.Fatalf("expected skip logs for disabled storage, got: %s", buf.String())
 	}
 }
+
+// An Email channel that failed to initialize with no delivery method configured names
+// the default method in its warning.
+func TestDispatchNotificationsNamesTheDefaultEmailMethod(t *testing.T) {
+	logger := logging.New(types.LogLevelInfo, false)
+	var buf bytes.Buffer
+	logger.SetOutput(&buf)
+	o := &Orchestrator{logger: logger, cfg: &config.Config{EmailEnabled: true}}
+
+	o.dispatchNotifications(context.Background(), &BackupStats{})
+
+	if want := `EMAIL_DELIVERY_METHOD="relay"`; !strings.Contains(buf.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, buf.String())
+	}
+}
+
+// A blank compression mode is stored as "standard".
+func TestSetBackupConfigDefaultsABlankCompressionMode(t *testing.T) {
+	o := &Orchestrator{}
+	o.SetBackupConfig(t.TempDir(), t.TempDir(), types.CompressionNone, 0, 0, " ", nil)
+	if o.compressionMode != "standard" {
+		t.Fatalf("compressionMode = %q, want %q", o.compressionMode, "standard")
+	}
+}
+
+// Stats without a version record the placeholder version 0.0.0.
+func TestWriteBackupMetadataDefaultsABlankVersion(t *testing.T) {
+	o := &Orchestrator{logger: logging.New(types.LogLevelError, false)}
+	tempDir := t.TempDir()
+
+	if err := o.writeBackupMetadata(tempDir, &BackupStats{ProxmoxType: types.ProxmoxVE, Hostname: "host1"}); err != nil {
+		t.Fatalf("writeBackupMetadata error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(tempDir, "var/lib/proxsave-info/backup_metadata.txt"))
+	if err != nil {
+		t.Fatalf("failed reading metadata: %v", err)
+	}
+	if !strings.Contains(string(data), "VERSION=0.0.0\n") {
+		t.Fatalf("metadata missing VERSION=0.0.0:\n%s", data)
+	}
+}

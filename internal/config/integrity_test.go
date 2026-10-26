@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -148,7 +149,7 @@ func TestAuditIgnoresVariablesThatConcatenateInsteadOfOverwriting(t *testing.T) 
 // template and sees nothing here.
 func TestAuditReportsAbsentAndUnknownAgainstTheEmbeddedTemplate(t *testing.T) {
 	var kept []string
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "SCHEDULER_TIME=") || strings.HasPrefix(trimmed, "HEALTHCHECK_UPDATES_ID=") {
 			continue
@@ -189,12 +190,7 @@ func TestTheEmbeddedTemplateAuditsClean(t *testing.T) {
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, want)
 }
 
 // The audit exists to say when the loader discards a value the operator wrote, so
@@ -461,5 +457,16 @@ func TestAuditReadsTheFileTheLoaderReadsThroughALink(t *testing.T) {
 	}
 	if raw["COMPRESSION_TYPE"] != "zstd" || len(report.Duplicated) != 1 {
 		t.Fatalf("loader read %q, audit found %d duplicated: they read different files", raw["COMPRESSION_TYPE"], len(report.Duplicated))
+	}
+}
+
+// The skipped multi-value variables come back sorted.
+func TestSkippedMultiValueVariablesSorted(t *testing.T) {
+	names := skippedMultiValueVariables()
+	if len(names) < 2 {
+		t.Fatalf("want at least 2 skipped variables to compare, got %v", names)
+	}
+	if !slices.IsSorted(names) {
+		t.Fatalf("skippedMultiValueVariables() = %v, want sorted", names)
 	}
 }

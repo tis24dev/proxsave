@@ -587,7 +587,7 @@ func TestFallbackServerIDFormat(t *testing.T) {
 
 func TestCollectMACAddressesSortedAndUnique(t *testing.T) {
 	_, macs := collectMACCandidates(nil)
-	for i := 0; i < len(macs); i++ {
+	for i := range macs {
 		if macs[i] == "" {
 			t.Fatalf("unexpected empty MAC at index %d", i)
 		}
@@ -906,7 +906,7 @@ func TestMaybeUpgradeIdentityFileRewritesLegacyToV2WithAltMACs(t *testing.T) {
 func extractIdentityKeyField(t *testing.T, fileContent string) string {
 	t.Helper()
 
-	for _, line := range strings.Split(fileContent, "\n") {
+	for line := range strings.SplitSeq(fileContent, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "SYSTEM_CONFIG_DATA=") {
 			continue

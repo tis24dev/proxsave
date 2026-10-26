@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -431,7 +432,7 @@ func TestMergeGroupNewGroupDropsNonImportedMembers(t *testing.T) {
 		t.Fatalf("brand-new regular group 'team' should be imported:\n%s", merged)
 	}
 	var teamMembers string
-	for _, line := range strings.Split(merged, "\n") {
+	for line := range strings.SplitSeq(merged, "\n") {
 		if strings.HasPrefix(line, "team:") {
 			if f := strings.Split(line, ":"); len(f) >= 4 {
 				teamMembers = f[3]
@@ -750,4 +751,12 @@ func readFake(t *testing.T, fs *FakeFS, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+// sortedKeys returns the map keys sorted.
+func TestSortedKeysReturnsSortedKeys(t *testing.T) {
+	got := sortedKeys(map[string]bool{"zeta": true, "alpha": false, "mid": true})
+	if want := []string{"alpha", "mid", "zeta"}; !slices.Equal(got, want) {
+		t.Fatalf("sortedKeys = %v, want %v", got, want)
+	}
 }

@@ -124,7 +124,7 @@ func TestMultiSelectActionsEnterOnItemDoesNotConfirm(t *testing.T) {
 		t.Fatalf("enter on network should have deselected it, selected=%d", m.selectedCount())
 	}
 	// Walk to the confirm button and press it.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		press(t, m, "down")
 	}
 	press(t, m, "enter")
@@ -141,7 +141,7 @@ func TestMultiSelectActionsEnterOnItemDoesNotConfirm(t *testing.T) {
 func TestMultiSelectActionsSelectAllButtonToggles(t *testing.T) {
 	m := actionsMulti()
 	cap := bindMulti(m)
-	for i := 0; i < 3; i++ { // to Select ALL (row 3)
+	for range 3 { // to Select ALL (row 3)
 		press(t, m, "down")
 	}
 	press(t, m, "enter") // 1/3 -> all selected
@@ -167,7 +167,7 @@ func TestMultiSelectActionsSelectAllButtonToggles(t *testing.T) {
 func TestMultiSelectActionsSpaceOnButtonIsNoop(t *testing.T) {
 	m := actionsMulti()
 	before := m.selectedCount()
-	for i := 0; i < 4; i++ { // 3 items + skipped spacer -> Disable Selected
+	for range 4 { // 3 items + skipped spacer -> Disable Selected
 		press(t, m, "down")
 	}
 	press(t, m, "space")
@@ -183,7 +183,7 @@ func TestMultiSelectActionsSpacerRow(t *testing.T) {
 	if m.spacerRow() != 3 || m.selectAllRow() != 4 || m.confirmRow() != 5 {
 		t.Fatalf("layout: spacer=%d selectAll=%d confirm=%d", m.spacerRow(), m.selectAllRow(), m.confirmRow())
 	}
-	for i := 0; i < 3; i++ { // 0->1->2->(skip 3)->4
+	for range 3 { // 0->1->2->(skip 3)->4
 		press(t, m, "down")
 	}
 	if m.cursor != 4 {
@@ -270,7 +270,7 @@ func TestMultiSelectMouseClickAboveListIsNoop(t *testing.T) {
 	}
 	m := NewMultiSelect("Categories", items)
 	bindMulti(m)
-	for i := 0; i < 20; i++ { // scroll the window down
+	for range 20 { // scroll the window down
 		press(t, m, "down")
 	}
 	m.View(80, 12) // establish lastRowsTop and offset>0
@@ -302,7 +302,7 @@ func TestMultiSelectMouseClickBelowWindowIsNoop(t *testing.T) {
 	}
 	m := NewMultiSelect("Categories", items)
 	bindMulti(m)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, m, "down")
 	}
 	m.View(80, 12)
@@ -334,7 +334,7 @@ func TestMultiSelectMouseClickBelowWindowDoesNotHitOffscreenConfirm(t *testing.T
 	}
 	m := NewMultiSelect("Categories", items, WithMultiSelectActions[string]("Select all", "Apply"))
 	cap := bindMulti(m)
-	for i := 0; i < 8; i++ { // land on the select-all button, forcing offset>0
+	for range 8 { // land on the select-all button, forcing offset>0
 		press(t, m, "down")
 	}
 	m.View(80, 8)
@@ -360,7 +360,7 @@ func TestMultiSelectMouseClickFirstVisibleRowToggles(t *testing.T) {
 	}
 	m := NewMultiSelect("Categories", items)
 	bindMulti(m)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		press(t, m, "down")
 	}
 	m.View(80, 12)

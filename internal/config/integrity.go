@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -533,6 +533,6 @@ func skippedMultiValueVariables() []string {
 	for key := range set {
 		names = append(names, key)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }

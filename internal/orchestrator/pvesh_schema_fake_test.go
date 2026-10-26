@@ -235,8 +235,8 @@ func (s *schemaAwarePvesh) Run(_ context.Context, name string, args ...string) (
 
 func pveshFakeArg(args []string, prefix string) string {
 	for _, a := range args {
-		if strings.HasPrefix(a, prefix) {
-			return strings.TrimPrefix(a, prefix)
+		if after, ok := strings.CutPrefix(a, prefix); ok {
+			return after
 		}
 	}
 	return ""

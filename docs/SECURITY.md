@@ -145,8 +145,10 @@ on a command line (see **Generated rollback scripts** below).
   trailing whitespace, or contains a path separator (`/` or `\`) is rejected with
   `command not allowed` (`ErrCommandNotAllowed`). A name not in the allowlist is rejected
   the same way.
-- **`/proc` access is narrowed.** `ProcPath(pid, leaf)` only permits the leaves `comm`,
-  `status`, and `exe`, so an arbitrary `/proc` path can never be constructed.
+- **`/proc` access goes through one process directory.** `OpenProcDir(pid)` accepts
+  only a positive pid and opens `/proc/<pid>` as an `os.Root`; the one caller reads
+  `comm`, `status` and the `exe` link through that handle, so the three values come
+  from the same process.
 - **The allowlist includes `sh`**, along with `cat` and `tail`. Those two take an ordinary
   argv, which carries no metacharacter interpretation. `cat` is the one that takes a
   computed path (`cat <SYSTEM_ROOT_PREFIX>/proc/cmdline`); the single non-test `tail` call

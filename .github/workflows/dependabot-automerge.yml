@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     # Esegui solo su PR Dependabot
-    if: github.actor == 'dependabot[bot]'
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
 
     steps:
       - name: Set up Node.js 24

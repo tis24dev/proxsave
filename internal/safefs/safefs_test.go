@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -295,81 +296,87 @@ func TestRunLimited_NormalizesExpiredDeadlineAtEntry(t *testing.T) {
 }
 
 func TestRunLimited_NormalizesDeadlineFromDoneBranch(t *testing.T) {
-	done := make(chan struct{})
-	ctx := &fixedErrContext{
-		done: done,
-		err:  context.DeadlineExceeded,
-	}
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		ctx := &fixedErrContext{
+			done: done,
+			err:  context.DeadlineExceeded,
+		}
 
-	unblock := make(chan struct{})
-	finished := make(chan struct{})
-	t.Cleanup(func() {
-		close(unblock)
-		waitForSignal(t, finished, "runLimited completion")
+		unblock := make(chan struct{})
+		finished := make(chan struct{})
+		t.Cleanup(func() {
+			close(unblock)
+			waitForSignal(t, finished, "runLimited completion")
+		})
+
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			close(done)
+		}()
+
+		_, err := runLimited(ctx, time.Second, &TimeoutError{Op: "stat", Path: "/does/not/matter"}, func() (int, error) {
+			defer close(finished)
+			<-unblock
+			return 1, nil
+		})
+
+		if err == nil || !errors.Is(err, ErrTimeout) {
+			t.Fatalf("runLimited err = %v; want timeout", err)
+		}
 	})
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		close(done)
-	}()
-
-	_, err := runLimited(ctx, time.Second, &TimeoutError{Op: "stat", Path: "/does/not/matter"}, func() (int, error) {
-		defer close(finished)
-		<-unblock
-		return 1, nil
-	})
-
-	if err == nil || !errors.Is(err, ErrTimeout) {
-		t.Fatalf("runLimited err = %v; want timeout", err)
-	}
 }
 
 func TestOperationLimiterAcquire_NormalizesDeadlineExceeded(t *testing.T) {
-	limiter := newOperationLimiter(1)
-	limiter.slots <- struct{}{}
+	synctest.Test(t, func(t *testing.T) {
+		limiter := newOperationLimiter(1)
+		limiter.slots <- struct{}{}
 
-	done := make(chan struct{})
-	ctx := &fixedErrContext{
-		done: done,
-		err:  context.DeadlineExceeded,
-	}
+		done := make(chan struct{})
+		ctx := &fixedErrContext{
+			done: done,
+			err:  context.DeadlineExceeded,
+		}
 
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		close(done)
-	}()
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			close(done)
+		}()
 
-	err := limiter.acquire(ctx, timer.C)
-	if err == nil || !errors.Is(err, ErrTimeout) {
-		t.Fatalf("acquire err = %v; want timeout", err)
-	}
+		err := limiter.acquire(ctx, timer.C)
+		if err == nil || !errors.Is(err, ErrTimeout) {
+			t.Fatalf("acquire err = %v; want timeout", err)
+		}
+	})
 }
 
 func TestOperationLimiterAcquire_PropagatesCancellation(t *testing.T) {
-	limiter := newOperationLimiter(1)
-	limiter.slots <- struct{}{}
+	synctest.Test(t, func(t *testing.T) {
+		limiter := newOperationLimiter(1)
+		limiter.slots <- struct{}{}
 
-	done := make(chan struct{})
-	ctx := &fixedErrContext{
-		done: done,
-		err:  context.Canceled,
-	}
+		done := make(chan struct{})
+		ctx := &fixedErrContext{
+			done: done,
+			err:  context.Canceled,
+		}
 
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		close(done)
-	}()
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			close(done)
+		}()
 
-	err := limiter.acquire(ctx, timer.C)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("acquire err = %v; want context.Canceled", err)
-	}
+		err := limiter.acquire(ctx, timer.C)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("acquire err = %v; want context.Canceled", err)
+		}
+	})
 }
 
 func TestStat_DoesNotSpawnPastLimiterCapacity(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -72,13 +73,7 @@ func TestApplyNetworkFilesFromStage_RewritesSafeAbsoluteSymlinkTargetsWithinDest
 		t.Fatalf("symlink target=%q, want %q", gotTarget, "interfaces.real")
 	}
 
-	found := false
-	for _, path := range applied {
-		if path == "/etc/network/interfaces" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(applied, "/etc/network/interfaces")
 	if !found {
 		t.Fatalf("expected applied paths to include /etc/network/interfaces, got %#v", applied)
 	}
@@ -276,13 +271,7 @@ func TestApplyNetworkFilesFromStage_AppliesDeclaredBackends(t *testing.T) {
 		if string(got) != content {
 			t.Fatalf("%s content=%q, want %q", dest, string(got), content)
 		}
-		found := false
-		for _, p := range applied {
-			if p == dest {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(applied, dest)
 		if !found {
 			t.Fatalf("expected applied paths to include %s, got %#v", dest, applied)
 		}

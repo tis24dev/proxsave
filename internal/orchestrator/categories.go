@@ -513,9 +513,9 @@ func PathMatchesCategory(filePath string, category Category) bool {
 		}
 
 		// Check if the file is under a category directory
-		if strings.HasSuffix(normalizedCat, "/") {
+		if before, ok := strings.CutSuffix(normalizedCat, "/"); ok {
 			// Handle directory path both with and without trailing slash
-			dirPath := strings.TrimSuffix(normalizedCat, "/")
+			dirPath := before
 			if normalized == dirPath {
 				return true
 			}

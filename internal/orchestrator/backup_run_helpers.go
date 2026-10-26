@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -35,8 +36,7 @@ func backupMetricsExitCode(stats *BackupStats, runErr error) int {
 		return stats.ExitCode
 	}
 
-	var backupErr *BackupError
-	if errors.As(runErr, &backupErr) {
+	if backupErr, ok := errors.AsType[*BackupError](runErr); ok {
 		return backupErr.Code.Int()
 	}
 	return types.ExitGenericError.Int()
@@ -89,8 +89,7 @@ func (o *Orchestrator) parseFailedBackupLogCounts(stats *BackupStats) {
 }
 
 func backupFailureExitCode(runErr error) int {
-	var backupErr *BackupError
-	if errors.As(runErr, &backupErr) {
+	if backupErr, ok := errors.AsType[*BackupError](runErr); ok {
 		return backupErr.Code.Int()
 	}
 	return types.ExitBackupError.Int()
@@ -195,9 +194,7 @@ func backupDiskValidationError(message string, diskErr error) error {
 	if errMsg == "" && diskErr != nil {
 		errMsg = diskErr.Error()
 	}
-	if errMsg == "" {
-		errMsg = "insufficient disk space"
-	}
+	errMsg = cmp.Or(errMsg, "insufficient disk space")
 	if diskErr == nil {
 		diskErr = errors.New(errMsg)
 	}
@@ -278,8 +275,7 @@ func clearDiscardedArchiveStats(stats *BackupStats) {
 func backupArchiveCreationError(err error) error {
 	phase := "archive"
 	code := types.ExitArchiveError
-	var compressionErr *backup.CompressionError
-	if errors.As(err, &compressionErr) {
+	if _, ok := errors.AsType[*backup.CompressionError](err); ok {
 		phase = "compression"
 		code = types.ExitCompressionError
 	}

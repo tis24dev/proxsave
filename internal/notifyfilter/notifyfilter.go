@@ -15,7 +15,7 @@ package notifyfilter
 import (
 	"context"
 	"errors"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,7 +133,7 @@ func EnabledChannels(cfg *config.Config) []string {
 	if cfg.WebhookEnabled {
 		out = append(out, "webhook")
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

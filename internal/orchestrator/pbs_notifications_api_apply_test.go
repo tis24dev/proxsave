@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -300,5 +301,17 @@ func TestApplyPBSNotificationsViaAPI_PropagatesSyncFailures(t *testing.T) {
 				t.Fatal("an aborted apply must not report applied=true")
 			}
 		})
+	}
+}
+
+// The matcher and endpoint names are applied in sorted order.
+func TestSortedPBSNotificationNames(t *testing.T) {
+	matchers := map[string]proxmoxNotificationSection{"zeta": {}, "alpha": {}, "mid": {}}
+	if got, want := sortedPBSMatcherNames(matchers), []string{"alpha", "mid", "zeta"}; !slices.Equal(got, want) {
+		t.Fatalf("sortedPBSMatcherNames = %v, want %v", got, want)
+	}
+	endpoints := map[string]pbsNotificationEndpointSection{"zeta": {}, "alpha": {}, "mid": {}}
+	if got, want := sortedPBSEndpointNames(endpoints), []string{"alpha", "mid", "zeta"}; !slices.Equal(got, want) {
+		t.Fatalf("sortedPBSEndpointNames = %v, want %v", got, want)
 	}
 }

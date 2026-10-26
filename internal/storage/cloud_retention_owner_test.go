@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -148,10 +149,8 @@ func TestApplyRetentionPrunesArchivesWrittenUnderTheRunFQDN(t *testing.T) {
 	var calls []commandCall
 	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, commandCall{name: name, args: append([]string(nil), args...)})
-		for _, a := range args {
-			if a == "lsl" {
-				return []byte(listing), nil
-			}
+		if slices.Contains(args, "lsl") {
+			return []byte(listing), nil
 		}
 		// Only the renamed archive's manifest reads back. Every other `cat` returns
 		// nothing usable, so those three degrade to their filename token, which
@@ -223,10 +222,8 @@ func TestApplyRetentionLeavesSameShortNameForeignFQDNAlone(t *testing.T) {
 	var calls []commandCall
 	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, commandCall{name: name, args: append([]string(nil), args...)})
-		for _, a := range args {
-			if a == "lsl" {
-				return []byte(listing), nil
-			}
+		if slices.Contains(args, "lsl") {
+			return []byte(listing), nil
 		}
 		return nil, nil
 	}

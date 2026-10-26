@@ -9,7 +9,7 @@ import (
 )
 
 // buildDiscordPayload builds a Discord-formatted webhook payload with embeds
-func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[string]interface{}, error) {
+func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[string]any, error) {
 	logger.Debug("buildDiscordPayload() starting...")
 
 	// Determine embed color based on status
@@ -41,21 +41,21 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 	logger.Debug("Description: %s", description)
 
 	// Build fields array
-	fields := []map[string]interface{}{}
+	fields := []map[string]any{}
 
 	// Status and basic info
 	fields = append(fields,
-		map[string]interface{}{
+		map[string]any{
 			"name":   "Hostname",
 			"value":  data.Hostname,
 			"inline": true,
 		},
-		map[string]interface{}{
+		map[string]any{
 			"name":   "Status",
 			"value":  fmt.Sprintf("%s %s", statusEmoji, data.Status.String()),
 			"inline": true,
 		},
-		map[string]interface{}{
+		map[string]any{
 			"name":   "Date",
 			"value":  data.BackupDate.Format("2006-01-02 15:04:05"),
 			"inline": true,
@@ -64,17 +64,17 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	// Backup metrics
 	fields = append(fields,
-		map[string]interface{}{
+		map[string]any{
 			"name":   "Duration",
 			"value":  FormatDuration(data.BackupDuration),
 			"inline": true,
 		},
-		map[string]interface{}{
+		map[string]any{
 			"name":   "Size",
 			"value":  data.BackupSizeHR,
 			"inline": true,
 		},
-		map[string]interface{}{
+		map[string]any{
 			"name":   "Compression",
 			"value":  fmt.Sprintf("%s (%.2f%%)", data.CompressionType, data.CompressionRatio),
 			"inline": true,
@@ -83,7 +83,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	// Storage status
 	localStorage := fmt.Sprintf("%s %s", GetStorageEmoji(data.LocalStatus), data.LocalStatusSummary)
-	fields = append(fields, map[string]interface{}{
+	fields = append(fields, map[string]any{
 		"name":   "Local Storage",
 		"value":  localStorage,
 		"inline": true,
@@ -91,7 +91,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	if data.SecondaryEnabled {
 		secondaryStorage := fmt.Sprintf("%s %s", GetStorageEmoji(data.SecondaryStatus), data.SecondaryStatusSummary)
-		fields = append(fields, map[string]interface{}{
+		fields = append(fields, map[string]any{
 			"name":   "Secondary Storage",
 			"value":  secondaryStorage,
 			"inline": true,
@@ -100,7 +100,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	if data.CloudEnabled {
 		cloudStorage := fmt.Sprintf("%s %s", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary)
-		fields = append(fields, map[string]interface{}{
+		fields = append(fields, map[string]any{
 			"name":   "Cloud Storage",
 			"value":  cloudStorage,
 			"inline": true,
@@ -109,7 +109,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	if data.PBSEnabled {
 		pbsStorage := fmt.Sprintf("%s %s", GetStorageEmoji(data.PBSStatus), data.PBSStatusSummary)
-		fields = append(fields, map[string]interface{}{
+		fields = append(fields, map[string]any{
 			"name":   "PBS Storage",
 			"value":  pbsStorage,
 			"inline": true,
@@ -118,7 +118,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	// Issues summary
 	issuesSummary := fmt.Sprintf("Errors: %d, Warnings: %d", data.ErrorCount, data.WarningCount)
-	fields = append(fields, map[string]interface{}{
+	fields = append(fields, map[string]any{
 		"name":   "Issues",
 		"value":  issuesSummary,
 		"inline": false,
@@ -127,7 +127,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 	// Optional update information
 	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
 		updateText := fmt.Sprintf("New version available: %s (current: %s)", data.LatestVersion, strings.TrimSpace(data.CurrentVersion))
-		fields = append(fields, map[string]interface{}{
+		fields = append(fields, map[string]any{
 			"name":   "Update",
 			"value":  updateText,
 			"inline": false,
@@ -137,12 +137,12 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 	logger.Debug("Built %d fields for Discord embed", len(fields))
 
 	// Build embed
-	embed := map[string]interface{}{
+	embed := map[string]any{
 		"title":       title,
 		"description": description,
 		"color":       color,
 		"fields":      fields,
-		"footer": map[string]interface{}{
+		"footer": map[string]any{
 			"text": fmt.Sprintf("ProxSave v%s • Exit Code: %d", data.ScriptVersion, data.ExitCode),
 		},
 		"timestamp": data.BackupDate.Format("2006-01-02T15:04:05Z07:00"),
@@ -151,27 +151,28 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 	// Add log categories if present
 	if len(data.LogCategories) > 0 {
 		logger.Debug("Adding %d log categories to embed", len(data.LogCategories))
-		categoriesText := "```\n"
+		var categoriesText strings.Builder
+		categoriesText.WriteString("```\n")
 		for i, cat := range data.LogCategories {
 			if i >= 5 { // Limit to first 5 categories
-				categoriesText += fmt.Sprintf("... and %d more\n", len(data.LogCategories)-5)
+				fmt.Fprintf(&categoriesText, "... and %d more\n", len(data.LogCategories)-5)
 				break
 			}
-			categoriesText += fmt.Sprintf("[%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count)
+			fmt.Fprintf(&categoriesText, "[%s] %s (count: %d)\n", cat.Type, cat.Label, cat.Count)
 		}
-		categoriesText += "```"
+		categoriesText.WriteString("```")
 
 		// Insert after issues field
-		fields = append(fields, map[string]interface{}{
+		fields = append(fields, map[string]any{
 			"name":   "Top Issues",
-			"value":  categoriesText,
+			"value":  categoriesText.String(),
 			"inline": false,
 		})
 		embed["fields"] = fields
 	}
 
-	payload := map[string]interface{}{
-		"embeds": []interface{}{embed},
+	payload := map[string]any{
+		"embeds": []any{embed},
 	}
 
 	logger.Debug("Discord payload built successfully with 1 embed and %d fields", len(fields))
@@ -179,7 +180,7 @@ func buildDiscordPayload(data *NotificationData, logger *logging.Logger) (map[st
 }
 
 // buildSlackPayload builds a Slack-formatted webhook payload with blocks
-func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[string]interface{}, error) {
+func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[string]any, error) {
 	logger.Debug("buildSlackPayload() starting...")
 
 	statusEmoji := GetStatusEmoji(data.Status)
@@ -187,34 +188,34 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	headerText := fmt.Sprintf("%s %s Backup Report", statusEmoji, proxmoxType)
 	logger.Debug("Header text: %s", headerText)
 
-	blocks := []interface{}{}
+	blocks := []any{}
 
 	// Header block
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type": "header",
-		"text": map[string]interface{}{
+		"text": map[string]any{
 			"type": "plain_text",
 			"text": headerText,
 		},
 	})
 
 	// Status section
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type": "section",
-		"fields": []interface{}{
-			map[string]interface{}{
+		"fields": []any{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Hostname:*\n%s", data.Hostname),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Status:*\n%s %s", statusEmoji, data.Status.String()),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Date:*\n%s", data.BackupDate.Format("2006-01-02 15:04:05")),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Duration:*\n%s", FormatDuration(data.BackupDuration)),
 			},
@@ -222,27 +223,27 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	})
 
 	// Divider
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type": "divider",
 	})
 
 	// Backup details section
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type": "section",
-		"fields": []interface{}{
-			map[string]interface{}{
+		"fields": []any{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Size:*\n%s", data.BackupSizeHR),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Compression:*\n%s (%.2f%%)", data.CompressionType, data.CompressionRatio),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Files:*\n%d included", data.FilesIncluded),
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Exit Code:*\n%d", data.ExitCode),
 			},
@@ -250,77 +251,78 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	})
 
 	// Divider
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type": "divider",
 	})
 
 	// Storage section
-	storageFields := []interface{}{
-		map[string]interface{}{
+	storageFields := []any{
+		map[string]any{
 			"type": "mrkdwn",
 			"text": fmt.Sprintf("*Local Storage:*\n%s %s", GetStorageEmoji(data.LocalStatus), data.LocalStatusSummary),
 		},
 	}
 
 	if data.SecondaryEnabled {
-		storageFields = append(storageFields, map[string]interface{}{
+		storageFields = append(storageFields, map[string]any{
 			"type": "mrkdwn",
 			"text": fmt.Sprintf("*Secondary Storage:*\n%s %s", GetStorageEmoji(data.SecondaryStatus), data.SecondaryStatusSummary),
 		})
 	}
 
 	if data.CloudEnabled {
-		storageFields = append(storageFields, map[string]interface{}{
+		storageFields = append(storageFields, map[string]any{
 			"type": "mrkdwn",
 			"text": fmt.Sprintf("*Cloud Storage:*\n%s %s", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary),
 		})
 	}
 
 	if data.PBSEnabled {
-		storageFields = append(storageFields, map[string]interface{}{
+		storageFields = append(storageFields, map[string]any{
 			"type": "mrkdwn",
 			"text": fmt.Sprintf("*PBS Storage:*\n%s %s", GetStorageEmoji(data.PBSStatus), data.PBSStatusSummary),
 		})
 	}
 
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type":   "section",
 		"fields": storageFields,
 	})
 
 	// Issues section
 	if data.ErrorCount > 0 || data.WarningCount > 0 {
-		blocks = append(blocks, map[string]interface{}{
+		blocks = append(blocks, map[string]any{
 			"type": "divider",
 		})
 
-		issuesText := fmt.Sprintf("*Errors:* %d | *Warnings:* %d", data.ErrorCount, data.WarningCount)
+		var issuesText strings.Builder
+		fmt.Fprintf(&issuesText, "*Errors:* %d | *Warnings:* %d", data.ErrorCount, data.WarningCount)
 
 		if len(data.LogCategories) > 0 {
-			issuesText += "\n\n*Top Issues:*\n"
+			issuesText.WriteString("\n\n*Top Issues:*\n")
 			for i, cat := range data.LogCategories {
 				if i >= 5 { // Limit to first 5
-					issuesText += fmt.Sprintf("_... and %d more_\n", len(data.LogCategories)-5)
+					fmt.Fprintf(&issuesText, "_... and %d more_\n", len(data.LogCategories)-5)
 					break
 				}
-				issuesText += fmt.Sprintf("• [%s] %s (×%d)\n", cat.Type, cat.Label, cat.Count)
+				fmt.Fprintf(&issuesText, "• [%s] %s (×%d)\n", cat.Type, cat.Label, cat.Count)
 			}
 		}
 
-		blocks = append(blocks, map[string]interface{}{
+		blocks = append(blocks, map[string]any{
 			"type": "section",
-			"text": map[string]interface{}{
+			"text": map[string]any{
 				"type": "mrkdwn",
-				"text": issuesText,
+				"text": issuesText.String(),
 			},
 		})
 	}
 
 	// Optional update section
 	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
-		blocks = append(blocks, map[string]interface{}{
+		blocks = append(blocks, map[string]any{
 			"type": "section",
-			"text": map[string]interface{}{
+			"text": map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Update:*\nNew version available: %s (current: %s)", data.LatestVersion, strings.TrimSpace(data.CurrentVersion)),
 			},
@@ -328,17 +330,17 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	}
 
 	// Footer context
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type": "context",
-		"elements": []interface{}{
-			map[string]interface{}{
+		"elements": []any{
+			map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("ProxSave v%s", data.ScriptVersion),
 			},
 		},
 	})
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"blocks": blocks,
 	}
 
@@ -347,7 +349,7 @@ func buildSlackPayload(data *NotificationData, logger *logging.Logger) (map[stri
 }
 
 // buildTeamsPayload builds a Microsoft Teams-formatted webhook payload with Adaptive Cards
-func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[string]interface{}, error) {
+func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[string]any, error) {
 	logger.Debug("buildTeamsPayload() starting...")
 
 	statusEmoji := GetStatusEmoji(data.Status)
@@ -370,7 +372,7 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	logger.Debug("Theme color: #%s", themeColor)
 
 	// Build facts for FactSet
-	facts := []map[string]interface{}{
+	facts := []map[string]any{
 		{"title": "Hostname", "value": data.Hostname},
 		{"title": "Status", "value": fmt.Sprintf("%s %s", statusEmoji, data.Status.String())},
 		{"title": "Date", "value": data.BackupDate.Format("2006-01-02 15:04:05")},
@@ -383,35 +385,35 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	}
 
 	if data.SecondaryEnabled {
-		facts = append(facts, map[string]interface{}{
+		facts = append(facts, map[string]any{
 			"title": "Secondary Storage",
 			"value": fmt.Sprintf("%s %s", GetStorageEmoji(data.SecondaryStatus), data.SecondaryStatusSummary),
 		})
 	}
 
 	if data.CloudEnabled {
-		facts = append(facts, map[string]interface{}{
+		facts = append(facts, map[string]any{
 			"title": "Cloud Storage",
 			"value": fmt.Sprintf("%s %s", GetStorageEmoji(data.CloudStatus), data.CloudStatusSummary),
 		})
 	}
 
 	if data.PBSEnabled {
-		facts = append(facts, map[string]interface{}{
+		facts = append(facts, map[string]any{
 			"title": "PBS Storage",
 			"value": fmt.Sprintf("%s %s", GetStorageEmoji(data.PBSStatus), data.PBSStatusSummary),
 		})
 	}
 
 	facts = append(facts,
-		map[string]interface{}{"title": "Errors", "value": fmt.Sprintf("%d", data.ErrorCount)},
-		map[string]interface{}{"title": "Warnings", "value": fmt.Sprintf("%d", data.WarningCount)},
-		map[string]interface{}{"title": "Exit Code", "value": fmt.Sprintf("%d", data.ExitCode)},
+		map[string]any{"title": "Errors", "value": fmt.Sprintf("%d", data.ErrorCount)},
+		map[string]any{"title": "Warnings", "value": fmt.Sprintf("%d", data.WarningCount)},
+		map[string]any{"title": "Exit Code", "value": fmt.Sprintf("%d", data.ExitCode)},
 	)
 
 	// Optional update information
 	if data.NewVersionAvailable && strings.TrimSpace(data.LatestVersion) != "" {
-		facts = append(facts, map[string]interface{}{
+		facts = append(facts, map[string]any{
 			"title": "Update",
 			"value": fmt.Sprintf("New version available: %s (current: %s)", data.LatestVersion, strings.TrimSpace(data.CurrentVersion)),
 		})
@@ -420,20 +422,20 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	logger.Debug("Built %d facts for Teams FactSet", len(facts))
 
 	// Build Adaptive Card body
-	body := []interface{}{
-		map[string]interface{}{
+	body := []any{
+		map[string]any{
 			"type":   "TextBlock",
 			"text":   title,
 			"weight": "bolder",
 			"size":   "large",
 		},
-		map[string]interface{}{
+		map[string]any{
 			"type":  "TextBlock",
 			"text":  fmt.Sprintf("Backup completed with status: **%s** on %s", data.Status.String(), data.Hostname),
 			"wrap":  true,
 			"style": "default",
 		},
-		map[string]interface{}{
+		map[string]any{
 			"type":  "FactSet",
 			"facts": facts,
 		},
@@ -442,24 +444,25 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	// Add log categories if present
 	if len(data.LogCategories) > 0 {
 		logger.Debug("Adding %d log categories to Teams card", len(data.LogCategories))
-		categoriesText := "**Top Issues:**\n\n"
+		var categoriesText strings.Builder
+		categoriesText.WriteString("**Top Issues:**\n\n")
 		for i, cat := range data.LogCategories {
 			if i >= 5 { // Limit to first 5
-				categoriesText += fmt.Sprintf("_... and %d more_", len(data.LogCategories)-5)
+				fmt.Fprintf(&categoriesText, "_... and %d more_", len(data.LogCategories)-5)
 				break
 			}
-			categoriesText += fmt.Sprintf("• [%s] %s (×%d)\n\n", cat.Type, cat.Label, cat.Count)
+			fmt.Fprintf(&categoriesText, "• [%s] %s (×%d)\n\n", cat.Type, cat.Label, cat.Count)
 		}
 
-		body = append(body, map[string]interface{}{
+		body = append(body, map[string]any{
 			"type": "TextBlock",
-			"text": categoriesText,
+			"text": categoriesText.String(),
 			"wrap": true,
 		})
 	}
 
 	// Build Adaptive Card
-	adaptiveCard := map[string]interface{}{
+	adaptiveCard := map[string]any{
 		"type":    "AdaptiveCard",
 		"$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
 		"version": "1.5",
@@ -467,10 +470,10 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 	}
 
 	// Wrap in Teams message format
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"type": "message",
-		"attachments": []interface{}{
-			map[string]interface{}{
+		"attachments": []any{
+			map[string]any{
 				"contentType": "application/vnd.microsoft.card.adaptive",
 				"content":     adaptiveCard,
 			},
@@ -483,10 +486,10 @@ func buildTeamsPayload(data *NotificationData, logger *logging.Logger) (map[stri
 }
 
 // buildGenericPayload builds a generic JSON webhook payload
-func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[string]interface{}, error) {
+func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[string]any, error) {
 	logger.Debug("buildGenericPayload() starting...")
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		// Status information
 		"status":         data.Status.String(),
 		"status_message": data.StatusMessage,
@@ -499,7 +502,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 		"server_id":      data.ServerID,
 		"server_mac":     data.ServerMAC,
 		"script_version": data.ScriptVersion,
-		"update": map[string]interface{}{
+		"update": map[string]any{
 			"new_version_available": data.NewVersionAvailable,
 			"current_version":       strings.TrimSpace(data.CurrentVersion),
 			"latest_version":        strings.TrimSpace(data.LatestVersion),
@@ -510,7 +513,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 		"timestamp_iso": data.BackupDate.Format("2006-01-02T15:04:05Z07:00"),
 
 		// Backup metrics
-		"backup": map[string]interface{}{
+		"backup": map[string]any{
 			"file_name":        data.BackupFileName,
 			"size_bytes":       data.BackupSize,
 			"size_human":       data.BackupSizeHR,
@@ -521,7 +524,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 		},
 
 		// Compression details
-		"compression": map[string]interface{}{
+		"compression": map[string]any{
 			"type":  data.CompressionType,
 			"level": data.CompressionLevel,
 			"mode":  data.CompressionMode,
@@ -529,8 +532,8 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 		},
 
 		// Storage status
-		"storage": map[string]interface{}{
-			"local": map[string]interface{}{
+		"storage": map[string]any{
+			"local": map[string]any{
 				"status":         data.LocalStatus,
 				"status_summary": data.LocalStatusSummary,
 				"emoji":          GetStorageEmoji(data.LocalStatus),
@@ -543,21 +546,21 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 		},
 
 		// Issues summary
-		"issues": map[string]interface{}{
+		"issues": map[string]any{
 			"errors":   data.ErrorCount,
 			"warnings": data.WarningCount,
 			"total":    data.TotalIssues,
 		},
 	}
 
-	storage, ok := payload["storage"].(map[string]interface{})
+	storage, ok := payload["storage"].(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("internal error: storage payload malformed")
 	}
 
 	// Add secondary storage if enabled
 	if data.SecondaryEnabled {
-		storage["secondary"] = map[string]interface{}{
+		storage["secondary"] = map[string]any{
 			"status":         data.SecondaryStatus,
 			"status_summary": data.SecondaryStatusSummary,
 			"emoji":          GetStorageEmoji(data.SecondaryStatus),
@@ -572,7 +575,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	// Add cloud storage if enabled
 	if data.CloudEnabled {
-		storage["cloud"] = map[string]interface{}{
+		storage["cloud"] = map[string]any{
 			"status":         data.CloudStatus,
 			"status_summary": data.CloudStatusSummary,
 			"emoji":          GetStorageEmoji(data.CloudStatus),
@@ -583,7 +586,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	// Add PBS storage if enabled, with the keys of secondary
 	if data.PBSEnabled {
-		storage["pbs"] = map[string]interface{}{
+		storage["pbs"] = map[string]any{
 			"status":         data.PBSStatus,
 			"status_summary": data.PBSStatusSummary,
 			"emoji":          GetStorageEmoji(data.PBSStatus),
@@ -598,9 +601,9 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 
 	// Add log categories if present
 	if len(data.LogCategories) > 0 {
-		categories := make([]map[string]interface{}, 0, len(data.LogCategories))
+		categories := make([]map[string]any, 0, len(data.LogCategories))
 		for _, cat := range data.LogCategories {
-			categories = append(categories, map[string]interface{}{
+			categories = append(categories, map[string]any{
 				"type":    cat.Type,
 				"label":   cat.Label,
 				"count":   cat.Count,
@@ -619,7 +622,7 @@ func buildGenericPayload(data *NotificationData, logger *logging.Logger) (map[st
 // Pushover requires the application token and user/group key in the JSON body
 // (not in headers); this builder reads them from endpoint.Auth.Token and
 // endpoint.Auth.User and rejects requests where either is missing.
-func buildPushoverPayload(endpoint config.WebhookEndpoint, data *NotificationData, logger *logging.Logger) (map[string]interface{}, error) {
+func buildPushoverPayload(endpoint config.WebhookEndpoint, data *NotificationData, logger *logging.Logger) (map[string]any, error) {
 	logger.Debug("buildPushoverPayload() starting...")
 
 	if endpoint.Auth.Token == "" {
@@ -640,7 +643,7 @@ func buildPushoverPayload(endpoint config.WebhookEndpoint, data *NotificationDat
 		data.WarningCount,
 	), 1024)
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"token":    endpoint.Auth.Token,
 		"user":     endpoint.Auth.User,
 		"title":    title,

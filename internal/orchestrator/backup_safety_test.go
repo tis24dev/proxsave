@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -208,13 +209,7 @@ func TestBackupFileAndDirectory(t *testing.T) {
 
 	expected := []string{"file.txt", "dir/sub/data.txt", "link"}
 	for _, name := range expected {
-		found := false
-		for _, f := range files {
-			if f == name {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(files, name)
 		if !found {
 			t.Fatalf("expected %s in archive, got %v", name, files)
 		}
@@ -297,10 +292,8 @@ func TestCreateSafetyBackupArchivesSelectedPaths(t *testing.T) {
 	}
 
 	assertContains := func(name string) {
-		for _, entry := range entries {
-			if entry == name {
-				return
-			}
+		if slices.Contains(entries, name) {
+			return
 		}
 		t.Fatalf("archive missing %s; entries=%v", name, entries)
 	}
@@ -1158,5 +1151,51 @@ func TestCreateSafetyBackupArchiveIsOwnerOnly(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("safety archive is %04o, want 0600: it holds /etc/shadow and is never deleted", perm)
+	}
+}
+
+// A spec with a blank description and prefix falls back to "Safety backup" and the
+// "restore_backup" archive prefix.
+func TestCreateSafetyBackupDefaultsABlankSpec(t *testing.T) {
+	fake := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fake.Root) })
+	origFS := safetyFS
+	safetyFS = fake
+	t.Cleanup(func() { safetyFS = origFS })
+	fixed := time.Date(2024, time.March, 1, 15, 4, 5, 0, time.UTC)
+	origNow := safetyNow
+	safetyNow = func() time.Time { return fixed }
+	t.Cleanup(func() { safetyNow = origNow })
+
+	var log bytes.Buffer
+	logger := logging.New(types.LogLevelInfo, false)
+	logger.SetOutput(&log)
+
+	result, err := createSafetyBackup(logger, nil, "/restore-target", safetyBackupSpec{HumanDescription: " ", ArchivePrefix: " "})
+	if err != nil {
+		t.Fatalf("createSafetyBackup error: %v", err)
+	}
+	if want := "restore_backup_" + fixed.Format("20060102_150405") + ".tar.gz"; filepath.Base(result.BackupPath) != want {
+		t.Fatalf("backup archive = %s, want %s", filepath.Base(result.BackupPath), want)
+	}
+	if want := "Creating safety backup of current configuration"; !strings.Contains(log.String(), want) {
+		t.Fatalf("log missing %q:\n%s", want, log.String())
+	}
+}
+
+// A relative pattern whose first element is a glob lists the working directory.
+func TestGlobFSExpandsARelativeTopLevelGlob(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.conf"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	got, err := globFS(osFS{}, "*.conf")
+	if err != nil {
+		t.Fatalf("globFS error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "a.conf" {
+		t.Fatalf("globFS(*.conf) = %v, want [a.conf]", got)
 	}
 }

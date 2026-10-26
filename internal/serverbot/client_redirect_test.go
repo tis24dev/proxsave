@@ -13,10 +13,10 @@ import (
 // Authorization/Cookie/WWW-Authenticate cross-host, not the custom X-Server-Auth, so
 // without a redirect-refusing CheckRedirect the secret leaks to any 302 Location.
 func TestDo_RefusesRedirect_SecretNeverLeaks(t *testing.T) {
-	var attackerHits int64
+	var attackerHits atomic.Int64
 	var sawSecret atomic.Bool
 	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&attackerHits, 1)
+		attackerHits.Add(1)
 		if r.Header.Get(serverAuthHeader) != "" {
 			sawSecret.Store(true)
 		}
@@ -38,7 +38,7 @@ func TestDo_RefusesRedirect_SecretNeverLeaks(t *testing.T) {
 	if resp != nil {
 		t.Errorf("expected nil response on refused redirect, got %+v", resp)
 	}
-	if n := atomic.LoadInt64(&attackerHits); n != 0 {
+	if n := attackerHits.Load(); n != 0 {
 		t.Errorf("attacker host was contacted %d time(s); the redirect must NOT be followed", n)
 	}
 	if sawSecret.Load() {

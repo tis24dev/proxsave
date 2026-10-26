@@ -383,3 +383,27 @@ func TestDeduplicationWritesManifest(t *testing.T) {
 		t.Fatalf("recorded owner (%d:%d) != source owner (%d:%d)", *entries[0].Uid, *entries[0].Gid, st.Uid, st.Gid)
 	}
 }
+
+// A replacement recorded without permission bits is reverted to a 0600 file.
+func TestRevertDedupSymlinkDefaultsAZeroMode(t *testing.T) {
+	dir := t.TempDir()
+	canonical := filepath.Join(dir, "canonical")
+	duplicate := filepath.Join(dir, "duplicate")
+	if err := os.WriteFile(canonical, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(canonical, duplicate); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := revertDedupSymlink(dedupReplacement{duplicate: duplicate, canonical: canonical}); err != nil {
+		t.Fatalf("revertDedupSymlink: %v", err)
+	}
+	info, err := os.Lstat(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatalf("duplicate mode = %v, want a regular file with 0600", info.Mode())
+	}
+}

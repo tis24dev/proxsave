@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -397,13 +398,7 @@ func TestSyncDirExact_CopiesSymlinks(t *testing.T) {
 	if destTarget != "target" {
 		t.Fatalf("dest symlink target=%q want %q", destTarget, "target")
 	}
-	found := false
-	for _, p := range applied {
-		if p == "/dest/link" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(applied, "/dest/link")
 	if !found {
 		t.Fatalf("expected /dest/link to be reported as applied, got %#v", applied)
 	}
@@ -1428,13 +1423,7 @@ func TestApplyPVEFirewallFromStage_CoversAdditionalPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("applyPVEFirewallFromStage error: %v", err)
 		}
-		found := false
-		for _, p := range applied {
-			if p == "/etc/pve/firewall" {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(applied, "/etc/pve/firewall")
 		if !found {
 			t.Fatalf("expected /etc/pve/firewall in applied paths, got %#v", applied)
 		}
@@ -1484,13 +1473,7 @@ func TestApplyPVEFirewallFromStage_CoversAdditionalPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("applyPVEFirewallFromStage error: %v", err)
 		}
-		found := false
-		for _, p := range applied {
-			if p == "/etc/pve/nodes/localhost/host.fw" {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(applied, "/etc/pve/nodes/localhost/host.fw")
 		if !found {
 			t.Fatalf("expected mapped host.fw applied, got %#v", applied)
 		}

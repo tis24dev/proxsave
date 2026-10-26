@@ -659,7 +659,7 @@ func TestSecondaryStorage_ApplyRetention_SetsNoLogInfoWhenLogCountFails(t *testi
 	storage.hostname = "node-nolog"
 
 	baseTime := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		ts := baseTime.Add(-time.Duration(i) * time.Hour)
 		path := filepath.Join(backupDir, fmt.Sprintf("node-nolog-backup-%s.tar.zst", ts.Format("20060102-150405")))
 		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
@@ -705,7 +705,7 @@ func TestSecondaryStorage_ApplyRetention_GFS_SetsNoLogInfoWhenLogCountFails(t *t
 	storage.hostname = "node-nolog-gfs"
 
 	now := time.Date(2024, time.January, 10, 12, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ts := now.Add(-time.Duration(i) * time.Hour)
 		path := filepath.Join(backupDir, fmt.Sprintf("node-nolog-gfs-backup-%s.tar.zst", ts.Format("20060102-150405")))
 		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {

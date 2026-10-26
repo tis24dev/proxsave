@@ -1276,10 +1276,7 @@ func (c *CloudStorage) uploadWithRetry(ctx context.Context, localFile, remoteFil
 	// of 3 but never clamped, so a misconfigured RCLONE_RETRIES<=0 would otherwise
 	// skip the loop entirely, never call rclone, and return a bogus
 	// "upload failed after 0 attempts: <nil>" while silently uploading nothing.
-	retries := c.config.RcloneRetries
-	if retries < 1 {
-		retries = 1
-	}
+	retries := max(c.config.RcloneRetries, 1)
 
 	attemptsMade := 0
 	// reported marks a failure that comes after at least one "  Attempt <i>/<n>
@@ -1503,10 +1500,7 @@ func (c *CloudStorage) uploadTasksParallel(ctx context.Context, tasks []uploadTa
 	sem := make(chan struct{}, c.parallelJobs)
 
 	for _, task := range tasks {
-		task := task
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
@@ -1521,7 +1515,7 @@ func (c *CloudStorage) uploadTasksParallel(ctx context.Context, tasks []uploadTa
 				}
 				cancel()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1811,7 +1805,7 @@ func (c *CloudStorage) remoteSHA256(ctx context.Context, remoteFile string, down
 	// Output format: "<hex-hash><spaces><path>", one line per object, on stdout. A
 	// blank hash field (backend cannot hash) yields a single field and is skipped.
 	want := remoteBaseName(remoteFile)
-	for _, line := range strings.Split(string(output.stdout), "\n") {
+	for line := range strings.SplitSeq(string(output.stdout), "\n") {
 		line = strings.TrimSpace(line)
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -1894,8 +1888,8 @@ func (c *CloudStorage) verifyAlternative(ctx context.Context, remoteFile string,
 	}
 
 	// Search for filename in the listing (stdout)
-	lines := strings.Split(string(output.stdout), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(output.stdout), "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -2403,7 +2397,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 	c.markCloudLogPathAvailable()
 
 	var names []string
-	for _, line := range strings.Split(string(output.stdout), "\n") {
+	for line := range strings.SplitSeq(string(output.stdout), "\n") {
 		if name := strings.TrimSpace(line); name != "" && !strings.HasSuffix(name, "/") {
 			names = append(names, name)
 		}
@@ -2601,7 +2595,7 @@ func (c *CloudStorage) listLogNames(ctx context.Context, base string) ([]string,
 		return nil, &rcloneCommandError{msg: rcloneFailureDetail(msg, err), short: rcloneCause(msg, err), err: err}
 	}
 	var names []string
-	for _, line := range strings.Split(string(output.stdout), "\n") {
+	for line := range strings.SplitSeq(string(output.stdout), "\n") {
 		name := strings.TrimSpace(line)
 		if name == "" || strings.HasSuffix(name, "/") {
 			continue
@@ -2757,10 +2751,7 @@ func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.Backu
 		}
 	}
 
-	remaining := totalBackups - deleted
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(totalBackups-deleted, 0)
 
 	if logsRemaining, ok := computeRemaining(initialLogs, logsDeleted); ok {
 		c.logger.Debug("Cloud storage retention applied: deleted %d backups (logs deleted: %d), %d backups remaining (%d logs remaining)",

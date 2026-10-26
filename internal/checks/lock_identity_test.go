@@ -58,7 +58,7 @@ func TestCheckLockFile_ReusedPidRemovesStaleLock(t *testing.T) {
 	tmpDir := t.TempDir()
 	lockPath := filepath.Join(tmpDir, ".backup.lock")
 	host, _ := os.Hostname()
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("pid=4242\nhost=%s\ntime=%s\nstarttime=111\n", host, time.Now().Format(time.RFC3339))), 0o640); err != nil {
+	if err := os.WriteFile(lockPath, fmt.Appendf(nil, "pid=4242\nhost=%s\ntime=%s\nstarttime=111\n", host, time.Now().Format(time.RFC3339)), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &CheckerConfig{BackupPath: tmpDir, LogPath: tmpDir, LockDirPath: tmpDir, LockFilePath: lockPath, MaxLockAge: time.Hour}
@@ -79,7 +79,7 @@ func TestCheckLockFile_SameOwnerStaysInProgress(t *testing.T) {
 	tmpDir := t.TempDir()
 	lockPath := filepath.Join(tmpDir, ".backup.lock")
 	host, _ := os.Hostname()
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("pid=4242\nhost=%s\ntime=%s\nstarttime=111\n", host, time.Now().Format(time.RFC3339))), 0o640); err != nil {
+	if err := os.WriteFile(lockPath, fmt.Appendf(nil, "pid=4242\nhost=%s\ntime=%s\nstarttime=111\n", host, time.Now().Format(time.RFC3339)), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &CheckerConfig{BackupPath: tmpDir, LogPath: tmpDir, LockDirPath: tmpDir, LockFilePath: lockPath, MaxLockAge: time.Hour}
@@ -101,7 +101,7 @@ func TestCheckLockFile_OldFormatLockStaysInProgress(t *testing.T) {
 	tmpDir := t.TempDir()
 	lockPath := filepath.Join(tmpDir, ".backup.lock")
 	host, _ := os.Hostname()
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("pid=4242\nhost=%s\ntime=%s\n", host, time.Now().Format(time.RFC3339))), 0o640); err != nil {
+	if err := os.WriteFile(lockPath, fmt.Appendf(nil, "pid=4242\nhost=%s\ntime=%s\n", host, time.Now().Format(time.RFC3339)), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &CheckerConfig{BackupPath: tmpDir, LogPath: tmpDir, LockDirPath: tmpDir, LockFilePath: lockPath, MaxLockAge: time.Hour}

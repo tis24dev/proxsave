@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +60,7 @@ func TestRunReturnsTheCompleteAnswerWhenOnlyTheDrainWasCut(t *testing.T) {
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		out, err := osCommandRunner{}.Run(context.Background(), "which", "thing")
+		out, err := osCommandRunner{}.Run(t.Context(), "which", "thing")
 		done <- result{out, err}
 	}()
 

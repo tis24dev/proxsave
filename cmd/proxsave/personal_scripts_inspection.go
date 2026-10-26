@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -306,8 +307,7 @@ type personalScriptForeignAncestor struct {
 func personalScriptForeignAncestorReason(foreign []personalScriptForeignAncestor, daemonUID int) string {
 	order := make([]int, 0, len(foreign))
 	paths := make(map[int][]string, len(foreign))
-	for i := len(foreign) - 1; i >= 0; i-- {
-		entry := foreign[i]
+	for _, entry := range slices.Backward(foreign) {
 		if _, seen := paths[entry.UID]; !seen {
 			order = append(order, entry.UID)
 		}

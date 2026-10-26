@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ func (c *Collector) detectZFSUsage() (bool, string) {
 
 	// Strong indicator: ZFS filesystems currently mounted.
 	if data, err := os.ReadFile(c.systemPath("/proc/mounts")); err == nil && len(data) > 0 {
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) >= 3 && fields[2] == "zfs" {
 				indicators = append(indicators, "mounted_zfs")
@@ -31,7 +32,7 @@ func (c *Collector) detectZFSUsage() (bool, string) {
 
 	// Medium indicator: fstab references ZFS.
 	if data, err := os.ReadFile(c.systemPath("/etc/fstab")); err == nil && len(data) > 0 {
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
@@ -74,9 +75,7 @@ func (c *Collector) collectBestEffortProbe(ctx context.Context, spec CommandSpec
 			return ctxErr
 		}
 		if !ok {
-			if reason == "" {
-				reason = "required capability not detected"
-			}
+			reason = cmp.Or(reason, "required capability not detected")
 			c.logger.Debug("Skipping %s: %s", description, reason)
 			return nil
 		}
@@ -1292,9 +1291,7 @@ func (c *Collector) buildNetworkReport(ctx context.Context, commandsDir string) 
 
 func ensureSystemPath() {
 	current := os.Getenv("PATH")
-	if current == "" {
-		current = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	}
+	current = cmp.Or(current, "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
 	segments := strings.Split(current, string(os.PathListSeparator))
 	seen := make(map[string]struct{}, len(segments))

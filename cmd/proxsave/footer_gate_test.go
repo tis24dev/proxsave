@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -62,8 +61,7 @@ func TestDashboardRunWasGraphical(t *testing.T) {
 		t.Fatal("baseline: the graphical latch must be false after release")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	var buf shell.SyncBuffer
 	session := shell.StartForTestWithOutput(ctx, shell.Config{AppName: "ProxSave", Subtitle: "Backup"}, &buf)
 	bootstrap := logging.NewBootstrapLogger()

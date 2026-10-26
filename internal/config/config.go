@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -586,9 +587,7 @@ func (c *Config) parseCompressionSettings() {
 	c.CompressionLevel = c.getInt("COMPRESSION_LEVEL", 6)
 	c.CompressionThreads = c.getInt("COMPRESSION_THREADS", 0) // 0 = auto
 	c.CompressionMode = strings.ToLower(c.getString("COMPRESSION_MODE", "standard"))
-	if c.CompressionMode == "" {
-		c.CompressionMode = "standard"
-	}
+	c.CompressionMode = cmp.Or(c.CompressionMode, "standard")
 	c.CompressionLevel = adjustLevelForMode(c.CompressionType, c.CompressionMode, c.CompressionLevel)
 }
 
@@ -774,9 +773,7 @@ func (c *Config) parseStorageSettings() {
 	c.RcloneTransfers = c.getInt("RCLONE_TRANSFERS", 4)
 	c.RcloneRetries = c.getInt("RCLONE_RETRIES", 3)
 	c.RcloneVerifyMethod = strings.ToLower(c.getString("RCLONE_VERIFY_METHOD", "primary"))
-	if c.RcloneVerifyMethod == "" {
-		c.RcloneVerifyMethod = "primary"
-	}
+	c.RcloneVerifyMethod = cmp.Or(c.RcloneVerifyMethod, "primary")
 	if rawFlags := strings.TrimSpace(c.getString("RCLONE_FLAGS", "")); rawFlags != "" {
 		c.RcloneFlags = strings.Fields(rawFlags)
 	}
@@ -1432,10 +1429,7 @@ func parseSizeToBytes(value string) (int64, error) {
 	if num < 0 {
 		return 0, fmt.Errorf("size must be positive")
 	}
-	bytes := int64(num * multiplier)
-	if bytes < 0 {
-		bytes = 0
-	}
+	bytes := max(int64(num*multiplier), 0)
 	return bytes, nil
 }
 
@@ -1566,8 +1560,8 @@ func (c *Config) BuildWebhookConfig() *WebhookConfig {
 		headersStr := c.getString(prefix+"HEADERS", "")
 		if headersStr != "" {
 			// Format: "Key1:Value1,Key2:Value2"
-			pairs := strings.Split(headersStr, ",")
-			for _, pair := range pairs {
+			pairs := strings.SplitSeq(headersStr, ",")
+			for pair := range pairs {
 				parts := strings.SplitN(strings.TrimSpace(pair), ":", 2)
 				if len(parts) == 2 {
 					headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
@@ -1684,7 +1678,7 @@ type WebhookEndpoint struct {
 	Headers      map[string]string
 	Auth         WebhookAuth
 	Priority     int
-	CustomFields map[string]interface{}
+	CustomFields map[string]any
 }
 
 // WebhookAuth holds authentication configuration for a webhook

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -194,13 +195,7 @@ func retentionHostAliases(local string, written []string) []string {
 		if key == "" || key == unresolvedHostname || key == localKey {
 			continue
 		}
-		duplicate := false
-		for _, seen := range aliases {
-			if seen == key {
-				duplicate = true
-				break
-			}
-		}
+		duplicate := slices.Contains(aliases, key)
 		if !duplicate {
 			aliases = append(aliases, key)
 		}
@@ -456,15 +451,15 @@ func retentionAdoptionRefusal(meta *types.BackupMetadata, id retentionIdentity) 
 // no Warning: the scope prints facts under "Applying retention policy..." and the
 // outcome lines that follow them are the caller's.
 type retentionScopeLogger interface {
-	Info(format string, args ...interface{})
-	Debug(format string, args ...interface{})
+	Info(format string, args ...any)
+	Debug(format string, args ...any)
 }
 
 // discardScopeLogger is the logger a caller passing nil gets.
 type discardScopeLogger struct{}
 
-func (discardScopeLogger) Info(string, ...interface{})  {}
-func (discardScopeLogger) Debug(string, ...interface{}) {}
+func (discardScopeLogger) Info(string, ...any)  {}
+func (discardScopeLogger) Debug(string, ...any) {}
 
 // errRetentionHostnameNotResolved is what a retention pass returns when this machine
 // cannot name itself: no backup can be attributed to it, so the pass does not start

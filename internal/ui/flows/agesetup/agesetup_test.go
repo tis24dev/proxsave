@@ -238,7 +238,7 @@ func TestConfirmOverwriteExistingRecipient(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			ok, err := ui.ConfirmOverwriteExistingRecipient(context.Background(), "/tmp/recipient.txt")
+			ok, err := ui.ConfirmOverwriteExistingRecipient(t.Context(), "/tmp/recipient.txt")
 			resCh <- result{ok, err}
 		}()
 	}
@@ -281,7 +281,7 @@ func TestConfirmAddAnotherRecipient(t *testing.T) {
 	resCh := make(chan result, 1)
 	ask := func() {
 		go func() {
-			ok, err := ui.ConfirmAddAnotherRecipient(context.Background(), 2)
+			ok, err := ui.ConfirmAddAnotherRecipient(t.Context(), 2)
 			resCh <- result{ok, err}
 		}()
 	}

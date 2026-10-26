@@ -163,7 +163,7 @@ func trackedFiles(t *testing.T, root string) []string {
 	t.Helper()
 	if out, err := exec.Command("git", "-C", root, "ls-files", "-z").Output(); err == nil {
 		var files []string
-		for _, p := range strings.Split(string(out), "\x00") {
+		for p := range strings.SplitSeq(string(out), "\x00") {
 			if p != "" {
 				files = append(files, p)
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -353,10 +354,8 @@ func TestCloudRetentionReportsASecondWriter(t *testing.T) {
 	cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, a := range args {
-			if a == "lsl" {
-				return []byte(listing), nil
-			}
+		if slices.Contains(args, "lsl") {
+			return []byte(listing), nil
 		}
 		remotePath := args[len(args)-1]
 		if args[0] == "cat" {
@@ -367,7 +366,7 @@ func TestCloudRetentionReportsASecondWriter(t *testing.T) {
 			if strings.Contains(remotePath, "pve2-") {
 				host = "pve2"
 			}
-			return []byte(fmt.Sprintf(`{"hostname":%q,"server_id":%q}`, host, ourServerID)), nil
+			return fmt.Appendf(nil, `{"hostname":%q,"server_id":%q}`, host, ourServerID), nil
 		}
 		return nil, nil
 	}

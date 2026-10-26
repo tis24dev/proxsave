@@ -192,13 +192,13 @@ var benignCountWord = regexp.MustCompile(`\b(One|Two|Three|Four|Five|Six)\b of t
 // every block that is a table or a heading, leaving the prose a reader acts on.
 func exitCodeProsePara(text string) []string {
 	var out []string
-	for _, para := range strings.Split(text, "\n\n") {
+	for para := range strings.SplitSeq(text, "\n\n") {
 		para = strings.TrimSpace(para)
 		if para == "" {
 			continue
 		}
 		structural := false
-		for _, line := range strings.Split(para, "\n") {
+		for line := range strings.SplitSeq(para, "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "|") || strings.HasPrefix(line, "#") {
 				structural = true

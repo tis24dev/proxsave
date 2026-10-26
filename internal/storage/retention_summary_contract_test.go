@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -217,10 +218,8 @@ func TestEveryRetentionReporterAnswersTheSameContract(t *testing.T) {
 			"      100 2025-01-01 10:00:00.000000000 pve.home.arpa-backup-20250101-100000.tar.zst\n" +
 			"       10 2025-01-01 10:00:00.000000000 pve.home.arpa-backup-20250101-100000.tar.zst.sha256\n"
 		cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			for _, a := range args {
-				if a == "lsl" {
-					return []byte(listing), nil
-				}
+			if slices.Contains(args, "lsl") {
+				return []byte(listing), nil
 			}
 			return nil, nil
 		}
@@ -294,10 +293,8 @@ func TestEveryReporterDisownsThePassThatBailed(t *testing.T) {
 			"      100 2025-01-01 10:00:00.000000000 pve.home.arpa-backup-20250101-100000.tar.zst\n" +
 			"       10 2025-01-01 10:00:00.000000000 pve.home.arpa-backup-20250101-100000.tar.zst.sha256\n"
 		cs.execCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			for _, a := range args {
-				if a == "lsl" {
-					return []byte(listing), nil
-				}
+			if slices.Contains(args, "lsl") {
+				return []byte(listing), nil
 			}
 			return nil, nil
 		}

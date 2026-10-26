@@ -34,21 +34,21 @@ type levelRecordingLogger struct {
 	lines []recordedLogLine
 }
 
-func (l *levelRecordingLogger) record(level, format string, args ...interface{}) {
+func (l *levelRecordingLogger) record(level, format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.lines = append(l.lines, recordedLogLine{level: level, message: fmt.Sprintf(format, args...)})
 }
 
-func (l *levelRecordingLogger) Warning(format string, args ...interface{}) {
+func (l *levelRecordingLogger) Warning(format string, args ...any) {
 	l.record("WARNING", format, args...)
 }
 
-func (l *levelRecordingLogger) Info(format string, args ...interface{}) {
+func (l *levelRecordingLogger) Info(format string, args ...any) {
 	l.record("INFO", format, args...)
 }
 
-func (l *levelRecordingLogger) Debug(format string, args ...interface{}) {
+func (l *levelRecordingLogger) Debug(format string, args ...any) {
 	l.record("DEBUG", format, args...)
 }
 

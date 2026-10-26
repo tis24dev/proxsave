@@ -3,12 +3,14 @@ package orchestrator
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -344,9 +346,7 @@ func backupExistingRecipientFileWithDeps(fs FS, tp TimeProvider, path string) (s
 		return "", fmt.Errorf("recipient path is a directory: %s", path)
 	}
 	perm := info.Mode().Perm()
-	if perm == 0 {
-		perm = 0o600
-	}
+	perm = cmp.Or(perm, 0o600)
 	ts := recipientTime(tp)
 	backupPath := fmt.Sprintf("%s.bak-%s", path, ts.Format("20060102-150405.000000000"))
 	if err := copyRecipientFileWithDeps(fs, path, backupPath, perm); err != nil {
@@ -360,9 +360,7 @@ func writeFileAtomicWithDeps(fs FS, tp TimeProvider, path string, data []byte, p
 		fs = osFS{}
 	}
 	perm &= 0o7777
-	if perm == 0 {
-		perm = 0o600
-	}
+	perm = cmp.Or(perm, 0o600)
 
 	tmpPath := fmt.Sprintf("%s.proxsave.tmp.%d", path, recipientTime(tp).UnixNano())
 	tmpFile, err := fs.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL|os.O_TRUNC, perm)
@@ -620,10 +618,8 @@ func validatePassphraseStrength(pass []byte) error {
 	}
 
 	lower := strings.ToLower(passStr)
-	for _, weak := range weakPassphraseList {
-		if lower == weak {
-			return fmt.Errorf("passphrase is too common; choose a more unique phrase")
-		}
+	if slices.Contains(weakPassphraseList, lower) {
+		return fmt.Errorf("passphrase is too common; choose a more unique phrase")
 	}
 	return nil
 }

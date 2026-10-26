@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -37,7 +38,7 @@ func newSecondaryWithCapturedLog(t *testing.T, dir string) (*SecondaryStorage, *
 
 func warningLines(out string) []string {
 	var got []string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "WARNING") {
 			got = append(got, line)
 		}
@@ -58,7 +59,7 @@ func warningText(out string) string { return strings.Join(warningLines(out), "\n
 // the WARNING carries the datum: the count and the consequence.
 func itemLines(out string) []string {
 	var got []string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "DEBUG") && strings.Contains(line, "listing incomplete - ") {
 			got = append(got, line)
 		}
@@ -68,7 +69,7 @@ func itemLines(out string) []string {
 
 func seedArchives(t *testing.T, dir string, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p := filepath.Join(dir, fmt.Sprintf("host-backup-202603%02d-000000.tar.zst", i+1))
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 			t.Fatalf("seed %s: %v", p, err)
@@ -80,29 +81,31 @@ func seedArchives(t *testing.T, dir string, n int) {
 // Neither is a property of any single archive, so the run must say so once, by
 // returning, and not once per archive still to be stat'ed.
 func TestAnAbandonedListingReturnsTheErrorInsteadOfOneWarningPerArchive(t *testing.T) {
-	dir := t.TempDir()
-	seedArchives(t, dir, 6)
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		seedArchives(t, dir, 6)
 
-	restore := safefs.SetOsStatForTest(func(p string) (os.FileInfo, error) {
-		time.Sleep(20 * time.Millisecond)
-		return os.Lstat(p)
+		restore := safefs.SetOsStatForTest(func(p string) (os.FileInfo, error) {
+			time.Sleep(20 * time.Millisecond)
+			return os.Lstat(p)
+		})
+		defer restore()
+
+		s, buf := newSecondaryWithCapturedLog(t, dir)
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(50*time.Millisecond, cancel)
+
+		got, err := s.List(ctx)
+		if err == nil {
+			t.Fatalf("List returned %d backups and a nil error after the context was cancelled", len(got))
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("List error = %v; want it to unwrap to context.Canceled", err)
+		}
+		if n := countWarningLines(buf.String()); n != 0 {
+			t.Fatalf("an abandoned listing wrote %d WARNING lines, want 0:\n%s", n, buf.String())
+		}
 	})
-	defer restore()
-
-	s, buf := newSecondaryWithCapturedLog(t, dir)
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(50*time.Millisecond, cancel)
-
-	got, err := s.List(ctx)
-	if err == nil {
-		t.Fatalf("List returned %d backups and a nil error after the context was cancelled", len(got))
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("List error = %v; want it to unwrap to context.Canceled", err)
-	}
-	if n := countWarningLines(buf.String()); n != 0 {
-		t.Fatalf("an abandoned listing wrote %d WARNING lines, want 0:\n%s", n, buf.String())
-	}
 }
 
 // One unreadable mount is one fault. The run must report it once with a count,
@@ -116,7 +119,7 @@ func TestAnAbandonedListingReturnsTheErrorInsteadOfOneWarningPerArchive(t *testi
 func TestUnreadableArchivesAreReportedOnceNotOncePerArchive(t *testing.T) {
 	dir := t.TempDir()
 	seedArchives(t, dir, 1)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		p := filepath.Join(dir, fmt.Sprintf("host-backup-202604%02d-000000.tar.zst", i+1))
 		if err := os.Symlink(p, p); err != nil { // self-link: ELOOP on stat
 			t.Fatalf("symlink %s: %v", p, err)
@@ -264,7 +267,7 @@ func TestAVanishedLocationIsNamedInsteadOfReturningNothingInSilence(t *testing.T
 		t.Fatalf("listing gap = %+v, want 4 archives not listed, no such file or directory", s.lastListGap)
 	}
 	var detail string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "DEBUG") && strings.Contains(line, "location stopped answering") {
 			detail = line
 		}
@@ -303,45 +306,50 @@ func TestASingleArchiveThatVanishedBetweenGlobAndStatStaysSilent(t *testing.T) {
 // stopped answering", and List returned an EMPTY list with a NIL error. Retention
 // and stats then ran on that empty answer after the operator had already aborted.
 func TestAnAbandonedLocationProbeReturnsTheErrorNotAnEmptyList(t *testing.T) {
-	dir := t.TempDir()
-	for i := 0; i < 3; i++ {
-		p := filepath.Join(dir, fmt.Sprintf("host-backup-202605%02d-000000.tar.zst", i+1))
-		if err := os.Symlink(p, p); err != nil { // self-link: ELOOP, so zero archives are readable
-			t.Fatalf("symlink %s: %v", p, err)
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		for i := range 3 {
+			p := filepath.Join(dir, fmt.Sprintf("host-backup-202605%02d-000000.tar.zst", i+1))
+			if err := os.Symlink(p, p); err != nil { // self-link: ELOOP, so zero archives are readable
+				t.Fatalf("symlink %s: %v", p, err)
+			}
 		}
-	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// The seam cancels the context the moment the PROBE's stat runs (the probe is
-	// the only stat List aims at the base directory), which is exactly the window
-	// the per-archive arm cannot cover.
-	restore := safefs.SetOsStatForTest(func(p string) (os.FileInfo, error) {
-		if p == dir {
-			cancel()
-			time.Sleep(50 * time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		// The seam cancels the context the moment the PROBE's stat runs (the probe is
+		// the only stat List aims at the base directory), which is exactly the window
+		// the per-archive arm cannot cover.
+		restore := safefs.SetOsStatForTest(func(p string) (os.FileInfo, error) {
+			if p == dir {
+				cancel()
+				time.Sleep(50 * time.Millisecond)
+			}
+			return os.Stat(p)
+		})
+		defer restore()
+
+		logger := logging.New(types.LogLevelDebug, false)
+		buf := &bytes.Buffer{}
+		logger.SetOutput(buf)
+		// FS_IO_TIMEOUT on, as shipped (default 30): with the 0 opt-out safefs runs
+		// unbounded and the probe's stat is never raced against the cancellation.
+		s, err := NewSecondaryStorage(&config.Config{SecondaryPath: dir, FsIoTimeoutSeconds: 30}, logger, "")
+		if err != nil {
+			t.Fatalf("NewSecondaryStorage: %v", err)
 		}
-		return os.Stat(p)
+		got, err := s.List(ctx)
+		if err == nil {
+			t.Fatalf("List returned %d backups and a nil error after the probe was abandoned", len(got))
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("List error = %v; want it to unwrap to context.Canceled", err)
+		}
+		if n := countWarningLines(buf.String()); n != 0 {
+			t.Fatalf("an abandoned probe wrote %d WARNING lines, want 0:\n%s", n, buf.String())
+		}
+		// The timed-out worker is abandoned by design and still sleeping: let it return
+		// in fake time, or the bubble cannot close.
+		time.Sleep(time.Second)
 	})
-	defer restore()
-
-	logger := logging.New(types.LogLevelDebug, false)
-	buf := &bytes.Buffer{}
-	logger.SetOutput(buf)
-	// FS_IO_TIMEOUT on, as shipped (default 30): with the 0 opt-out safefs runs
-	// unbounded and the probe's stat is never raced against the cancellation.
-	s, err := NewSecondaryStorage(&config.Config{SecondaryPath: dir, FsIoTimeoutSeconds: 30}, logger, "")
-	if err != nil {
-		t.Fatalf("NewSecondaryStorage: %v", err)
-	}
-	got, err := s.List(ctx)
-	if err == nil {
-		t.Fatalf("List returned %d backups and a nil error after the probe was abandoned", len(got))
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("List error = %v; want it to unwrap to context.Canceled", err)
-	}
-	if n := countWarningLines(buf.String()); n != 0 {
-		t.Fatalf("an abandoned probe wrote %d WARNING lines, want 0:\n%s", n, buf.String())
-	}
 }

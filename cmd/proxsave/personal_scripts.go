@@ -339,8 +339,13 @@ func runPersonalScript(path string, stop <-chan struct{}) error {
 		return nil
 	}
 
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
+	// The script's exit status is not ours to report (the contract drops it), so the
+	// waiter only signals that the script is gone.
+	waitCh := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waitCh)
+	}()
 
 	select {
 	case <-waitCh:

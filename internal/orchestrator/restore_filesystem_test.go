@@ -93,3 +93,32 @@ func TestExtractArchiveNative_SkipFnSkipsFstab(t *testing.T) {
 		t.Fatalf("expected etc/fstab to be skipped, got err=%v", err)
 	}
 }
+
+// A device known only to the lsblk JSON keeps every identifier it reports.
+func TestLoadFstabDeviceInventoryCopiesEveryLsblkField(t *testing.T) {
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	restoreFS = fakeFS
+
+	lsblk := `{"blockdevices":[{"name":"sdb1","uuid":"u-1","partuuid":"p-1","label":"data"}]}`
+	if err := fakeFS.WriteFile("/backup/var/lib/proxsave-info/commands/system/lsblk_json.json", []byte(lsblk), 0o600); err != nil {
+		t.Fatalf("write lsblk_json.json: %v", err)
+	}
+
+	got := loadFstabDeviceInventory(newTestLogger(), "/backup")
+	if want := (fstabDeviceIdentity{UUID: "u-1", PartUUID: "p-1", Label: "data"}); got["/dev/sdb1"] != want {
+		t.Fatalf("inventory[/dev/sdb1] = %+v, want %+v", got["/dev/sdb1"], want)
+	}
+}
+
+// A device known only to the embedded lsblk JSON keeps every identifier it reports.
+func TestParsePBSDatastoreInventoryForDevicesCopiesEveryLsblkField(t *testing.T) {
+	inventory := `{"commands":{"lsblk_json":{"output":"{\"blockdevices\":[{\"name\":\"sdb1\",\"uuid\":\"u-1\",\"partuuid\":\"p-1\",\"label\":\"data\"}]}"}}}`
+
+	got := parsePBSDatastoreInventoryForDevices(newTestLogger(), inventory)
+	if want := (fstabDeviceIdentity{UUID: "u-1", PartUUID: "p-1", Label: "data"}); got["/dev/sdb1"] != want {
+		t.Fatalf("inventory[/dev/sdb1] = %+v, want %+v", got["/dev/sdb1"], want)
+	}
+}

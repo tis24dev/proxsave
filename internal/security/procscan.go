@@ -2,9 +2,9 @@ package security
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/safeexec"
@@ -30,26 +30,33 @@ type procInfo struct {
 func readProcInfo(pid int) procInfo {
 	info := procInfo{}
 
-	if commPath, err := safeexec.ProcPath(pid, "comm"); err == nil {
-		if data, err := os.ReadFile(commPath); err == nil {
-			info.comm = strings.TrimSpace(string(data))
-		}
+	// comm, status and exe are read through one handle on /proc/<pid>, so the three
+	// values describe the same process even if it exits and its pid is reused
+	// between the reads.
+	proc, err := safeexec.OpenProcDir(pid)
+	if err != nil {
+		return info
+	}
+	defer func() { _ = proc.Close() }()
+
+	if data, err := proc.ReadFile("comm"); err == nil {
+		info.comm = strings.TrimSpace(string(data))
 	}
 
-	if statusPath, err := safeexec.ProcPath(pid, "status"); err == nil {
-		if data, err := os.ReadFile(statusPath); err == nil {
-			lines := strings.Split(string(data), "\n")
-			for _, line := range lines {
-				if strings.HasPrefix(line, "PPid:") {
-					_, _ = fmt.Sscanf(line, "PPid:\t%d", &info.ppid)
-					break
-				}
+	if data, err := proc.ReadFile("status"); err == nil {
+		lines := strings.SplitSeq(string(data), "\n")
+		for line := range lines {
+			if strings.HasPrefix(line, "PPid:") {
+				_, _ = fmt.Sscanf(line, "PPid:\t%d", &info.ppid)
+				break
 			}
 		}
 	}
 
-	if exePath, err := safeexec.ProcPath(pid, "exe"); err == nil {
-		if target, err := filepath.EvalSymlinks(exePath); err == nil {
+	// The kernel writes the exe link as an absolute path; resolving it gives the
+	// binary's real path, and fails for a deleted binary ("<path> (deleted)").
+	if link, err := proc.Readlink("exe"); err == nil {
+		if target, err := filepath.EvalSymlinks(link); err == nil {
 			info.exe = target
 		}
 	}
@@ -149,13 +156,7 @@ func isUserSpaceBracketedWorker(info procInfo, name string, safeList []string) b
 	}
 
 	// must match user-defined safe bracket names
-	for _, safe := range safeList {
-		if safe == name {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(safeList, name)
 }
 
 func isExeInTrustedDir(path string) bool {

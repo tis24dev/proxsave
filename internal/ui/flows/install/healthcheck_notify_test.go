@@ -90,7 +90,7 @@ func TestHealthcheckPromptPlacesTheNotificationsBlockAboveTheSensors(t *testing.
 	if !strings.Contains(v, want) {
 		t.Fatalf("Notifications block not between Status and Sensors:\n%s", v)
 	}
-	for _, line := range strings.Split(v, "\n") {
+	for line := range strings.SplitSeq(v, "\n") {
 		if (strings.HasPrefix(line, "Setting:") || strings.HasPrefix(line, "Current:")) && strings.ContainsAny(line, "✓✗⚠") {
 			t.Fatalf("an outcome symbol on %q", line)
 		}
@@ -120,7 +120,7 @@ func TestRunHealthcheckSetupShowsTheNotificationsBlockAfterTheCheck(t *testing.T
 
 	done := make(chan struct{})
 	go func() {
-		_, _ = RunHealthcheckSetup(context.Background(), d.session, t.TempDir(), "/tmp/backup.env", true)
+		_, _ = RunHealthcheckSetup(t.Context(), d.session, t.TempDir(), "/tmp/backup.env", true)
 		close(done)
 	}()
 	deadline := time.After(uitest.Deadline(10 * time.Second))

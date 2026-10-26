@@ -103,7 +103,7 @@ func TestStorageInitSummaryOnlyTheOutcomeTakesTheWarnLevel(t *testing.T) {
 	out := renderInitSummary(t, summary, true)
 
 	var levels []string
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(out, "\n"), "\n") {
 		levels = append(levels, levelColumnOf(line))
 	}
 	want := []string{"INFO", "INFO", "DEBUG", "WARNING"}

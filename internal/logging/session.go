@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,9 +66,7 @@ func sanitizeFlowName(flow string) string {
 	for strings.Contains(sanitized, "--") {
 		sanitized = strings.ReplaceAll(sanitized, "--", "-")
 	}
-	if sanitized == "" {
-		sanitized = "session"
-	}
+	sanitized = cmp.Or(sanitized, "session")
 	return sanitized
 }
 

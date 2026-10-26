@@ -296,7 +296,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	}
 
 	checksumPath := tempArchivePath + ".sha256"
-	if err := restoreFS.WriteFile(checksumPath, []byte(fmt.Sprintf("%s  %s\n", prepared.Checksum, filepath.Base(tempArchivePath))), 0o640); err != nil {
+	if err := restoreFS.WriteFile(checksumPath, fmt.Appendf(nil, "%s  %s\n", prepared.Checksum, filepath.Base(tempArchivePath)), 0o640); err != nil {
 		return "", fmt.Errorf("write checksum file: %w", err)
 	}
 

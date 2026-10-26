@@ -46,7 +46,7 @@ func TestCheckLockFileInProgressPreLogIsDebugNotError(t *testing.T) {
 	}
 
 	var debugSeen bool
-	for _, line := range strings.Split(buf.String(), "\n") {
+	for line := range strings.SplitSeq(buf.String(), "\n") {
 		if !strings.Contains(line, "Another backup is in progress") {
 			continue
 		}

@@ -109,7 +109,7 @@ func (o *Orchestrator) coLocatePassphraseSalt(recipientPath string) error {
 	// Drop any existing salt comment(s), keep every other line, then re-add a
 	// single canonical salt comment at the top.
 	body := make([]string, 0)
-	for _, line := range strings.Split(string(content), "\n") {
+	for line := range strings.SplitSeq(string(content), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), passphraseSaltCommentPrefix) {
 			continue
 		}
@@ -141,7 +141,7 @@ func (o *Orchestrator) readCoLocatedPassphraseSalt(recipientPath string) string 
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, passphraseSaltCommentPrefix) {
 			continue

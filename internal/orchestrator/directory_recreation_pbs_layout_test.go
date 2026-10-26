@@ -236,7 +236,7 @@ func TestCreatePBSDatastoreStructureLeavesAnInitializedDatastore(t *testing.T) {
 		t.Fatalf("createPBSDatastoreStructure changed=%v err=%v; want left as it is", changed, err)
 	}
 	var visible []string
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		line = regexp.MustCompile(`^\[[^\]]*\] `).ReplaceAllString(line, "")
 		if !strings.HasPrefix(line, "DEBUG") {
 			visible = append(visible, line)

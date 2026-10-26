@@ -98,7 +98,7 @@ func validateRecreationPath(path string) error {
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("path %q is not absolute", path)
 	}
-	for _, part := range strings.Split(path, string(os.PathSeparator)) {
+	for part := range strings.SplitSeq(path, string(os.PathSeparator)) {
 		if part == ".." {
 			return fmt.Errorf("path %q contains a parent-directory (..) reference", path)
 		}
@@ -200,7 +200,7 @@ func isCommonZFSMountPath(pathLower string) bool {
 }
 
 func hasPathSegment(path, segment string) bool {
-	for _, part := range strings.Split(path, "/") {
+	for part := range strings.SplitSeq(path, "/") {
 		if part == segment {
 			return true
 		}

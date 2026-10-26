@@ -110,8 +110,7 @@ func RedactSecrets(s string, secrets ...string) string {
 // full URL verbatim; this keeps only the operation + underlying transport error.
 // Non-*url.Error values pass through unchanged.
 func RedactURLError(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
+	if ue, ok := errors.AsType[*url.Error](err); ok {
 		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
 	}
 	return err

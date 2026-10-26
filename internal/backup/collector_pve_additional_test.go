@@ -532,7 +532,7 @@ func TestSampleMetadataFileStats(t *testing.T) {
 		tmpDir := t.TempDir()
 
 		// Create multiple files
-		for i := 0; i < 20; i++ {
+		for i := range 20 {
 			if err := os.WriteFile(filepath.Join(tmpDir, "file"+string(rune('a'+i))+".txt"), []byte("content"), 0o644); err != nil {
 				t.Fatalf("WriteFile: %v", err)
 			}

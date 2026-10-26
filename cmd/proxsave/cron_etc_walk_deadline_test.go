@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -199,46 +200,48 @@ func TestAStalledScriptProbeStillLetsTheWalkReadTheHabitatsAfterIt(t *testing.T)
 // happens-before edge between the worker's write and the caller's read, and the detector
 // then correctly reports nothing even on code that races. Measured both ways.
 func TestTheAbandonedEtcWalkStepNeverWritesWhatTheCallerRead(t *testing.T) {
-	dir := t.TempDir()
-	daily := filepath.Join(dir, "cron.daily")
-	if err := os.Mkdir(daily, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	entry := writeFile(t, filepath.Join(daily, "nasguard"), "#!/bin/sh\ntrue\n", 0o755)
-	etcHabitat(t, daily)
-
-	origStat, origTimeout := cronEntryStatFn, cronProbeTimeout
-	answered := make(chan struct{})
-	t.Cleanup(func() {
-		// Wait for the worker before restoring the seam, but BOUNDED. A walk that never
-		// reaches the stalling path - an earlier step latching the deadline, say - would
-		// otherwise hang the whole suite here instead of failing this one test.
-		select {
-		case <-answered:
-		case <-time.After(5 * time.Second):
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		daily := filepath.Join(dir, "cron.daily")
+		if err := os.Mkdir(daily, 0o755); err != nil {
+			t.Fatal(err)
 		}
-		cronEntryStatFn, cronProbeTimeout = origStat, origTimeout
-	})
-	cronProbeTimeout = 50 * time.Millisecond
-	// The walk stats this entry once today. sync.Once keeps that an assumption rather than a
-	// requirement: a second stat would otherwise close a closed channel and panic the test
-	// binary, which reports as a crash somewhere else entirely.
-	var once sync.Once
-	cronEntryStatFn = func(path string) (os.FileInfo, error) {
-		if path != entry {
+		entry := writeFile(t, filepath.Join(daily, "nasguard"), "#!/bin/sh\ntrue\n", 0o755)
+		etcHabitat(t, daily)
+
+		origStat, origTimeout := cronEntryStatFn, cronProbeTimeout
+		answered := make(chan struct{})
+		t.Cleanup(func() {
+			// Wait for the worker before restoring the seam, but BOUNDED. A walk that never
+			// reaches the stalling path - an earlier step latching the deadline, say - would
+			// otherwise hang the whole suite here instead of failing this one test.
+			select {
+			case <-answered:
+			case <-time.After(5 * time.Second):
+			}
+			cronEntryStatFn, cronProbeTimeout = origStat, origTimeout
+		})
+		cronProbeTimeout = 50 * time.Millisecond
+		// The walk stats this entry once today. sync.Once keeps that an assumption rather than a
+		// requirement: a second stat would otherwise close a closed channel and panic the test
+		// binary, which reports as a crash somewhere else entirely.
+		var once sync.Once
+		cronEntryStatFn = func(path string) (os.FileInfo, error) {
+			if path != entry {
+				return origStat(path)
+			}
+			defer once.Do(func() { close(answered) })
+			time.Sleep(400 * time.Millisecond)
 			return origStat(path)
 		}
-		defer once.Do(func() { close(answered) })
-		time.Sleep(400 * time.Millisecond)
-		return origStat(path)
-	}
 
-	_, elapsed := walkWithin(t, scanAll, "on an entry whose stat answers only after the deadline")
-	// Well under the seam's 400ms sleep on purpose: the caller must have walked away
-	// BEFORE the worker answered, or there is no abandoned writer for -race to judge.
-	if elapsed > 200*time.Millisecond {
-		t.Errorf("the /etc walk took %s, want at most 200ms: the caller waited for the abandoned step instead of giving up on it, so nothing here can prove what that step is allowed to write", elapsed)
-	}
+		_, elapsed := walkWithin(t, scanAll, "on an entry whose stat answers only after the deadline")
+		// Well under the seam's 400ms sleep on purpose: the caller must have walked away
+		// BEFORE the worker answered, or there is no abandoned writer for -race to judge.
+		if elapsed > 200*time.Millisecond {
+			t.Errorf("the /etc walk took %s, want at most 200ms: the caller waited for the abandoned step instead of giving up on it, so nothing here can prove what that step is allowed to write", elapsed)
+		}
+	})
 }
 
 // fakeRegularInfo answers "an ordinary 40-byte file" for anything. It exists because the

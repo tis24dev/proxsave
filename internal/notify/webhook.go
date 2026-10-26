@@ -269,10 +269,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 	}
 
 	// Retry loop
-	maxRetries := w.config.MaxRetries
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
+	maxRetries := max(w.config.MaxRetries, 0)
 	retryDelay := w.config.RetryDelay
 	if retryDelay <= 0 {
 		retryDelay = 2
@@ -483,7 +480,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 }
 
 // buildPayload builds the webhook payload based on format
-func (w *WebhookNotifier) buildPayload(endpoint config.WebhookEndpoint, data *NotificationData) (interface{}, error) {
+func (w *WebhookNotifier) buildPayload(endpoint config.WebhookEndpoint, data *NotificationData) (any, error) {
 	format := strings.ToLower(endpoint.Format)
 	w.logger.Debug("buildPayload() called with format=%s", format)
 
@@ -521,7 +518,7 @@ func (w *WebhookNotifier) applyAuthentication(req *http.Request, auth config.Web
 		if auth.User == "" || auth.Pass == "" {
 			return fmt.Errorf("basic auth user or password is empty")
 		}
-		credentials := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", auth.User, auth.Pass)))
+		credentials := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "%s:%s", auth.User, auth.Pass))
 		req.Header.Set("Authorization", fmt.Sprintf("Basic %s", credentials))
 		w.logger.Debug("Basic auth applied for user: %s", auth.User)
 		return nil

@@ -1347,7 +1347,7 @@ func TestMaybeRepairNICNamesCLI_MoreThan32ConflictsTriggersTruncationBranch(t *t
 	sysClassNetPath = sysDir
 
 	var ifaceJSON []string
-	for i := 0; i < 33; i++ {
+	for i := range 33 {
 		oldName := fmt.Sprintf("eno%d", i)
 		newName := fmt.Sprintf("enp%d", i)
 		mac := fmt.Sprintf("aa:bb:cc:dd:ee:%02x", i)
@@ -1668,8 +1668,7 @@ func TestWaitForCommit_TimeoutShowsRollbackGuidance(t *testing.T) {
 	t.Run("timeout shows guidance", func(t *testing.T) {
 		ui := &fakeRestoreWorkflowUI{networkCommitErr: context.DeadlineExceeded}
 		err := makeFlow(ui).waitForCommit()
-		var notCommitted *NetworkApplyNotCommittedError
-		if !errors.As(err, &notCommitted) {
+		if _, ok := errors.AsType[*NetworkApplyNotCommittedError](err); !ok {
 			t.Fatalf("err=%v; want *NetworkApplyNotCommittedError", err)
 		}
 		if len(ui.shownMessages) == 0 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -454,4 +455,39 @@ func TestMergePBSDatastoreDefinitionsDisambiguatesCLIAndOverrideOutputKeyCollisi
 	if !strings.HasPrefix(overrideEntry.OutputKey, collidingKey+"_") {
 		t.Fatalf("override output key should extend colliding base key, got %+v", merged)
 	}
+}
+
+// The snapshot lists the captured files by relative path.
+func TestCaptureInventoryDirListsFilesByPath(t *testing.T) {
+	src := t.TempDir()
+	for _, rel := range []string{"b.conf", "a/z.conf", "a/b.conf"} {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(rel), 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	c := newTestCollector(t)
+	want := []string{"a/b.conf", "a/z.conf", "b.conf"}
+
+	snap := c.captureInventoryDir(context.Background(), src, "/etc/test")
+	if got := inventoryRelativePaths(snap); !slices.Equal(got, want) {
+		t.Fatalf("captureInventoryDir files = %v, want %v", got, want)
+	}
+
+	all := func(string, os.FileInfo) bool { return true }
+	snap = c.captureInventoryDirFiltered(context.Background(), src, "/etc/test", all)
+	if got := inventoryRelativePaths(snap); !slices.Equal(got, want) {
+		t.Fatalf("captureInventoryDirFiltered files = %v, want %v", got, want)
+	}
+}
+
+func inventoryRelativePaths(snap inventoryDirSnapshot) []string {
+	out := make([]string, 0, len(snap.Files))
+	for _, f := range snap.Files {
+		out = append(out, f.RelativePath)
+	}
+	return out
 }

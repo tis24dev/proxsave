@@ -221,7 +221,7 @@ type NotificationResult struct {
 	Method       string // "telegram", "email-relay", "email-pmf", "email-sendmail", or "*-fallback"
 	Error        error  // Original error (even if fallback succeeded)
 	Duration     time.Duration
-	Metadata     map[string]interface{} // Additional info (HTTP status, etc.)
+	Metadata     map[string]any // Additional info (HTTP status, etc.)
 }
 
 // Notifier is the interface that must be implemented by all notification providers
@@ -276,7 +276,7 @@ func GetStorageEmoji(status string) string {
 // and an empty free space. The text channels print "?" for it, the JSON payloads null.
 
 // countValue is a backup count in a JSON payload: null when it was never read.
-func countValue(count int) interface{} {
+func countValue(count int) any {
 	if count < 0 {
 		return nil
 	}
@@ -292,7 +292,7 @@ func freeText(free string) string {
 }
 
 // spaceValue is a space figure in a JSON payload: null when the space was never read.
-func spaceValue(free string, value interface{}) interface{} {
+func spaceValue(free string, value any) any {
 	if free == "" {
 		return nil
 	}

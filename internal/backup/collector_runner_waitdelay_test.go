@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +48,7 @@ func TestTheCollectorRunnerIsBoundedWhenAToolLeavesAChildHoldingStdout(t *testin
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		out, _, err := runCommandCaptured(context.Background(), "which", "thing")
+		out, _, err := runCommandCaptured(t.Context(), "which", "thing")
 		done <- result{out, err}
 	}()
 
