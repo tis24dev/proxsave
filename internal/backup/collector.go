@@ -914,7 +914,52 @@ func (c *Collector) copySymlinkFile(src, dest string, info os.FileInfo) error {
 	return nil
 }
 
+// stagedSymlinkAncestor returns, as a host path, the first directory between the
+// staging tree and dir that the staging tree holds as a symlink leading out of it:
+// its target, resolved the way the kernel follows it (a chain of links included), is
+// outside the staging tree: /opt/app -> /data/app, or a relative link climbing above
+// it or pointing at such a link. A copy below it would follow the link into the live
+// host, where it truncated the file it was reading and gave its directory the
+// symlink's mode. A link that resolves inside the staging tree is followed as before.
+func (c *Collector) stagedSymlinkAncestor(dir string) (string, bool) {
+	if c.tempDir == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(c.tempDir, dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	realTemp, err := filepath.EvalSymlinks(c.tempDir)
+	if err != nil {
+		return "", false
+	}
+	cur := c.tempDir
+	for part := range strings.SplitSeq(rel, string(os.PathSeparator)) {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			return "", false
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		link := "/" + strings.TrimPrefix(cur, c.tempDir+string(os.PathSeparator))
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err != nil {
+			// A dangling or looping link: nothing below it can be written safely.
+			return link, true
+		}
+		if r, err := filepath.Rel(realTemp, resolved); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(os.PathSeparator)) {
+			return link, true
+		}
+	}
+	return "", false
+}
+
 func (c *Collector) prepareCopyDestination(src, dest string) error {
+	if link, ok := c.stagedSymlinkAncestor(filepath.Dir(dest)); ok {
+		return fmt.Errorf("it is under %s, a symlink in the backup", link)
+	}
 	if err := c.ensureDir(filepath.Dir(dest)); err != nil {
 		return err
 	}
@@ -1046,6 +1091,12 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 		c.logger.Debug("[DRY RUN] Would copy directory: %s -> %s", src, dest)
 		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusCollected})
 		return nil
+	}
+
+	if link, ok := c.stagedSymlinkAncestor(dest); ok {
+		err := fmt.Errorf("it is under %s, a symlink in the backup", link)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
+		return err
 	}
 
 	// Suppress per-file recording during the walk so the manifest stays at target
