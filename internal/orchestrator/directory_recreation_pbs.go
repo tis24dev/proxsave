@@ -125,6 +125,10 @@ func shouldSkipUnsafePBSDatastore(preflight pbsDatastorePreflight, logger *loggi
 	if shouldSkipExistingDatastoreData(preflight, logger) {
 		return true
 	}
+	if preflight.hasData {
+		// A chunk store left incomplete, which initializePBSDatastore completes.
+		return false
+	}
 	return shouldSkipUnexpectedDatastoreEntries(preflight.basePath, logger)
 }
 
@@ -151,6 +155,15 @@ func shouldSkipUnknownDatastoreData(preflight pbsDatastorePreflight, logger *log
 
 func shouldSkipExistingDatastoreData(preflight pbsDatastorePreflight, logger *logging.Logger) bool {
 	if !preflight.hasData {
+		return false
+	}
+	// PBS writes .lock when it creates a chunk store, and ProxSave last, after the
+	// hash directories: entries in .chunks without .lock are a creation that
+	// stopped half-way (disk or inodes exhausted, the run killed). The missing
+	// directories and .lock are created; nothing there is removed.
+	if _, err := os.Lstat(filepath.Join(preflight.basePath, ".lock")); os.IsNotExist(err) {
+		logger.Debug("PBS datastore preflight: datastore=%s .chunks has entries, .lock missing action=complete", preflight.datastoreName)
+		logger.Info("Datastore %s initialization is incomplete, its missing directories are created", preflight.datastoreName)
 		return false
 	}
 	if warn := validatePBSDatastoreReadOnly(preflight.basePath); warn != "" {

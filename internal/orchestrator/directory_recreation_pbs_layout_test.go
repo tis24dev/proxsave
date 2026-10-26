@@ -251,3 +251,43 @@ func TestCreatePBSDatastoreStructureLeavesAnInitializedDatastore(t *testing.T) {
 		t.Fatalf(".chunks entries=%d err=%v; nothing may be added", len(entries), err)
 	}
 }
+
+// A chunk store whose creation stopped half-way (disk or inodes exhausted, the
+// run killed) holds some hash directories and no .lock, which PBS always writes:
+// the next restore completes it instead of calling it initialized.
+func TestCreatePBSDatastoreStructureCompletesAHalfBuiltChunkStore(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "ds1")
+	for i := range pbsChunkStoreDirCount / 2 {
+		if err := os.MkdirAll(filepath.Join(base, ".chunks", pbsChunkStoreDirName(i)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var buf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&buf)
+	changed, err := createPBSDatastoreStructure(base, "ds1", logger)
+	if err != nil || !changed {
+		t.Fatalf("createPBSDatastoreStructure changed=%v err=%v; want completed", changed, err)
+	}
+	var visible []string
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		line = regexp.MustCompile(`^\[[^\]]*\] `).ReplaceAllString(line, "")
+		if !strings.HasPrefix(line, "DEBUG") {
+			visible = append(visible, line)
+		}
+	}
+	want := []string{"INFO     Datastore ds1 initialization is incomplete, its missing directories are created"}
+	if strings.Join(visible, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("visible lines\n--- got ---\n%s\n--- want ---\n%s", strings.Join(visible, "\n"), strings.Join(want, "\n"))
+	}
+	if !strings.Contains(buf.String(), "DEBUG    PBS datastore preflight: datastore=ds1 .chunks has entries, .lock missing action=complete") {
+		t.Fatalf("missing DEBUG evidence:\n%s", buf.String())
+	}
+	entries, err := os.ReadDir(filepath.Join(base, ".chunks"))
+	if err != nil || len(entries) != pbsChunkStoreDirCount {
+		t.Fatalf(".chunks entries=%d err=%v; want %d", len(entries), err, pbsChunkStoreDirCount)
+	}
+	if _, err := os.Stat(filepath.Join(base, ".lock")); err != nil {
+		t.Fatalf(".lock: %v", err)
+	}
+}
