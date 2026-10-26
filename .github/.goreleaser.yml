@@ -71,6 +71,13 @@ sboms:
     documents:
       - "{{ .ArtifactName }}.sbom.cdx.json"
     cmd: syft
+    # syft 1.55 (1.19 did not) lists the scanned binary as a "file" component named after
+    # the random temp directory it extracts the archive into, so every SBOM carried a
+    # different /tmp/syft-archive-contents-<n>/proxsave entry. Selecting no file metadata
+    # keeps the SBOM to the Go modules, as it was up to v0.44.1. Setting env also stops
+    # GoReleaser from adding its default SYFT_FILE_METADATA_CATALOGER_ENABLED=true.
+    env:
+      - SYFT_FILE_METADATA_SELECTION=none
     args:
       - "$artifact"
       - "--output"
