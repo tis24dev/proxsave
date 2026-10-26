@@ -15,6 +15,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/health"
+	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -1521,8 +1522,8 @@ func TestAFailedMarkerRemovalIsRetriedByALaterRun(t *testing.T) {
 	}
 }
 
-// TestAStragglingMarkerRemovalCannotEatAFreshAbandonMarker covers the one interleaving abandonMu
-// cannot close, on the one host class this path exists for.
+// TestAStragglingMarkerRemovalRestoresTheFreshAbandonMarker covers the one interleaving
+// abandonMu cannot close, on the one host class this path exists for.
 //
 // clearAbandonMarker unlinks inside runWithin, and runWithin gives up WAITING without cancelling
 // anything -- nothing in userspace can recall a syscall the kernel is holding. On a wedged
@@ -1530,7 +1531,11 @@ func TestAFailedMarkerRemovalIsRetriedByALaterRun(t *testing.T) {
 // it, latches, and writes the marker for a NEW orphan, and the straggler finally lands on top of
 // that fresh file. The successor daemon inherits nothing and beats green over a live orphan --
 // the exact outcome the barrier was chosen to prevent, reached silently.
-func TestAStragglingMarkerRemovalCannotEatAFreshAbandonMarker(t *testing.T) {
+//
+// The straggler restores the marker and then logs that it did, on its own goroutine. The test
+// waits for that log line, not only for the file, so the goroutine has finished with the global
+// logger before the test returns: a later test that swaps the default logger cannot race it.
+func TestAStragglingMarkerRemovalRestoresTheFreshAbandonMarker(t *testing.T) {
 	base := t.TempDir()
 	// The precondition: this process inherited a marker, so its clear paths are armed.
 	corruptMarker(t, base)
@@ -1540,6 +1545,13 @@ func TestAStragglingMarkerRemovalCannotEatAFreshAbandonMarker(t *testing.T) {
 	d.cfg.BaseDir = base
 	d.cfg.HealthcheckMode = "self"
 	d.aliveInterlockWaitOverride = 100 * time.Millisecond
+
+	restored := &logLineWatch{}
+	origLog := logging.GetDefaultLogger()
+	t.Cleanup(func() { logging.SetDefaultLogger(origLog) })
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(restored)
+	logging.SetDefaultLogger(logger)
 
 	entered, release, unlinked := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	d.clearAbandonMarkerIO = func() error {
@@ -1567,21 +1579,63 @@ func TestAStragglingMarkerRemovalCannotEatAFreshAbandonMarker(t *testing.T) {
 	if err != nil || fresh == nil || fresh.PID <= 0 {
 		t.Fatalf("abandonChild must leave a marker naming the new orphan (rec=%+v err=%v)", fresh, err)
 	}
+	want := "daemon: an abandoned-child marker removal completed after the marker for pid=" +
+		strconv.Itoa(fresh.PID) +
+		" had been written; the marker has been restored so the next daemon still inherits the degrade"
+	restored.expect(want)
 
 	close(release) // the parked unlink finally lands, on top of the fresh marker
 	<-unlinked
 
-	deadline := time.Now().Add(5 * time.Second)
-	var rec *health.AbandonRecord
-	for time.Now().Before(deadline) {
-		if rec, err = health.ReadAbandon(base); err == nil && rec != nil && rec.PID == fresh.PID {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-restored.seen:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the straggling removal never reported restoring the marker for pid=%d; log so far:\n%s", fresh.PID, restored.String())
 	}
-	if rec == nil || rec.PID != fresh.PID {
-		t.Fatalf("a removal that outlived the barrier deleted the marker written for orphan pid=%d (rec=%+v); the next daemon comes up green over a live orphan", fresh.PID, rec)
+	rec, err := health.ReadAbandon(base)
+	if err != nil || rec == nil || rec.PID != fresh.PID {
+		t.Fatalf("a removal that outlived the barrier deleted the marker written for orphan pid=%d (rec=%+v err=%v); the next daemon comes up green over a live orphan", fresh.PID, rec, err)
 	}
+}
+
+// logLineWatch is a log sink that a goroutine the test does not own may write to: it guards the
+// buffer with a mutex and closes seen once the expected line has been written.
+type logLineWatch struct {
+	mu   sync.Mutex
+	buf  strings.Builder
+	want string
+	seen chan struct{}
+	once sync.Once
+}
+
+// expect arms the watch for line; a line already written also counts.
+func (w *logLineWatch) expect(line string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.want = line
+	w.seen = make(chan struct{})
+	w.check()
+}
+
+func (w *logLineWatch) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	w.check()
+	return n, err
+}
+
+// check closes seen when the armed line is in the buffer; the caller holds mu.
+func (w *logLineWatch) check() {
+	if w.seen != nil && w.want != "" && strings.Contains(w.buf.String(), w.want) {
+		w.once.Do(func() { close(w.seen) })
+	}
+}
+
+func (w *logLineWatch) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
 }
 
 // TestAFreshAbandonMarkerSurvivesAStandaloneHandoff pins the barrier that keeps the marker
