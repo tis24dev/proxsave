@@ -58,3 +58,46 @@ func TestStorageMountsDFIsBoundedByTheFSIOTimeout(t *testing.T) {
 		t.Fatalf("mount.txt = %q, %v: the mount probe must run after the df timeout", data, err)
 	}
 }
+
+// A df that exits in the instant its bound fires comes back as the deadline itself,
+// not as a killed process: the brick still goes on to the mount table. Only the run's
+// own cancellation stops it.
+func TestStorageMountsDFDeadlineErrorStillCollectsTheMountTable(t *testing.T) {
+	for _, cancelRun := range []bool{false, true} {
+		cfg := GetDefaultCollectorConfig()
+		cfg.FsIoTimeoutSeconds = 1
+		staging := t.TempDir()
+		run := func(ctx context.Context, name string, _ ...string) ([]byte, []byte, error) {
+			if name == "df" {
+				<-ctx.Done()
+				return nil, nil, ctx.Err()
+			}
+			return []byte("mounted\n"), nil, nil
+		}
+		c := NewCollectorWithDeps(logging.New(types.LogLevelError, false), cfg, staging, types.ProxmoxVE, false, CollectorDeps{
+			LookPath:                    func(string) (string, error) { return "/usr/bin/x", nil },
+			RunCommandCaptured:          run,
+			DetectUnprivilegedContainer: func() (bool, string) { return false, "" },
+		})
+		dir := filepath.Join(staging, "commands", "system")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		if cancelRun {
+			time.AfterFunc(200*time.Millisecond, cancel)
+		}
+		err := c.collectSystemStorageMountsRuntime(ctx, dir)
+		cancel()
+		_, mountErr := os.Stat(filepath.Join(dir, "mount.txt"))
+		if cancelRun {
+			if err == nil || mountErr == nil {
+				t.Fatalf("cancelled run: err=%v mount.txt written=%v, want the cancellation and no mount table", err, mountErr == nil)
+			}
+			continue
+		}
+		if err != nil || mountErr != nil {
+			t.Fatalf("df deadline: err=%v mount.txt err=%v, want nil and the mount table", err, mountErr)
+		}
+	}
+}

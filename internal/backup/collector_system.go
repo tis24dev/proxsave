@@ -841,7 +841,14 @@ func (c *Collector) collectSystemStorageMountsRuntime(ctx context.Context, comma
 		filepath.Join(commandsDir, "df.txt"),
 		"Disk usage",
 		false); err != nil {
-		return err
+		// A df killed by its bound fails as a process ("signal: killed"), a non-critical
+		// failure; one that exits in the instant the bound fires comes back as the
+		// deadline itself. Only the run's own cancellation stops the brick: the mount
+		// table is still collected.
+		if ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		c.logger.Debug("Disk usage: df -h stopped by FS_IO_TIMEOUT (%v); collecting the mount table", err)
 	}
 
 	if err := c.safeCmdOutput(ctx,
