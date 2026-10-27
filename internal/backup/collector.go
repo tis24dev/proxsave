@@ -53,9 +53,11 @@ type Collector struct {
 	deps             CollectorDeps
 	unprivilegedOnce sync.Once
 	unprivilegedCtx  unprivilegedContainerContext
-	// realStaging is tempDir with its symlinks resolved (stagingRoot).
+	// realStaging is tempDir with its symlinks resolved, stagingInfo its stat
+	// (stagingRoot).
 	realStagingOnce sync.Once
 	realStaging     string
+	stagingInfo     os.FileInfo
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
@@ -1103,8 +1105,25 @@ func (c *Collector) stagingRoot() string {
 		if real, err := filepath.EvalSymlinks(c.tempDir); err == nil {
 			c.realStaging = real
 		}
+		if info, err := os.Stat(c.tempDir); err == nil {
+			c.stagingInfo = info
+		}
 	})
 	return c.realStaging
+}
+
+// isStagingDirInfo reports whether a directory met while copying CUSTOM_BACKUP_PATHS
+// is the staging tree itself, whatever path reached it: through a symlink in the
+// middle of the source path (/scratch/proxsave with /scratch -> /tmp), /proc/self/root
+// or a bind mount, the path text has nothing in common with tempDir and
+// isWithinStagingDir cannot see it, so the staging tree was copied into itself until
+// the path length limit.
+func (c *Collector) isStagingDirInfo(info os.FileInfo) bool {
+	if !c.collectingCustomPaths || info == nil || !info.IsDir() || c.tempDir == "" {
+		return false
+	}
+	c.stagingRoot()
+	return c.stagingInfo != nil && os.SameFile(info, c.stagingInfo)
 }
 
 func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description string) error {
@@ -1169,7 +1188,7 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 			// Never descend into the staging workspace: a broad source (e.g. a custom
 			// path of "/" or "/tmp") would otherwise copy the in-progress archive into
 			// itself (#56).
-			if c.isWithinStagingDir(path) {
+			if c.isWithinStagingDir(path) || c.isStagingDirInfo(info) {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
