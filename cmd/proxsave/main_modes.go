@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -518,7 +519,10 @@ func takeInstallConfigSnapshot(configPath string) *installConfigSnapshot {
 }
 
 // restore puts backup.env back as the snapshot found it: removed when the install
-// created it, rewritten when the install changed it.
+// created it, rewritten when the install changed it. The rewrite goes through a temp
+// file renamed over it, like the wizard's own write (installer.WriteConfigFileAtomic):
+// written in place, a failure partway left a truncated file and the original only in
+// memory.
 func (s *installConfigSnapshot) restore(bootstrap *logging.BootstrapLogger) {
 	if s == nil {
 		return
@@ -543,9 +547,16 @@ func (s *installConfigSnapshot) restore(bootstrap *logging.BootstrapLogger) {
 		return
 	}
 	if current, err := root.ReadFile(name); err == nil && bytes.Equal(current, s.data) {
+		// The wizard writes through a 0600 temp file, so an unchanged content can
+		// still come back with another mode.
+		if info, err := root.Stat(name); err == nil && info.Mode().Perm() != s.mode {
+			if err := root.Chmod(name, s.mode); err != nil {
+				debug("Install aborted: cannot restore the mode of %s: %v", s.path, err)
+			}
+		}
 		return
 	}
-	if err := root.WriteFile(name, s.data, s.mode); err != nil {
+	if err := installer.WriteConfigFileAtomic(s.path, s.path+".tmp.restore", string(s.data)); err != nil {
 		debug("Install aborted: cannot restore %s: %v", s.path, err)
 		return
 	}
