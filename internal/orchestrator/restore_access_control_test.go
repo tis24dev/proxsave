@@ -297,7 +297,7 @@ func TestApplyPBSAccessControlFromStage_WritesFilesWithPermissions(t *testing.T)
 	stageRoot := "/stage"
 	userCfg := "user: root@pam\n  enable 1\n"
 	domainsCfg := "pam: pam\n  comment builtin\n"
-	aclCfg := "acl: 1\n  path /\n  users root@pam\n  roles Admin\n"
+	aclCfg := "acl:1:/:root@pam:Admin\n"
 
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/user.cfg", []byte(userCfg), 0o640); err != nil {
 		t.Fatalf("write staged user.cfg: %v", err)

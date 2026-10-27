@@ -170,6 +170,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		t.Fatalf("unknown format should keep previous acl content, got %q", string(kept))
 	}
 
+	// PBS has no section format for acl.cfg: one is left out like any unknown format.
 	sectionACL := strings.Join([]string{
 		"acl: backup-acl",
 		"  path /",
@@ -180,15 +181,8 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 	if err := applyPBSACLFromStage(logger, sectionACL, nil); err != nil {
 		t.Fatalf("apply section ACL format: %v", err)
 	}
-	gotSection, err := fakeFS.ReadFile(pbsACLCfgPath)
-	if err != nil {
-		t.Fatalf("read section ACL output: %v", err)
-	}
-	if !strings.Contains(string(gotSection), "users alice@pbs") {
-		t.Fatalf("expected root user filtered from staged users, got:\n%s", string(gotSection))
-	}
-	if !strings.Contains(string(gotSection), "acl: proxsave-root-admin") {
-		t.Fatalf("expected root admin safety ACL injected, got:\n%s", string(gotSection))
+	if kept, _ := fakeFS.ReadFile(pbsACLCfgPath); string(kept) != "keep-me\n" {
+		t.Fatalf("a section-format acl.cfg must be left out, got %q", string(kept))
 	}
 
 	lineACL := strings.Join([]string{
@@ -252,56 +246,6 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		t.Fatalf("root admin line should not be duplicated, got:\n%s", string(withRoot))
 	}
 
-	entries := []proxmoxNotificationEntry{
-		{Key: "users", Value: "old"},
-		{Key: "users", Value: "duplicate"},
-		{Key: "roles", Value: "Admin"},
-	}
-	replaced := setSectionEntryValue(entries, "users", "alice@pbs")
-	if findSectionEntryValue(replaced, "users") != "alice@pbs" {
-		t.Fatalf("setSectionEntryValue should replace first matching key")
-	}
-	countUsers := 0
-	for _, e := range replaced {
-		if strings.TrimSpace(e.Key) == "users" {
-			countUsers++
-		}
-	}
-	if countUsers != 1 {
-		t.Fatalf("setSectionEntryValue should collapse duplicate keys, count=%d", countUsers)
-	}
-	appended := setSectionEntryValue(replaced, "path", "/")
-	if findSectionEntryValue(appended, "path") != "/" {
-		t.Fatalf("setSectionEntryValue should append missing key")
-	}
-	unchanged := setSectionEntryValue(replaced, "   ", "ignored")
-	if len(unchanged) != len(replaced) {
-		t.Fatalf("empty key should not modify entries")
-	}
-
-	sectionsWithRoot := []proxmoxNotificationSection{
-		{
-			Type: "acl",
-			Name: "rule /",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "users", Value: "root@pam"},
-				{Key: "roles", Value: "Admin"},
-			},
-		},
-	}
-	if !hasPBSRootAdminOnRootSectionFormat(sectionsWithRoot) {
-		t.Fatalf("expected root Admin ACL on / to be detected")
-	}
-	if hasPBSRootAdminOnRootSectionFormat([]proxmoxNotificationSection{{Type: "acl", Name: "rule /vms"}}) {
-		t.Fatalf("unexpected root Admin ACL detection")
-	}
-
-	if got := aclPathFromSectionName("rule-name /pool/one extra"); got != "/pool/one" {
-		t.Fatalf("aclPathFromSectionName=%q want %q", got, "/pool/one")
-	}
-	if got := aclPathFromSectionName("rule-name-without-path"); got != "" {
-		t.Fatalf("aclPathFromSectionName=%q want empty", got)
-	}
 }
 
 func TestPBSSecretFilesFromStage_Branches(t *testing.T) {
@@ -955,13 +899,7 @@ func TestApplyPBSAccessControlFromStage_WriteErrorBranches(t *testing.T) {
 		t.Cleanup(func() { _ = os.RemoveAll(base.Root) })
 
 		stageRoot := "/stage"
-		aclCfg := strings.Join([]string{
-			"acl: staged-acl",
-			"  path /",
-			"  users alice@pbs",
-			"  roles Admin",
-			"",
-		}, "\n")
+		aclCfg := "acl:1:/:alice@pbs:Admin\n"
 		if err := base.WriteFile(stageRoot+"/etc/proxmox-backup/acl.cfg", []byte(aclCfg), 0o640); err != nil {
 			t.Fatalf("write staged acl.cfg: %v", err)
 		}

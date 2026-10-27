@@ -305,48 +305,14 @@ func applyPBSACLFromStage(logger *logging.Logger, stagedACL string, hostRootToke
 		return removeIfExists(pbsACLCfgPath)
 	}
 
-	// PBS supports two ACL formats across versions:
-	// - header-style (section + indented keys)
-	// - colon-delimited line format (acl:<propagate>:<path>:<userlist>:<rolelist>)
-	if pbsConfigHasHeader(raw) {
-		return applyPBSACLSectionFormat(raw)
-	}
+	// PBS writes acl.cfg in one format only, acl:<propagate>:<path>:<userlist>:<roles>
+	// (pbs-config/src/acl.rs, the same since 0.8), and refuses to load a file with any
+	// other line, so a staged acl.cfg in another format is left out.
 	if isPBSACLLineFormat(raw) {
 		return applyPBSACLLineFormat(raw, hostRootTokenACL)
 	}
 
 	logger.Warning("PBS access control: staged acl.cfg has unknown format; skipping apply")
-	return nil
-}
-
-func applyPBSACLSectionFormat(raw string) error {
-	backupSections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return fmt.Errorf("parse staged acl.cfg: %w", err)
-	}
-
-	var merged []proxmoxNotificationSection
-	for _, s := range backupSections {
-		if !strings.EqualFold(strings.TrimSpace(s.Type), "acl") {
-			merged = append(merged, s)
-			continue
-		}
-		users := findSectionEntryValue(s.Entries, "users")
-		filtered, ok := filterPBSACLUsers(users)
-		if !ok {
-			continue
-		}
-		s.Entries = setSectionEntryValue(s.Entries, "users", filtered)
-		merged = append(merged, s)
-	}
-
-	if !hasPBSRootAdminOnRootSectionFormat(merged) {
-		merged = append(merged, proxsavePBSRootAdminACLSection())
-	}
-
-	if err := writeFileAtomic(pbsACLCfgPath, []byte(renderProxmoxConfig(merged)), 0o640); err != nil {
-		return fmt.Errorf("write %s: %w", pbsACLCfgPath, err)
-	}
 	return nil
 }
 
@@ -495,64 +461,6 @@ func filterPBSACLUsers(raw string) (string, bool) {
 		return "", false
 	}
 	return strings.Join(kept, ","), true
-}
-
-func setSectionEntryValue(entries []proxmoxNotificationEntry, key, value string) []proxmoxNotificationEntry {
-	match := strings.TrimSpace(key)
-	if match == "" {
-		return entries
-	}
-	out := make([]proxmoxNotificationEntry, 0, len(entries)+1)
-	found := false
-	for _, e := range entries {
-		if strings.TrimSpace(e.Key) == match {
-			if !found {
-				out = append(out, proxmoxNotificationEntry{Key: match, Value: strings.TrimSpace(value)})
-				found = true
-			}
-			continue
-		}
-		out = append(out, e)
-	}
-	if !found {
-		out = append(out, proxmoxNotificationEntry{Key: match, Value: strings.TrimSpace(value)})
-	}
-	return out
-}
-
-func hasPBSRootAdminOnRootSectionFormat(sections []proxmoxNotificationSection) bool {
-	for _, s := range sections {
-		if strings.TrimSpace(s.Type) != "acl" {
-			continue
-		}
-		path := strings.TrimSpace(findSectionEntryValue(s.Entries, "path"))
-		if path == "" {
-			path = aclPathFromSectionName(s.Name)
-		}
-		if path != "/" {
-			continue
-		}
-
-		users := strings.TrimSpace(findSectionEntryValue(s.Entries, "users"))
-		roles := strings.TrimSpace(findSectionEntryValue(s.Entries, "roles"))
-		if listContains(users, "root@pam") && listContains(roles, "Admin") {
-			return true
-		}
-	}
-	return false
-}
-
-func proxsavePBSRootAdminACLSection() proxmoxNotificationSection {
-	return proxmoxNotificationSection{
-		Type: "acl",
-		Name: "proxsave-root-admin",
-		Entries: []proxmoxNotificationEntry{
-			{Key: "path", Value: "/"},
-			{Key: "users", Value: "root@pam"},
-			{Key: "roles", Value: "Admin"},
-			{Key: "propagate", Value: "1"},
-		},
-	}
 }
 
 func applyPBSShadowJSONFromStage(logger *logging.Logger, stageRoot string) error {
@@ -1119,15 +1027,6 @@ func listContains(raw, item string) bool {
 		}
 	}
 	return false
-}
-
-func aclPathFromSectionName(name string) string {
-	for field := range strings.FieldsSeq(strings.TrimSpace(name)) {
-		if strings.HasPrefix(field, "/") {
-			return field
-		}
-	}
-	return ""
 }
 
 func extractWebAuthnUsersFromPBSTFAUsers(users map[string]json.RawMessage) []string {
