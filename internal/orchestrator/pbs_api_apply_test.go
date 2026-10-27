@@ -331,7 +331,7 @@ func TestPBSAPIApply_StrictListCommandErrors(t *testing.T) {
 			name:    "sync",
 			relPath: "etc/proxmox-backup/sync.cfg",
 			content: "sync-job: job1\n    remote r1\n    store ds1\n",
-			listCmd: "proxmox-backup-manager sync-job list --output-format=json",
+			listCmd: "proxmox-backup-manager sync-job list --output-format=json --sync-direction all",
 			apply:   applyPBSSyncCfgViaAPI,
 		},
 		{
@@ -400,7 +400,7 @@ func TestPBSAPIApply_StrictListParseErrors(t *testing.T) {
 			name:          "sync",
 			relPath:       "etc/proxmox-backup/sync.cfg",
 			content:       "sync-job: job1\n    remote r1\n    store ds1\n",
-			listCmd:       "proxmox-backup-manager sync-job list --output-format=json",
+			listCmd:       "proxmox-backup-manager sync-job list --output-format=json --sync-direction all",
 			wantErrPrefix: "parse sync-job list:",
 			apply:         applyPBSSyncCfgViaAPI,
 		},
@@ -1260,7 +1260,7 @@ func TestApplyPBSSyncCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 	)
 
 	runner.outputs = map[string][]byte{
-		"proxmox-backup-manager sync-job list --output-format=json": []byte(`{"data":[{"id":"job1"},{"id":"old"}]}`),
+		"proxmox-backup-manager sync-job list --output-format=json --sync-direction all": []byte(`{"data":[{"id":"job1"},{"id":"old"}]}`),
 	}
 	runner.errs = map[string]error{
 		"proxmox-backup-manager sync-job remove old":                          errors.New("cannot remove old"),
@@ -1272,7 +1272,7 @@ func TestApplyPBSSyncCfgViaAPI_StrictCleanupAndFallbackUpdate(t *testing.T) {
 	}
 
 	want := []string{
-		"proxmox-backup-manager sync-job list --output-format=json",
+		"proxmox-backup-manager sync-job list --output-format=json --sync-direction all",
 		"proxmox-backup-manager sync-job remove old",
 		"proxmox-backup-manager sync-job create job1 --remote r1 --store ds1",
 		"proxmox-backup-manager sync-job update job1 --remote r1 --store ds1",

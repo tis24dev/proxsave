@@ -270,6 +270,9 @@ type pbsSectionCfg struct {
 	// builtin are the objects PBS provides itself: never applied, removed,
 	// counted or named.
 	builtin []string
+	// listFlags are added to the list of the current objects: "sync-job list"
+	// returns only pull jobs unless asked for every direction.
+	listFlags []string
 }
 
 func (c pbsSectionCfg) isBuiltin(id string) bool {
@@ -652,7 +655,7 @@ func (r *pbsSectionRestore) withoutBuiltin(ids []string) []string {
 // that kept them from being read.
 func (r *pbsSectionRestore) readCurrent() ([]string, error) {
 	kind := strings.Join(r.cfg.command, " ")
-	listArgs := r.commandArgs("list", "--output-format=json")
+	listArgs := r.commandArgs(append([]string{"list", "--output-format=json"}, r.cfg.listFlags...)...)
 	r.debug("reading current %s cmd=%q", r.keys(), "proxmox-backup-manager "+strings.Join(listArgs, " "))
 	out, err := runPBSManager(r.ctx, listArgs...)
 	if err != nil {
@@ -1817,6 +1820,9 @@ func pbsSyncSectionCfg() pbsSectionCfg {
 		command:  []string{"sync-job"},
 		listKeys: []string{"id", "name"},
 		labels:   pbsSyncJobLabels,
+		// Without it the list holds pull jobs only (default=pull, PBS 4.2.8 usage),
+		// and a push job the backup does not have survived a Clean restore.
+		listFlags: []string{"--sync-direction", "all"},
 	}
 }
 
