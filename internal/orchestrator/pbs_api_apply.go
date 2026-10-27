@@ -1239,11 +1239,33 @@ func (r *pbsDatastoreRestore) removeStale(name string) error {
 // PBS, keeping its path. createErr is the refused create that led here, if any:
 // when the update is refused too, the event carries the create's error. It
 // returns only a cancellation.
+// pbsDatastoreCreateOnlyFlags are the datastore settings "datastore create" takes and
+// "datastore update" refuses (PBS 4.2.8 usage: the backend of an S3 datastore, the
+// device of a removable one, are fixed once the datastore exists).
+var pbsDatastoreCreateOnlyFlags = []string{"--backend", "--backing-device"}
+
+// withoutPBSDatastoreCreateOnlyFlags drops those settings, in both the "--key value"
+// and the "--key=value" form, from the flags of an update.
+func withoutPBSDatastoreCreateOnlyFlags(flags []string) []string {
+	out := make([]string, 0, len(flags))
+	for i := 0; i < len(flags); i++ {
+		name, _, joined := strings.Cut(flags[i], "=")
+		if slices.Contains(pbsDatastoreCreateOnlyFlags, name) {
+			if !joined {
+				i++
+			}
+			continue
+		}
+		out = append(out, flags[i])
+	}
+	return out
+}
+
 func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent func(), createErr error) error {
 	if ctxErr := r.ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	updateArgs := append([]string{"datastore", "update", name}, flags...)
+	updateArgs := append([]string{"datastore", "update", name}, withoutPBSDatastoreCreateOnlyFlags(flags)...)
 	if _, err := runPBSManager(r.ctx, updateArgs...); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
 			return ctxErr

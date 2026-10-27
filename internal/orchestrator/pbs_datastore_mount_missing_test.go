@@ -46,3 +46,13 @@ func TestApplyPBSDatastoreCfgViaAPI_DoesNotCreateWhereTheMountIsMissing(t *testi
 		}
 	}
 }
+
+// "datastore update" refuses --backend and --backing-device (fixed once the datastore
+// exists): the update of an S3 or removable datastore leaves them out and restores
+// the other settings.
+func TestPBSDatastoreUpdateLeavesOutTheCreateOnlySettings(t *testing.T) {
+	got := withoutPBSDatastoreCreateOnlyFlags([]string{"--backend", "type=s3,client=e1,bucket=b", "--gc-schedule", "daily", "--backing-device=uuid-1", "--comment", "c"})
+	if strings.Join(got, " ") != "--gc-schedule daily --comment c" {
+		t.Fatalf("update flags = %q", got)
+	}
+}
