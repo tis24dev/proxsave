@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2740,8 +2741,11 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 		totalBackups, maxBackups, toDelete)
 	logRetentionScale(c.logger, totalBackups, maxBackups)
 
-	// Collect oldest backups (already sorted newest first)
-	oldBackups := backups[maxBackups:]
+	// The expired backups, oldest first (the list is sorted newest first), as the
+	// folder destinations delete them: a pass stopped midway has removed the oldest
+	// and kept the newer ones.
+	oldBackups := slices.Clone(backups[maxBackups:])
+	slices.Reverse(oldBackups)
 
 	// Delete in batches to avoid API rate limits
 	return c.deleteBatched(ctx, oldBackups, backups)
