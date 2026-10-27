@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -172,7 +173,30 @@ func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
 	if err := unmountEtcPVE(w.ctx, w.logger); err != nil {
 		w.logger.Warning("Could not unmount /etc/pve: %v", err)
 	}
+	removePVEClusterDBSidecars(w.logger)
 	return w.restartPVEClusterServicesCleanup(), nil
+}
+
+// pveClusterDBSidecars are the SQLite WAL files of the cluster database. pmxcfs runs
+// config.db in WAL mode; a WAL left by a pmxcfs that did not close the database is
+// replayed by SQLite onto whatever config.db sits beside it at the next open, so it
+// would overlay pages of the old database on the one the restore writes. The archive
+// never holds them (the collector ships a .backup snapshot), and the safety backup
+// taken before keeps the live ones.
+var pveClusterDBSidecars = []string{"/var/lib/pve-cluster/config.db-wal", "/var/lib/pve-cluster/config.db-shm"}
+
+// removePVEClusterDBSidecars removes them once pve-cluster is stopped, before the
+// archive's config.db is written.
+func removePVEClusterDBSidecars(logger *logging.Logger) {
+	for _, path := range pveClusterDBSidecars {
+		err := restoreFS.Remove(path)
+		switch {
+		case err == nil:
+			logger.Debug("Cluster database restore: removed %s, the old database's WAL file", path)
+		case !errors.Is(err, os.ErrNotExist):
+			logger.Debug("Cluster database restore: cannot remove %s: %v", path, err)
+		}
+	}
 }
 
 // restartPVEClusterServicesCleanup is the deferred restart. It only does work when
