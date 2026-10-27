@@ -385,13 +385,8 @@ func TestRunSafeClusterApply_AppliesPoolsFromUserCfg(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(userCfgPath), 0o755); err != nil {
 		t.Fatalf("mkdir user.cfg dir: %v", err)
 	}
-	userCfg := strings.Join([]string{
-		"pool: dev",
-		"    comment Dev pool",
-		"    vms 100,101",
-		"    storage local,backup_ext",
-		"",
-	}, "\n")
+	// The format PVE writes (measured on PVE 9.1.9): pool:<id>:<comment>:<vms>:<storage>:
+	userCfg := "user:root@pam:1:0::::::\n\npool:dev:Dev pool:100,101:local,backup_ext:\n"
 	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o640); err != nil {
 		t.Fatalf("write user.cfg: %v", err)
 	}
