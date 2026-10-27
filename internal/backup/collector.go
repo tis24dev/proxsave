@@ -1182,6 +1182,14 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 			}
 
 			if err != nil {
+				// An entry listed by its directory and gone before its lstat (on
+				// /etc/pve, HA and vzdump write through temp siblings that live for
+				// milliseconds) stopped the whole copy, and for /etc/pve the backup.
+				// It is skipped; any other failure still ends the copy.
+				if errors.Is(err, os.ErrNotExist) && path != src {
+					c.logger.Debug("Collecting directory %s: %s vanished during the copy, skipped", description, path)
+					return nil
+				}
 				return err
 			}
 
