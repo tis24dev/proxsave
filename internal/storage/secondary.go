@@ -628,6 +628,7 @@ func (s *SecondaryStorage) retention() fsRetention {
 		basePath: s.basePath,
 		hostname: s.hostname,
 		aliases:  s.hostAliases,
+		thisRun:  s.thisRunArchive,
 		tally:    &s.retTally,
 		lastRet:  &s.lastRet,
 		text:     secondaryRetentionText,

@@ -2751,6 +2751,7 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 // backup the policy looked at: its count is the total, and its archives name the
 // logs counted as this destination's.
 func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.BackupMetadata, all []*types.BackupMetadata) (int, error) {
+	backups = withoutRetentionProtected(c.logger, "Cloud storage", backups, c.thisRunArchive, time.Now())
 	totalBackups := len(all)
 	deleted := 0
 	logsDeleted := 0

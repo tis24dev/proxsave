@@ -432,6 +432,7 @@ func (l *LocalStorage) retention() fsRetention {
 		basePath: l.basePath,
 		hostname: l.hostname,
 		aliases:  l.hostAliases,
+		thisRun:  l.thisRunArchive,
 		tally:    &l.retTally,
 		lastRet:  &l.lastRet,
 		text:     localRetentionText,

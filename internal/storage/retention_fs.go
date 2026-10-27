@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -37,9 +38,12 @@ type fsRetention struct {
 	// hostname and aliases are the names this host answers to, for the orphan-log pass.
 	hostname string
 	aliases  []string
-	tally    *retentionTally
-	lastRet  *RetentionSummary
-	text     fsRetentionText
+	// thisRun is the base name of the archive this run stored here, which retention
+	// never deletes (withoutRetentionProtected).
+	thisRun string
+	tally   *retentionTally
+	lastRet *RetentionSummary
+	text    fsRetentionText
 }
 
 // fsRetentionText is how one destination words its retention lines, and the names of
@@ -397,6 +401,8 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 // before the policy ran (-1: unknown). A cancelled context stops it before the next
 // deletion, without a summary.
 func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.BackupMetadata, total int, initialLogs int) (int, error) {
+	toDelete = withoutRetentionProtected(r.logger, r.text.storage, toDelete, r.thisRun, time.Now())
+	r.tally.planned = len(toDelete)
 	logsDeleted := 0
 	deleted := 0
 	stopped := func(err error) (int, error) {
