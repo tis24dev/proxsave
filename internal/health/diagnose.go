@@ -2,6 +2,7 @@ package health
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -55,6 +56,13 @@ type Diagnosis struct {
 	HasOutcome bool          // a backup outcome (finished/hang) is recorded
 	OutAge     time.Duration // age of the latest backup outcome (valid iff HasOutcome)
 	Err        string        // redacted error text for TxUnreachable / TxTransmitFailed
+}
+
+// BackupCheckMissing reports whether the latest backup outcome ping was answered with
+// HTTP 404: the monitor has no such check, so nothing there alerts about backups. The
+// text is the one Reporter.ping records for a non-2xx answer.
+func (d Diagnosis) BackupCheckMissing() bool {
+	return d.State == TxTransmitFailed && strings.HasSuffix(d.Err, ": HTTP 404")
 }
 
 // heartbeatStaleFloor keeps 2x-interval at a sane minimum so a beat that merely slipped

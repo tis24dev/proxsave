@@ -145,9 +145,13 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 // heartbeat that failed (TxUnreachable: the monitor is down, or the check was
 // deleted) or never had a URL (TxNotProvisioned) used to count as transmitting, and
 // the run that knew the monitor was down was itself filtered.
+//
+// The backup check counts only as the URL the daemon pings (HealthcheckSelfPingURL):
+// an ID without a ping endpoint resolves to none, and no backup ping was ever sent.
+// A last backup ping answered HTTP 404 means the check does not exist on the monitor.
 func selfMonitorConfirmed(cfg *config.Config, logger *logging.Logger) bool {
-	if strings.TrimSpace(cfg.HealthcheckBackupURL) == "" && strings.TrimSpace(cfg.HealthcheckBackupID) == "" {
-		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: no backup check, NOTIFY_ON not applied")
+	if strings.TrimSpace(cfg.HealthcheckSelfPingURL(cfg.HealthcheckBackupURL, cfg.HealthcheckBackupID)) == "" {
+		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: no backup check ping URL, NOTIFY_ON not applied")
 		return false
 	}
 	st, err := health.LoadStatus(cfg.BaseDir)
@@ -158,6 +162,10 @@ func selfMonitorConfirmed(cfg *config.Config, logger *logging.Logger) bool {
 	d := health.Diagnose(st, cfg.HealthcheckHeartbeatInterval, time.Now())
 	if d.State == health.TxUnreachable || d.State == health.TxNotProvisioned {
 		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: heartbeat state=%s, NOTIFY_ON not applied", d.State)
+		return false
+	}
+	if d.BackupCheckMissing() {
+		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: the last backup ping got HTTP 404 (no such check), NOTIFY_ON not applied")
 		return false
 	}
 	return true
