@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -173,8 +174,49 @@ func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
 	if err := unmountEtcPVE(w.ctx, w.logger); err != nil {
 		w.logger.Warning("Could not unmount /etc/pve: %v", err)
 	}
+	if err := checkpointPVEClusterDB(w.ctx, w.logger); err != nil {
+		// Nothing was restored yet: the services come back on the database as it is.
+		w.restartStoppedPVEClusterServices()
+		return nil, err
+	}
 	removePVEClusterDBSidecars(w.logger)
 	return w.restartPVEClusterServicesCleanup(), nil
+}
+
+// pveClusterDB is the cluster database pmxcfs keeps in WAL mode.
+const pveClusterDB = "/var/lib/pve-cluster/config.db"
+
+// checkpointPVEClusterDB folds the WAL into config.db once pve-cluster is stopped.
+// pmxcfs does not close the database when its stop times out (measured on pve-test:
+// systemd SIGKILLs it), so its last commits live only in config.db-wal: removing the
+// WAL lost them whenever the restore ended before writing the archive's config.db
+// (cancelled, archive unreadable, no config.db in it). TRUNCATE leaves the WAL at 0
+// bytes, which SQLite ignores, so one that cannot be removed afterwards cannot overlay
+// the restored database either. sqlite3 is a dependency of pve-cluster. An absent
+// config.db has nothing to fold.
+func checkpointPVEClusterDB(ctx context.Context, logger *logging.Logger) error {
+	if _, err := restoreFS.Stat(pveClusterDB); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logger.Debug("Cluster database restore: %s absent, no checkpoint", pveClusterDB)
+			return nil
+		}
+		return fmt.Errorf("failed to checkpoint the cluster database (%s): %w", pveClusterDB, err)
+	}
+	output, err := restoreCmd.Run(ctx, "sqlite3", pveClusterDB, "PRAGMA wal_checkpoint(TRUNCATE);")
+	result := strings.TrimSpace(string(output))
+	logger.Debug("Cluster database restore: sqlite3 wal_checkpoint(TRUNCATE) on %s: output=%q err=%v", pveClusterDB, result, err)
+	if err != nil {
+		if result == "" {
+			return fmt.Errorf("failed to checkpoint the cluster database (%s): %w", pveClusterDB, err)
+		}
+		return fmt.Errorf("failed to checkpoint the cluster database (%s): %s", pveClusterDB, result)
+	}
+	// The pragma prints "busy|log|checkpointed"; busy is 0 only when the checkpoint
+	// completed.
+	if busy, _, _ := strings.Cut(result, "|"); busy != "0" {
+		return fmt.Errorf("failed to checkpoint the cluster database (%s): %s", pveClusterDB, result)
+	}
+	return nil
 }
 
 // pveClusterDBSidecars are the SQLite WAL files of the cluster database. pmxcfs runs
@@ -185,8 +227,9 @@ func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
 // taken before keeps the live ones.
 var pveClusterDBSidecars = []string{"/var/lib/pve-cluster/config.db-wal", "/var/lib/pve-cluster/config.db-shm"}
 
-// removePVEClusterDBSidecars removes them once pve-cluster is stopped, before the
-// archive's config.db is written.
+// removePVEClusterDBSidecars removes them once pve-cluster is stopped and the WAL is
+// folded into config.db (checkpointPVEClusterDB), before the archive's config.db is
+// written.
 func removePVEClusterDBSidecars(logger *logging.Logger) {
 	for _, path := range pveClusterDBSidecars {
 		err := restoreFS.Remove(path)
