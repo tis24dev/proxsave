@@ -100,6 +100,9 @@ func (r nicMappingResult) Details() string {
 type nicNameConflict struct {
 	Mapping  nicMappingEntry
 	Existing archivedNetworkInterface
+	// Chained is a mapping held back by demoteChainedNICMappings: its old name does not
+	// exist here, its new name is the old name of a conflict listed before it.
+	Chained bool
 }
 
 func (c nicNameConflict) Details() string {
@@ -112,6 +115,15 @@ func (c nicNameConflict) Details() string {
 	}
 	if v := strings.TrimSpace(c.Existing.PCIPath); v != "" {
 		existingParts = append(existingParts, "pci="+v)
+	}
+	if c.Chained {
+		return fmt.Sprintf("- %s -> %s (%s=%s) held back: %s is renamed by the conflict above",
+			c.Mapping.OldName,
+			c.Mapping.NewName,
+			c.Mapping.Method,
+			c.Mapping.Identifier,
+			c.Mapping.NewName,
+		)
 	}
 	existing := strings.Join(existingParts, " ")
 	existing = cmp.Or(existing, "no identifiers")
@@ -239,6 +251,18 @@ func planNICNameRepair(ctx context.Context, archivePath string) (*nicRepairPlan,
 	return plan, nil
 }
 
+// nicConflictsHeader introduces the conflict list of the confirmation prompt. A chained
+// mapping's old name does not exist on this system, so the list then says it applies
+// together with the conflict that renames its target.
+func nicConflictsHeader(conflicts []nicNameConflict) string {
+	for _, c := range conflicts {
+		if c.Chained {
+			return "Some of these interface names exist on the current system; the others rename onto one of those names and are applied together with it:"
+		}
+	}
+	return "These interface names exist on the current system but map to different NICs in the backup inventory:"
+}
+
 // demoteChainedNICMappings moves to the conflicts every safe mapping whose new name is
 // the old name of a conflict ({A_old->A_new, A_new->B_new}): applied alone it renames
 // A_old onto a name the file still uses for the conflicting interface, and the file
@@ -255,7 +279,7 @@ func demoteChainedNICMappings(safe []nicMappingEntry, conflicts []nicNameConflic
 		moved := false
 		for _, e := range safe {
 			if blocked[e.NewName] {
-				conflicts = append(conflicts, nicNameConflict{Mapping: e, Existing: currentByName[e.NewName]})
+				conflicts = append(conflicts, nicNameConflict{Mapping: e, Existing: currentByName[e.NewName], Chained: true})
 				moved = true
 				continue
 			}

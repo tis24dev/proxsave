@@ -485,7 +485,8 @@ func repairNICNamesWithUI(ctx context.Context, ui nicRepairUI, logger *logging.L
 		logging.DebugStep(logger, "NIC repair", "Conflicts detected: %d", len(plan.Conflicts))
 		var b strings.Builder
 		b.WriteString("Detected NIC name conflicts.\n\n")
-		b.WriteString("These interface names exist on the current system but map to different NICs in the backup inventory:\n\n")
+		b.WriteString(nicConflictsHeader(plan.Conflicts))
+		b.WriteString("\n\n")
 		for i, conflict := range plan.Conflicts {
 			if i >= 32 {
 				logging.DebugStep(logger, "NIC repair", "Conflict details truncated (showing first 32)")
