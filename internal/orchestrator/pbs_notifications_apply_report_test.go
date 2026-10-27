@@ -97,8 +97,8 @@ func TestApplyPBSNotificationsViaAPI_UnusableSectionsAreNotAnApply(t *testing.T)
 
 // Clean 1:1 must not delete a live endpoint of a kind whose staged section we failed to
 // rebuild: "live but not desired" then means "we could not translate it", not "the backup
-// lacked it". The fixture is this repo's own PBS shape — mailto-user is not a positional
-// pbsEndpointSinglePositional accepts, so the section is dropped in translation.
+// lacked it". The fixture lacks from-address, which "smtp create" requires, so the
+// section is dropped in translation.
 func TestApplyPBSNotificationsViaAPI_CleanSkipsRemovalForKindsWithDroppedSections(t *testing.T) {
 	runner := &fakeCommandRunner{
 		outputs: map[string][]byte{
@@ -164,11 +164,11 @@ func TestApplyPBSNotificationsViaAPI_CleanEmptyStageWipeIsWarned(t *testing.T) {
 func TestApplyPBSNotificationsViaAPI_UpsertCountsOnceWhenCreateFallsBackToUpdate(t *testing.T) {
 	runner := &fakeCommandRunner{
 		errs: map[string]error{
-			"proxmox-backup-manager notification endpoint smtp create relay root@pam --server mail.example.com": errors.New("already exists"),
+			"proxmox-backup-manager notification endpoint smtp create relay --mailto root@pam --from-address pbs@example.com --server mail.example.com": errors.New("already exists"),
 		},
 	}
 	fakeFS := withFakeApplyEnv(t, runner)
-	stageCfg(t, fakeFS, "/stage", "smtp: relay\n    mailto root@pam\n    server mail.example.com\n")
+	stageCfg(t, fakeFS, "/stage", "smtp: relay\n    mailto root@pam\n    from-address pbs@example.com\n    server mail.example.com\n")
 
 	rep, err := applyPBSNotificationsViaAPI(context.Background(), logging.New(types.LogLevelDebug, false), "/stage", false)
 	if err != nil {

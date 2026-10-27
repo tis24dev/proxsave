@@ -14,8 +14,6 @@ import (
 type pbsNotificationEndpointSection struct {
 	section      proxmoxNotificationSection
 	redactFlags  []string
-	redactIndex  []int
-	positional   []string
 	sectionKey   string
 	endpointType string
 }
@@ -25,10 +23,6 @@ type pbsNotificationDesiredState struct {
 	matchers     map[string]proxmoxNotificationSection
 	matcherNames []string
 }
-
-// gotifyTokenRedactIndex is the token positional index in
-// `notification endpoint gotify create <name> <server> <token> ...`.
-const gotifyTokenRedactIndex = 6
 
 // pbsNotificationApplyReport is an ACCOUNT of what the apply observed and what it did, not
 // a verdict on whether it "succeeded". There is deliberately no succeeded/applied field:
@@ -227,11 +221,9 @@ func buildPBSNotificationEndpoint(section proxmoxNotificationSection, privByKey 
 	if priv := privByKey[key]; len(priv) > 0 {
 		section.Entries = append(section.Entries, priv...)
 	}
-	positional, entries, ok := pbsEndpointPositionalArgs(typ, name, section.Entries, logger)
-	if !ok {
+	if !pbsEndpointHasRequiredKeys(typ, name, section.Entries, logger) {
 		return pbsNotificationEndpointSection{}, false
 	}
-	section.Entries = entries
 
 	redactFlags := notificationRedactFlags(section)
 	if extra := privRedactFlagsByKey[key]; len(extra) > 0 {
@@ -241,62 +233,31 @@ func buildPBSNotificationEndpoint(section proxmoxNotificationSection, privByKey 
 	return pbsNotificationEndpointSection{
 		section:      section,
 		redactFlags:  redactFlags,
-		redactIndex:  pbsEndpointRedactIndexes(typ),
-		positional:   positional,
 		sectionKey:   key,
 		endpointType: typ,
 	}, true
 }
 
-func pbsEndpointPositionalArgs(typ, name string, entries []proxmoxNotificationEntry, logger *logging.Logger) ([]string, []proxmoxNotificationEntry, bool) {
-	switch typ {
-	case "smtp":
-		return pbsEndpointSinglePositional(typ, name, entries, logger, "recipients", "mailto", "mail-to")
-	case "sendmail":
-		return pbsEndpointSinglePositional(typ, name, entries, logger, "mailto", "mail-to", "recipients")
-	case "gotify":
-		return pbsGotifyEndpointPositionals(name, entries, logger)
-	case "webhook":
-		return pbsEndpointSinglePositional(typ, name, entries, logger, "url")
-	default:
-		return nil, entries, false
-	}
+// pbsEndpointRequiredKeys are the settings "notification endpoint <type> create"
+// requires besides the name (PBS 4.2.8 usage, measured on pve-test): the name is its
+// only positional argument, every setting goes as a flag. A section missing one is
+// skipped, as PBS would refuse it.
+var pbsEndpointRequiredKeys = map[string][]string{
+	"smtp":    {"from-address", "server"},
+	"gotify":  {"server", "token"},
+	"webhook": {"method", "url"},
 }
 
-func pbsEndpointSinglePositional(typ, name string, entries []proxmoxNotificationEntry, logger *logging.Logger, keys ...string) ([]string, []proxmoxNotificationEntry, bool) {
-	value, remaining, ok := popEntryValue(entries, keys...)
-	if !ok || strings.TrimSpace(value) == "" {
-		if logger != nil {
-			logger.Warning("PBS notifications API apply: %s endpoint %s missing %s; skipping", typ, name, keys[0])
+func pbsEndpointHasRequiredKeys(typ, name string, entries []proxmoxNotificationEntry, logger *logging.Logger) bool {
+	for _, key := range pbsEndpointRequiredKeys[typ] {
+		if value, _, ok := popEntryValue(entries, key); !ok || strings.TrimSpace(value) == "" {
+			if logger != nil {
+				logger.Warning("PBS notifications API apply: %s endpoint %s missing %s; skipping", typ, name, key)
+			}
+			return false
 		}
-		return nil, entries, false
 	}
-	return []string{value}, remaining, true
-}
-
-func pbsGotifyEndpointPositionals(name string, entries []proxmoxNotificationEntry, logger *logging.Logger) ([]string, []proxmoxNotificationEntry, bool) {
-	server, remaining, ok := popEntryValue(entries, "server")
-	if !ok || strings.TrimSpace(server) == "" {
-		if logger != nil {
-			logger.Warning("PBS notifications API apply: gotify endpoint %s missing server; skipping", name)
-		}
-		return nil, entries, false
-	}
-	token, remaining, ok := popEntryValue(remaining, "token")
-	if !ok || strings.TrimSpace(token) == "" {
-		if logger != nil {
-			logger.Warning("PBS notifications API apply: gotify endpoint %s missing token; skipping", name)
-		}
-		return nil, entries, false
-	}
-	return []string{server, token}, remaining, true
-}
-
-func pbsEndpointRedactIndexes(typ string) []int {
-	if typ == "gotify" {
-		return []int{gotifyTokenRedactIndex}
-	}
-	return nil
+	return true
 }
 
 func sortedPBSMatcherNames(matchers map[string]proxmoxNotificationSection) []string {
@@ -413,12 +374,12 @@ func sortedPBSEndpointNames(desired map[string]pbsNotificationEndpointSection) [
 
 func upsertPBSNotificationEndpoint(ctx context.Context, typ, name string, endpoint pbsNotificationEndpointSection) error {
 	flags := buildProxmoxManagerFlags(endpoint.section.Entries)
-	createArgs := append([]string{"notification", "endpoint", typ, "create", name}, endpoint.positional...)
+	createArgs := []string{"notification", "endpoint", typ, "create", name}
 	createArgs = append(createArgs, flags...)
-	if _, err := runPBSManagerRedacted(ctx, createArgs, endpoint.redactFlags, endpoint.redactIndex); err != nil {
-		updateArgs := append([]string{"notification", "endpoint", typ, "update", name}, endpoint.positional...)
+	if _, err := runPBSManagerRedacted(ctx, createArgs, endpoint.redactFlags, nil); err != nil {
+		updateArgs := []string{"notification", "endpoint", typ, "update", name}
 		updateArgs = append(updateArgs, flags...)
-		if _, upErr := runPBSManagerRedacted(ctx, updateArgs, endpoint.redactFlags, endpoint.redactIndex); upErr != nil {
+		if _, upErr := runPBSManagerRedacted(ctx, updateArgs, endpoint.redactFlags, nil); upErr != nil {
 			return fmt.Errorf("endpoint %s:%s: %w", typ, name, errors.Join(err, upErr))
 		}
 	}
