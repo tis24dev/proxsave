@@ -234,8 +234,38 @@ func planNICNameRepair(ctx context.Context, archivePath string) (*nicRepairPlan,
 			plan.SafeMappings = append(plan.SafeMappings, e)
 		}
 	}
+	plan.SafeMappings, plan.Conflicts = demoteChainedNICMappings(plan.SafeMappings, plan.Conflicts, currentByName)
 	plan.Mapping = mapping
 	return plan, nil
+}
+
+// demoteChainedNICMappings moves to the conflicts every safe mapping whose new name is
+// the old name of a conflict ({A_old->A_new, A_new->B_new}): applied alone it renames
+// A_old onto a name the file still uses for the conflicting interface, and the file
+// ends with two stanzas and two bridge-ports/bond-slaves references under one name.
+// The chain is then applied whole, in one pass, or not at all. Repeated until stable,
+// for chains longer than two.
+func demoteChainedNICMappings(safe []nicMappingEntry, conflicts []nicNameConflict, currentByName map[string]archivedNetworkInterface) ([]nicMappingEntry, []nicNameConflict) {
+	for {
+		blocked := make(map[string]bool, len(conflicts))
+		for _, c := range conflicts {
+			blocked[c.Mapping.OldName] = true
+		}
+		kept := safe[:0:0]
+		moved := false
+		for _, e := range safe {
+			if blocked[e.NewName] {
+				conflicts = append(conflicts, nicNameConflict{Mapping: e, Existing: currentByName[e.NewName]})
+				moved = true
+				continue
+			}
+			kept = append(kept, e)
+		}
+		safe = kept
+		if !moved {
+			return safe, conflicts
+		}
+	}
 }
 
 func applyNICNameRepair(logger *logging.Logger, plan *nicRepairPlan, includeConflicts bool) (result *nicRepairResult, err error) {
