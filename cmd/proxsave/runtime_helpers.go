@@ -896,7 +896,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
 }
 
-func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
+func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
 		logBootstrapWarning(bootstrap, "Unable to update cron entry: executable path is unknown")
@@ -981,7 +981,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	// chosen schedule, while unrelated operator cron lines are preserved. Upgrades
 	// no longer call this, so it only runs on install (CRON-INSTALL-002 /
 	// CRON-MIXED-001).
-	updatedLines := buildReinstallCronLines(lines, baseDir, correctPaths, schedule, newCommandToken, bootstrap)
+	updatedLines := buildReinstallCronLines(lines, baseDir, correctPaths, schedule, newCommandToken+cronConfigArgs(baseDir, configPath), bootstrap)
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
@@ -1150,13 +1150,37 @@ func repointLegacyCronEntries(ctx context.Context, bootstrap *logging.BootstrapL
 // entry at the chosen schedule. Unrelated operator lines, comments and blanks are
 // preserved. This deliberately resets proxsave's schedule to the chosen one
 // (CRON-INSTALL-002) and removes stale/duplicate entries (CRON-MIXED-001).
-func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, commandToken string, bootstrap *logging.BootstrapLogger) []string {
+func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, command string, bootstrap *logging.BootstrapLogger) []string {
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
 	updated := filterCronLines(lines, correctPaths)
 	updated = dropCanonicalCronLines(updated, correctPaths)
 	// --backup pins the non-interactive behavior: even if a scheduler ever
 	// allocates a pty, the run can never land on the interactive dashboard.
-	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
+	token, configArgs, _ := strings.Cut(command, " ")
+	if configArgs != "" {
+		configArgs = " " + configArgs
+	}
+	return append(updated, fmt.Sprintf("%s %s --backup%s", schedule, token, configArgs))
+}
+
+// cronConfigArgs returns the arguments that pin the cron run to configPath when it is
+// not the default BASE_DIR/configs/backup.env: no environment variable names the
+// config, so without them the cron run read the default file, not the one the
+// daemon or the install used. Empty for the default, so that line is unchanged.
+func cronConfigArgs(baseDir, configPath string) string {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" || filepath.Clean(configPath) == filepath.Join(baseDir, "configs", "backup.env") {
+		return ""
+	}
+	return " --config " + cronShellQuote(filepath.Clean(configPath))
+}
+
+// cronShellQuote quotes a path for the shell cron runs the line with, when it needs it.
+func cronShellQuote(path string) string {
+	if !strings.ContainsAny(path, " \t'\"\\$`;&|<>()*?[]#~%") {
+		return path
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...any) {
