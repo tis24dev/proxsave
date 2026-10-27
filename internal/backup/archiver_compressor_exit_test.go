@@ -29,8 +29,7 @@ func TestArchiveReturnsWhenTheCompressorStopsReading(t *testing.T) {
 		check  func(t *testing.T, err error)
 	}{
 		{name: "compressor-exits", script: "head -c 1 >/dev/null; exit 3", check: func(t *testing.T, err error) {
-			var ce *CompressionError
-			if !errors.As(err, &ce) {
+			if _, ok := errors.AsType[*CompressionError](err); !ok {
 				t.Fatalf("err = %v, want the compressor's exit as a CompressionError", err)
 			}
 		}},
