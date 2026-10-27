@@ -1172,7 +1172,11 @@ func cronConfigArgs(baseDir, configPath string) string {
 	if configPath == "" || filepath.Clean(configPath) == filepath.Join(baseDir, "configs", "backup.env") {
 		return ""
 	}
-	return " --config " + cronShellQuote(filepath.Clean(configPath))
+	// cron turns an unescaped '%' into a newline and feeds the rest to stdin, quotes or
+	// not (crontab(5)): the shell then got "--config '/a" and stopped on an unterminated
+	// quote, so no backup ran. cron drops the backslash of "\%" and the shell sees '%'
+	// (measured with cron 3.0pl1-197).
+	return " --config " + strings.ReplaceAll(cronShellQuote(filepath.Clean(configPath)), "%", `\%`)
 }
 
 // cronShellQuote quotes a path for the shell cron runs the line with, when it needs it.

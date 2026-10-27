@@ -323,6 +323,8 @@ func TestReinstallCronLinePinsANonDefaultConfig(t *testing.T) {
 		{"/opt/proxsave/configs/backup.env", "0 2 * * * /usr/local/bin/proxsave --backup"},
 		{"/etc/proxsave/site.env", "0 2 * * * /usr/local/bin/proxsave --backup --config /etc/proxsave/site.env"},
 		{"/etc/proxsave/my site.env", "0 2 * * * /usr/local/bin/proxsave --backup --config '/etc/proxsave/my site.env'"},
+		// cron cuts the command at an unescaped '%'.
+		{"/etc/proxsave/a%b.env", `0 2 * * * /usr/local/bin/proxsave --backup --config '/etc/proxsave/a\%b.env'`},
 	} {
 		got := buildReinstallCronLines(nil, "/opt/proxsave", []string{"/usr/local/bin/proxsave"}, "0 2 * * *", "/usr/local/bin/proxsave"+cronConfigArgs("/opt/proxsave", tc.config), nil)
 		if len(got) != 1 || got[0] != tc.want {
