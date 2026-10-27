@@ -735,6 +735,24 @@ func (c *Collector) ensureDir(path string) error {
 	return nil
 }
 
+// fsIoTimeout is the FS_IO_TIMEOUT bound of the collector's probes of storage
+// paths; zero means unbounded.
+func (c *Collector) fsIoTimeout() time.Duration {
+	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
+		return time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	}
+	return 0
+}
+
+// boundedCommandContext bounds a command that touches storage paths by timeout;
+// zero leaves ctx as it is.
+func (c *Collector) boundedCommandContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 func preservedMode(mode os.FileMode) os.FileMode {
 	return mode & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 }

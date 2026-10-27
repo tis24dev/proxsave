@@ -833,7 +833,10 @@ func (c *Collector) collectSystemNetworkDNSRuntime(ctx context.Context, commands
 }
 
 func (c *Collector) collectSystemStorageMountsRuntime(ctx context.Context, commandsDir string) error {
-	if err := c.collectCommandMulti(ctx,
+	// df statfs's every mount: bounded so a dead NFS/CIFS mount cannot block the run.
+	dfCtx, cancel := c.boundedCommandContext(ctx, c.fsIoTimeout())
+	defer cancel()
+	if err := c.collectCommandMulti(dfCtx,
 		commandSpec("df", "-h"),
 		filepath.Join(commandsDir, "df.txt"),
 		"Disk usage",
