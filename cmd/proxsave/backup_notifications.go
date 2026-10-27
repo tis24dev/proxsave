@@ -133,7 +133,34 @@ func initializeHealthcheckSection(opts backupModeOptions, orch *orchestrator.Orc
 	logging.DebugStep(logger, "notifications init", "healthchecks enabled (mode=%s, daemon up)", cfg.HealthcheckMode)
 	orch.RegisterNotificationChannel(orchestrator.NewHealthchecksChannel(cfg, logger))
 	logging.Info("✓ Healthchecks initialized (mode: %s)", cfg.HealthcheckMode)
+	if cfg.HealthcheckMode == config.HealthcheckModeSelf && !selfMonitorConfirmed(cfg, logger) {
+		return notifyfilter.SectionSelfUnconfirmed
+	}
 	return notifyfilter.SectionInitialized
+}
+
+// selfMonitorConfirmed reports whether, in self mode, the operator's own monitor is
+// known to receive: a backup check is configured and the last heartbeat reached it.
+// NOTIFY_ON filters the other channels only then (docs/HEALTHCHECKS.md): a fresh
+// heartbeat that failed (TxUnreachable: the monitor is down, or the check was
+// deleted) or never had a URL (TxNotProvisioned) used to count as transmitting, and
+// the run that knew the monitor was down was itself filtered.
+func selfMonitorConfirmed(cfg *config.Config, logger *logging.Logger) bool {
+	if strings.TrimSpace(cfg.HealthcheckBackupURL) == "" && strings.TrimSpace(cfg.HealthcheckBackupID) == "" {
+		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: no backup check, NOTIFY_ON not applied")
+		return false
+	}
+	st, err := health.LoadStatus(cfg.BaseDir)
+	if err != nil {
+		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: status unreadable (%v), NOTIFY_ON not applied", err)
+		return false
+	}
+	d := health.Diagnose(st, cfg.HealthcheckHeartbeatInterval, time.Now())
+	if d.State == health.TxUnreachable || d.State == health.TxNotProvisioned {
+		logging.DebugStep(logger, "notifications init", "self monitor unconfirmed: heartbeat state=%s, NOTIFY_ON not applied", d.State)
+		return false
+	}
+	return true
 }
 
 // disableHealthchecks switches the section to disabled with a reason, mirroring
