@@ -2,9 +2,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/cli"
@@ -451,6 +454,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 		sessionLogger.Info("Starting --install (config=%s)", args.ConfigPath)
 	}
 
+	snapshot := takeInstallConfigSnapshot(args.ConfigPath)
 	var err error
 	if installCLI {
 		err = runInstall(ctx, args.ConfigPath, bootstrap)
@@ -461,6 +465,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	if err != nil {
 		logInstallModeError(sessionLogger, "install", err)
 		if isInstallAbortedError(err) {
+			snapshot.restore(bootstrap)
 			return types.ExitSuccess.Int(), true
 		}
 		bootstrap.Error("%v", err)
@@ -471,6 +476,81 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 	seedWhatsnewOnInstallSuccess(args.ConfigPath)
 	return types.ExitSuccess.Int(), true
+}
+
+// installConfigSnapshot is backup.env as it was before --install. The wizard writes
+// the file before the steps that follow it (AGE recipient, healthchecks, Telegram,
+// scheduler), so an install the operator aborts after the write put it back: left in
+// place, an ENCRYPT_ARCHIVE=true with no recipient, or SCHEDULER_MODE=daemon with no
+// daemon installed, made every later run fail.
+type installConfigSnapshot struct {
+	path    string
+	existed bool
+	data    []byte
+	mode    os.FileMode
+}
+
+func takeInstallConfigSnapshot(configPath string) *installConfigSnapshot {
+	path, err := resolveInstallConfigPath(configPath)
+	if err != nil {
+		return nil
+	}
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &installConfigSnapshot{path: path}
+		}
+		return nil
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(filepath.Base(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &installConfigSnapshot{path: path}
+		}
+		return nil
+	}
+	data, err := root.ReadFile(filepath.Base(path))
+	if err != nil {
+		return nil
+	}
+	return &installConfigSnapshot{path: path, existed: true, data: data, mode: info.Mode().Perm()}
+}
+
+// restore puts backup.env back as the snapshot found it: removed when the install
+// created it, rewritten when the install changed it.
+func (s *installConfigSnapshot) restore(bootstrap *logging.BootstrapLogger) {
+	if s == nil {
+		return
+	}
+	debug := func(format string, args ...any) {
+		if bootstrap != nil {
+			bootstrap.Debug(format, args...)
+		}
+	}
+	root, err := os.OpenRoot(filepath.Dir(s.path))
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(s.path)
+	if !s.existed {
+		if err := root.Remove(name); err == nil {
+			debug("Install aborted: removed %s, written by this install", s.path)
+		} else if !os.IsNotExist(err) {
+			debug("Install aborted: cannot remove %s: %v", s.path, err)
+		}
+		return
+	}
+	if current, err := root.ReadFile(name); err == nil && bytes.Equal(current, s.data) {
+		return
+	}
+	if err := root.WriteFile(name, s.data, s.mode); err != nil {
+		debug("Install aborted: cannot restore %s: %v", s.path, err)
+		return
+	}
+	_ = root.Chmod(name, s.mode)
+	debug("Install aborted: %s restored as it was before the install", s.path)
 }
 
 func cliFlowLogLevel(args *cli.Args) types.LogLevel {
