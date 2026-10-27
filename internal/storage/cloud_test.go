@@ -862,6 +862,8 @@ func TestCloudStorageStorePrimaryFailure(t *testing.T) {
 		t: t,
 		queue: []queuedResponse{
 			{name: "rclone", args: []string{"copyto", backupFile, "remote:pbs1-backup.tar.zst"}, err: errors.New("boom")},
+			// What the failed copy left at the final name is deleted.
+			{name: "rclone", args: []string{"deletefile", "remote:pbs1-backup.tar.zst"}},
 		},
 	}
 	cs.execCommand = queue.exec
