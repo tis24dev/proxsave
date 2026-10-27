@@ -53,6 +53,9 @@ type Collector struct {
 	deps             CollectorDeps
 	unprivilegedOnce sync.Once
 	unprivilegedCtx  unprivilegedContainerContext
+	// realStaging is tempDir with its symlinks resolved (stagingRoot).
+	realStagingOnce sync.Once
+	realStaging     string
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
@@ -1077,8 +1080,31 @@ func (c *Collector) isWithinStagingDir(path string) bool {
 		return false
 	}
 	clean := filepath.Clean(path)
-	root := filepath.Clean(c.tempDir)
-	return clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator))
+	// The resolved root as well: under a symlinked /tmp a source reached through the
+	// link's target (CUSTOM_BACKUP_PATHS=/var/tmp) never matched the lexical one, and
+	// the staging tree was copied into itself.
+	for _, root := range []string{filepath.Clean(c.tempDir), c.stagingRoot()} {
+		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// stagingRoot is the staging tempDir with its symlinks resolved, computed once: a
+// resolved path (a symlink's target, or one under a symlinked /tmp) is compared with
+// it. The lexical tempDir stands in when it cannot be resolved.
+func (c *Collector) stagingRoot() string {
+	c.realStagingOnce.Do(func() {
+		if c.tempDir == "" {
+			return
+		}
+		c.realStaging = filepath.Clean(c.tempDir)
+		if real, err := filepath.EvalSymlinks(c.tempDir); err == nil {
+			c.realStaging = real
+		}
+	})
+	return c.realStaging
 }
 
 func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description string) error {

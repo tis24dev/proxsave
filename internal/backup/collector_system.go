@@ -1729,8 +1729,10 @@ func (c *Collector) symlinkedDirectory(physicalLink string) (target, logical str
 	if err != nil || c.isWithinStagingDir(target) {
 		return "", "", false
 	}
-	if c.tempDir != "" {
-		if rel, err := filepath.Rel(target, c.tempDir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// target is resolved, so the staging tree and the prefix it is compared with are
+	// too: under a symlinked /tmp or SYSTEM_ROOT_PREFIX the lexical ones never matched.
+	if staging := c.stagingRoot(); staging != "" {
+		if rel, err := filepath.Rel(target, staging); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return "", "", false
 		}
 	}
@@ -1739,6 +1741,9 @@ func (c *Collector) symlinkedDirectory(physicalLink string) (target, logical str
 	}
 	logical = target
 	if prefix := filepath.Clean(c.config.SystemRootPrefix); c.config.SystemRootPrefix != "" && prefix != string(filepath.Separator) {
+		if real, err := filepath.EvalSymlinks(prefix); err == nil {
+			prefix = real
+		}
 		rel, err := filepath.Rel(prefix, target)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return "", "", false
