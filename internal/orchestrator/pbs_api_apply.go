@@ -1302,6 +1302,13 @@ func (r *pbsDatastoreRestore) createDatastore(ctx context.Context, name, path st
 // (it may exist after all, e.g. when the list could not be read) the datastore is
 // updated instead. It returns only a cancellation.
 func (r *pbsDatastoreRestore) create(name, path string, flags []string) error {
+	if pbsDatastoreMountMissingFn(path, r.logger) {
+		// PBS would build an empty chunk store on the root filesystem, where the disk or
+		// pool should be mounted, and call it applied.
+		r.debug("datastore=%s path=%s on_rootfs=true mount_expected=true action=skip", name, path)
+		r.failed(name, "Datastore %s is at %s, on the root filesystem: its disk is not mounted", name, path)
+		return nil
+	}
 	if err := r.createDatastore(r.ctx, name, path, flags); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -1312,6 +1319,23 @@ func (r *pbsDatastoreRestore) create(name, path string, flags []string) error {
 	r.debug("datastore=%s created", name)
 	r.applied(name)
 	return nil
+}
+
+// pbsDatastoreMountMissingFn is pbsDatastoreMountMissing; the package tests, whose
+// datastore paths sit on the build host's root filesystem, replace it.
+var pbsDatastoreMountMissingFn = pbsDatastoreMountMissing
+
+// pbsDatastoreMountMissing reports whether path resolves to the root filesystem while
+// it looks like the mount of a disk or ZFS pool (the guard the file fallback and the
+// directory recreation use), with no datastore data there yet.
+func pbsDatastoreMountMissing(path string, logger *logging.Logger) bool {
+	onRootFS, _, err := isPathOnRootFilesystem(path)
+	if err != nil {
+		return false
+	}
+	suspicious := isSuspiciousDatastoreMountLocation(path) || isLikelyZFSMountPoint(path, logger)
+	hasData, dataErr := pbsDatastoreHasData(path)
+	return rootFilesystemMountShouldSkip(onRootFS, suspicious, hasData, dataErr != nil)
 }
 
 // move re-creates, in Clean (1:1) mode, a datastore whose path on this PBS differs
