@@ -1369,7 +1369,17 @@ func pbsDatastoreMountMissing(path string, logger *logging.Logger) bool {
 // re-created at its original path so it is not left deconfigured, even when the
 // restore was cancelled meanwhile: the rollback runs without the cancellation,
 // and the move then returns it. It returns only a cancellation.
+//
+// The mount guard of create runs here before the remove: the create that follows it
+// would build an empty chunk store on the root filesystem where the disk or pool is
+// not mounted, and the move would call it applied. The datastore stays at its
+// current path.
 func (r *pbsDatastoreRestore) move(name, currentPath, path string, flags []string) error {
+	if pbsDatastoreMountMissingFn(path, r.logger) {
+		r.debug("datastore=%s path=%s current_path=%s on_rootfs=true mount_expected=true action=skip", name, path, currentPath)
+		r.failed(name, "Datastore %s is at %s, on the root filesystem: its disk is not mounted", name, path)
+		return nil
+	}
 	pathEvent := "Datastore %s is at %s on this PBS and at %s in the backup"
 	if _, err := runPBSManager(r.ctx, "datastore", "remove", name); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
