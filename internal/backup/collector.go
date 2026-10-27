@@ -597,8 +597,18 @@ func (c *Collector) withTemporaryExcludes(extra []string, fn func() error) error
 	return fn()
 }
 
+// uniqueCandidates returns the forms of path the exclusion patterns are matched
+// against. Patterns name host paths, so a path inside the staging tree tempDir is
+// judged by the host path it stands for and its name only: matched by where the
+// staging tree lives (/tmp/proxsave/...), '/tmp/**' or '**/proxsave/**' dropped every
+// staged file.
 func uniqueCandidates(path, tempDir, systemRootPrefix string) []string {
 	base := filepath.Base(path)
+	if tempDir != "" {
+		if relTemp, err := filepath.Rel(tempDir, path); err == nil && relTemp != "." && relTemp != "" && relTemp != ".." && !strings.HasPrefix(relTemp, ".."+string(filepath.Separator)) {
+			return []string{base, relTemp, filepath.Join(string(filepath.Separator), relTemp)}
+		}
+	}
 	candidates := []string{path}
 	if base != "" && base != "." && base != string(filepath.Separator) {
 		candidates = append(candidates, base)
@@ -618,15 +628,6 @@ func uniqueCandidates(path, tempDir, systemRootPrefix string) []string {
 				if relPrefix != "." && relPrefix != "" && relPrefix != ".." && !strings.HasPrefix(relPrefix, ".."+string(filepath.Separator)) {
 					candidates = append(candidates, filepath.Join(string(filepath.Separator), relPrefix))
 				}
-			}
-		}
-	}
-
-	if tempDir != "" {
-		if relTemp, err := filepath.Rel(tempDir, path); err == nil {
-			if relTemp != "." && relTemp != "" && relTemp != ".." {
-				candidates = append(candidates, relTemp)
-				candidates = append(candidates, filepath.Join(string(filepath.Separator), relTemp))
 			}
 		}
 	}

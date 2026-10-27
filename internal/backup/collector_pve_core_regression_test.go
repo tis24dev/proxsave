@@ -56,7 +56,13 @@ func TestPVECoreDBCaptureAndExclusions(t *testing.T) {
 				pattern = src
 			}
 			if pattern == "destination" {
-				pattern = dest
+				// The host path the staged destination stands for: patterns name host
+				// paths, never where the staging tree lives.
+				rel, err := filepath.Rel(c.tempDir, dest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pattern = "/" + rel
 			}
 			if pattern != "" {
 				c.config.ExcludePatterns = []string{pattern}
