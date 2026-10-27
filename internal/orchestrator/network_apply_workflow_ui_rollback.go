@@ -24,6 +24,7 @@ type networkRollbackUIApplyFlow struct {
 	timeout             time.Duration
 	systemType          SystemType
 	diagnosticsDir      string
+	beforeSnapshot      string
 	iface               string
 	source              string
 	nicRepair           *nicRepairResult
@@ -118,6 +119,7 @@ func (f *networkRollbackUIApplyFlow) captureBeforeDiagnostics() {
 	if snap, err := writeNetworkSnapshot(f.ctx, f.logger, f.diagnosticsDir, "before", 3*time.Second); err != nil {
 		f.debug("Network snapshot before apply failed: %v", err)
 	} else {
+		f.beforeSnapshot = snap
 		f.debug("Network snapshot (before): %s", snap)
 	}
 
@@ -378,6 +380,7 @@ func (f *networkRollbackUIApplyFlow) armRollbackAndApply() error {
 	if err != nil {
 		return err
 	}
+	handle.beforeSnapshot = f.beforeSnapshot
 	f.handle = handle
 
 	logging.DebugStep(f.logger, "network safe apply (ui)", "Apply network configuration now")

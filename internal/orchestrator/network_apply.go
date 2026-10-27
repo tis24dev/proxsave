@@ -52,6 +52,9 @@ type networkRollbackHandle struct {
 	logPath    string
 	armedAt    time.Time
 	timeout    time.Duration
+	// beforeSnapshot is the network snapshot taken before the apply, in the
+	// diagnostics directory: the IP the rollback restores is read from it.
+	beforeSnapshot string
 }
 
 func (h *networkRollbackHandle) remaining(now time.Time) time.Duration {
@@ -103,7 +106,11 @@ func extractIPFromSnapshot(path, iface string) string {
 		}
 
 		fields := strings.Fields(line)
-		if len(fields) < 3 || fields[0] != iface {
+		if len(fields) < 3 {
+			continue
+		}
+		// iproute2 prints a VLAN link as name@parent (vmbr0.10@vmbr0).
+		if name, _, _ := strings.Cut(fields[0], "@"); name != iface {
 			continue
 		}
 
@@ -179,9 +186,14 @@ func buildNetworkApplyNotCommittedError(ctx context.Context, logger *logging.Log
 	if handle != nil {
 		rollbackLog = strings.TrimSpace(handle.logPath)
 		rollbackMarker = strings.TrimSpace(handle.markerPath)
-		// Read original IP from before.txt snapshot (IP that will be restored by rollback)
-		if strings.TrimSpace(handle.workDir) != "" {
-			beforePath := filepath.Join(handle.workDir, "before.txt")
+		// Read original IP from the before snapshot (IP that will be restored by
+		// rollback): the diagnostics directory's before.txt, where the UI flow writes
+		// it, or the work directory's.
+		beforePath := strings.TrimSpace(handle.beforeSnapshot)
+		if beforePath == "" && strings.TrimSpace(handle.workDir) != "" {
+			beforePath = filepath.Join(handle.workDir, "before.txt")
+		}
+		if beforePath != "" {
 			originalIP = extractIPFromSnapshot(beforePath, iface)
 			logging.DebugStep(logger, "build not-committed error", "Original IP from %s: %s", beforePath, originalIP)
 		}
