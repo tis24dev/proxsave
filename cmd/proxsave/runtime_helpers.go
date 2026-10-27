@@ -27,7 +27,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
-	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type ExecInfo struct {
@@ -1467,9 +1466,30 @@ func addPathExclusion(excludes []string, path string) []string {
 	return excludes
 }
 
+// dirCheckStat and dirCheckMkdirAll are the bounded operations of the directory
+// checks; only tests replace them.
+var (
+	dirCheckStat     = safefs.Stat
+	dirCheckMkdirAll = safefs.MkdirAll
+)
+
+// checkDirectory reports whether dirPath is a directory. A stat that does not answer
+// within timeout (a dead NFS/CIFS mount) is reported and gives answered=false: an
+// unbounded stat there blocked the run in the kernel before the lock and the storage
+// initialization, which would have disabled the secondary and kept the backup going.
+func checkDirectory(logger *logging.Logger, name, dirPath string, timeout time.Duration) (exists, answered bool) {
+	info, err := dirCheckStat(context.Background(), dirPath, timeout)
+	if errors.Is(err, safefs.ErrTimeout) {
+		logger.Debug("Directory check: stat of %s timed out after %s", dirPath, timeout)
+		logger.Warning("✗ %s not checked: %s did not answer within %s (dead/stale mount?)", name, dirPath, timeout)
+		return false, false
+	}
+	return err == nil && info.IsDir(), true
+}
+
 // ensureDirectoryExists verifies that dirPath exists and attempts to create it when missing.
 // All events are logged using the provided logger.
-func ensureDirectoryExists(logger *logging.Logger, name, path string) {
+func ensureDirectoryExists(logger *logging.Logger, name, path string, timeout time.Duration) {
 	if logger == nil {
 		return
 	}
@@ -1477,13 +1497,17 @@ func ensureDirectoryExists(logger *logging.Logger, name, path string) {
 	if dirPath == "" {
 		return
 	}
-	if utils.DirExists(dirPath) {
+	exists, answered := checkDirectory(logger, name, dirPath, timeout)
+	if !answered {
+		return
+	}
+	if exists {
 		logger.Info("✓ %s exists: %s", name, dirPath)
 		return
 	}
 
 	logger.Warning("✗ %s not found: %s", name, dirPath)
-	if err := os.MkdirAll(dirPath, defaultDirPerm); err != nil {
+	if err := dirCheckMkdirAll(context.Background(), dirPath, defaultDirPerm, timeout); err != nil {
 		logger.Warning("Failed to create %s: %v", dirPath, err)
 		return
 	}
@@ -1493,7 +1517,7 @@ func ensureDirectoryExists(logger *logging.Logger, name, path string) {
 // reportDirectoryDryRun is ensureDirectoryExists for a dry run, which creates no
 // destination directory: a missing directory is reported with the line the checks use
 // ("[DRY RUN] Would create directory: <path>") and left missing.
-func reportDirectoryDryRun(logger *logging.Logger, name, path string) {
+func reportDirectoryDryRun(logger *logging.Logger, name, path string, timeout time.Duration) {
 	if logger == nil {
 		return
 	}
@@ -1501,7 +1525,11 @@ func reportDirectoryDryRun(logger *logging.Logger, name, path string) {
 	if dirPath == "" {
 		return
 	}
-	if utils.DirExists(dirPath) {
+	exists, answered := checkDirectory(logger, name, dirPath, timeout)
+	if !answered {
+		return
+	}
+	if exists {
 		logger.Info("✓ %s exists: %s", name, dirPath)
 		return
 	}
