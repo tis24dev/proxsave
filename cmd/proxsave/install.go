@@ -996,12 +996,12 @@ func promptSecondaryStorage(ctx context.Context, reader *bufio.Reader, prefill i
 	}
 	var secondaryLog string
 	for {
-		secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ", prefill.SecondaryLogPath)
+		secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH): ", prefill.SecondaryLogPath)
 		if err != nil {
 			return false, "", "", err
 		}
 		secondaryLog = sanitizeEnvValue(secondaryLog)
-		if err := config.ValidateOptionalSecondaryLogPath(secondaryLog); err != nil {
+		if err := config.ValidateRequiredSecondaryLogPath(secondaryLog); err != nil {
 			fmt.Printf("%v\n", err)
 			continue
 		}

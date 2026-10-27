@@ -356,12 +356,14 @@ func TestPromptSecondaryStorageEnabled(t *testing.T) {
 	}
 }
 
-func TestPromptSecondaryStorageEnabledWithEmptyLogPath(t *testing.T) {
+// With the secondary enabled an empty SECONDARY_LOG_PATH is refused: it made every
+// run warn and exit 1. The wizard asks again until a path is given.
+func TestPromptSecondaryStorageEnabledRefusesAnEmptyLogPath(t *testing.T) {
 	var enabled bool
 	var path, logPath string
 	var err error
 	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\n\n"))
+	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\n\n/mnt/secondary/log\n"))
 	captureStdout(t, func() {
 		enabled, path, logPath, err = promptSecondaryStorage(ctx, reader, installer.DeriveInstallWizardPrefill(""))
 	})
@@ -374,8 +376,8 @@ func TestPromptSecondaryStorageEnabledWithEmptyLogPath(t *testing.T) {
 	if path != "/mnt/secondary" {
 		t.Fatalf("secondary path = %q, want /mnt/secondary", path)
 	}
-	if logPath != "" {
-		t.Fatalf("secondary log path = %q, want empty", logPath)
+	if logPath != "/mnt/secondary/log" {
+		t.Fatalf("secondary log path = %q, want /mnt/secondary/log", logPath)
 	}
 }
 
@@ -383,7 +385,7 @@ func TestPromptSecondaryStorageRejectsInvalidBackupPath(t *testing.T) {
 	var path string
 	var err error
 	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader("y\nrelative/path\n/mnt/secondary\n\n"))
+	reader := bufio.NewReader(strings.NewReader("y\nrelative/path\n/mnt/secondary\n/mnt/secondary/log\n"))
 	captureStdout(t, func() {
 		_, path, _, err = promptSecondaryStorage(ctx, reader, installer.DeriveInstallWizardPrefill(""))
 	})
@@ -399,15 +401,20 @@ func TestPromptSecondaryStorageRejectsInvalidLogPath(t *testing.T) {
 	var logPath string
 	var err error
 	ctx := context.Background()
-	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\nremote:/logs\n\n"))
-	captureStdout(t, func() {
+	// An invalid log path, then an empty one (required with the secondary enabled),
+	// then a valid one.
+	reader := bufio.NewReader(strings.NewReader("y\n/mnt/secondary\nremote:/logs\n\n/mnt/secondary/log\n"))
+	out := captureStdout(t, func() {
 		_, _, logPath, err = promptSecondaryStorage(ctx, reader, installer.DeriveInstallWizardPrefill(""))
 	})
 	if err != nil {
 		t.Fatalf("promptSecondaryStorage error: %v", err)
 	}
-	if logPath != "" {
-		t.Fatalf("expected empty secondary log path, got %q", logPath)
+	if logPath != "/mnt/secondary/log" {
+		t.Fatalf("expected the corrected secondary log path, got %q", logPath)
+	}
+	if !strings.Contains(out, "SECONDARY_LOG_PATH is required when SECONDARY_ENABLED=true") {
+		t.Fatalf("an empty log path must be refused as required, output:\n%s", out)
 	}
 }
 
