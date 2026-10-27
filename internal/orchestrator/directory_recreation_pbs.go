@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -248,7 +249,14 @@ func setPBSChunkStoreModes(basePath string, logger *logging.Logger) bool {
 	for _, m := range pbsChunkStoreModes {
 		path := filepath.Join(basePath, m.rel)
 		info, err := root.Lstat(m.rel)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		if err != nil {
+			// A missing entry has no mode to set; any other failure is traced.
+			if !errors.Is(err, os.ErrNotExist) {
+				logger.Debug("PBS datastore permissions: cannot stat %s: %v", path, err)
+			}
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
 			continue
 		}
 		current := info.Mode().Perm()
