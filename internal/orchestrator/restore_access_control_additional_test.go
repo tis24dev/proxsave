@@ -149,7 +149,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("old\n"), 0o640); err != nil {
 		t.Fatalf("seed old acl file: %v", err)
 	}
-	if err := applyPBSACLFromStage(logger, " \n\t"); err != nil {
+	if err := applyPBSACLFromStage(logger, " \n\t", nil); err != nil {
 		t.Fatalf("empty ACL should remove current file: %v", err)
 	}
 	if _, err := fakeFS.Stat(pbsACLCfgPath); err == nil || !os.IsNotExist(err) {
@@ -159,7 +159,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("keep-me\n"), 0o640); err != nil {
 		t.Fatalf("seed acl file for unknown format: %v", err)
 	}
-	if err := applyPBSACLFromStage(logger, "this-is-not-known-format"); err != nil {
+	if err := applyPBSACLFromStage(logger, "this-is-not-known-format", nil); err != nil {
 		t.Fatalf("unknown ACL format should be ignored, got %v", err)
 	}
 	kept, err := fakeFS.ReadFile(pbsACLCfgPath)
@@ -177,7 +177,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		"  roles Admin",
 		"",
 	}, "\n")
-	if err := applyPBSACLFromStage(logger, sectionACL); err != nil {
+	if err := applyPBSACLFromStage(logger, sectionACL, nil); err != nil {
 		t.Fatalf("apply section ACL format: %v", err)
 	}
 	gotSection, err := fakeFS.ReadFile(pbsACLCfgPath)
@@ -197,7 +197,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		"keep-verbatim-line",
 		"",
 	}, "\n")
-	if err := applyPBSACLFromStage(logger, lineACL); err != nil {
+	if err := applyPBSACLFromStage(logger, lineACL, nil); err != nil {
 		t.Fatalf("apply line ACL format: %v", err)
 	}
 	gotLine, err := fakeFS.ReadFile(pbsACLCfgPath)
@@ -241,7 +241,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		t.Fatalf("expected all-root ACL users to be filtered out, got=%q ok=%v", got, ok)
 	}
 
-	if err := applyPBSACLLineFormat("acl:1:/:root@pam:Admin\n"); err != nil {
+	if err := applyPBSACLLineFormat("acl:1:/:root@pam:Admin\n", nil); err != nil {
 		t.Fatalf("applyPBSACLLineFormat with root already present: %v", err)
 	}
 	withRoot, err := fakeFS.ReadFile(pbsACLCfgPath)

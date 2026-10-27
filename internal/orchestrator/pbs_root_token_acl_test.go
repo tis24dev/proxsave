@@ -17,7 +17,11 @@ func TestPBSACLKeepsThisHostsRootTokenEntries(t *testing.T) {
 	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("acl:1:/datastore/ds1:root@pam!pve,alice@pbs:DatastoreBackup\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyPBSACLLineFormat("acl:1:/datastore/ds1:root@pam!old,bob@pbs:DatastoreBackup\n"); err != nil {
+	hostRootTokenACL, err := currentPBSRootTokenACLLines()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPBSACLLineFormat("acl:1:/datastore/ds1:root@pam!old,bob@pbs:DatastoreBackup\n", hostRootTokenACL); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := fakeFS.ReadFile(pbsACLCfgPath)

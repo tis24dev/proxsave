@@ -118,9 +118,27 @@ func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	}
 
 	if userPresent || domainsPresent || aclPresent || tokenCfgPresent {
-		currentUserSections, _ := readProxmoxConfigSectionsOptional(pbsUserCfgPath)
-		currentDomainSections, _ := readProxmoxConfigSectionsOptional(pbsDomainsCfgPath)
-		currentTokenCfgSections, _ := readProxmoxConfigSectionsOptional(pbsTokenCfgPath)
+		// This host's copies are merged in, all read before the first write. Only an
+		// absent one reads as empty: an unreadable one merged as empty dropped this
+		// host's root@pam tokens and their ACL entries from what was written next.
+		currentUserSections, err := readProxmoxConfigSectionsOptional(pbsUserCfgPath)
+		if err != nil {
+			return fmt.Errorf("read current %s: %w", pbsUserCfgPath, err)
+		}
+		currentDomainSections, err := readProxmoxConfigSectionsOptional(pbsDomainsCfgPath)
+		if err != nil {
+			return fmt.Errorf("read current %s: %w", pbsDomainsCfgPath, err)
+		}
+		currentTokenCfgSections, err := readProxmoxConfigSectionsOptional(pbsTokenCfgPath)
+		if err != nil {
+			return fmt.Errorf("read current %s: %w", pbsTokenCfgPath, err)
+		}
+		var hostRootTokenACL []string
+		if aclPresent {
+			if hostRootTokenACL, err = currentPBSRootTokenACLLines(); err != nil {
+				return err
+			}
+		}
 
 		backupUserSections, err := parseProxmoxNotificationSections(stagedUserRaw)
 		if err != nil {
@@ -188,7 +206,7 @@ func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 		}
 
 		if aclPresent {
-			if err := applyPBSACLFromStage(logger, stagedACLRaw); err != nil {
+			if err := applyPBSACLFromStage(logger, stagedACLRaw, hostRootTokenACL); err != nil {
 				return err
 			}
 		}
@@ -278,7 +296,9 @@ func findPBSRootTokenSections(sections []proxmoxNotificationSection) []proxmoxNo
 	return out
 }
 
-func applyPBSACLFromStage(logger *logging.Logger, stagedACL string) error {
+// hostRootTokenACL is this host's acl.cfg entries for root@pam's tokens
+// (currentPBSRootTokenACLLines), read before the first write of the restore.
+func applyPBSACLFromStage(logger *logging.Logger, stagedACL string, hostRootTokenACL []string) error {
 	raw := strings.TrimSpace(stagedACL)
 	if raw == "" {
 		logger.Warning("PBS access control: staged acl.cfg is empty; removing %s", pbsACLCfgPath)
@@ -292,7 +312,7 @@ func applyPBSACLFromStage(logger *logging.Logger, stagedACL string) error {
 		return applyPBSACLSectionFormat(raw)
 	}
 	if isPBSACLLineFormat(raw) {
-		return applyPBSACLLineFormat(raw)
+		return applyPBSACLLineFormat(raw, hostRootTokenACL)
 	}
 
 	logger.Warning("PBS access control: staged acl.cfg has unknown format; skipping apply")
@@ -375,7 +395,7 @@ func parsePBSACLLine(line string) (pbsACLLine, bool) {
 	}, true
 }
 
-func applyPBSACLLineFormat(raw string) error {
+func applyPBSACLLineFormat(raw string, hostRootTokenACL []string) error {
 	var outLines []string
 	var hasRootAdmin bool
 
@@ -407,7 +427,7 @@ func applyPBSACLLineFormat(raw string) error {
 	// user.cfg, their secrets in token.shadow), so their ACL entries are this host's
 	// too: a token's privileges are its own entries, and without them it authenticates
 	// but is denied everywhere (the rule the PVE restore follows).
-	outLines = append(outLines, currentPBSRootTokenACLLines()...)
+	outLines = append(outLines, hostRootTokenACL...)
 
 	if !hasRootAdmin {
 		outLines = append(outLines, "acl:1:/:root@pam:Admin")
@@ -424,11 +444,15 @@ func applyPBSACLLineFormat(raw string) error {
 }
 
 // currentPBSRootTokenACLLines returns this host's acl.cfg entries for root@pam's
-// tokens, each restricted to those tokens.
-func currentPBSRootTokenACLLines() []string {
+// tokens, each restricted to those tokens. An absent acl.cfg has none; any other read
+// failure is returned.
+func currentPBSRootTokenACLLines() ([]string, error) {
 	data, err := restoreFS.ReadFile(pbsACLCfgPath)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read current %s: %w", pbsACLCfgPath, err)
 	}
 	var out []string
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -446,7 +470,7 @@ func currentPBSRootTokenACLLines() []string {
 			out = append(out, fmt.Sprintf("acl:%s:%s:%s:%s", entry.Propagate, entry.Path, strings.Join(tokens, ","), entry.Roles))
 		}
 	}
-	return out
+	return out, nil
 }
 
 func filterPBSACLUsers(raw string) (string, bool) {
@@ -764,11 +788,18 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 	if err != nil {
 		return fmt.Errorf("parse staged domains.cfg: %w", err)
 	}
-	currentDomainSections, _ := readProxmoxConfigSectionsOptional(pveDomainsCfgPath)
+	currentDomainSections, err := readProxmoxConfigSectionsOptional(pveDomainsCfgPath)
+	if err != nil {
+		return fmt.Errorf("read current %s: %w", pveDomainsCfgPath, err)
+	}
 
 	// user.cfg: restore 1:1 except root@pam (its user line, tokens and their ACLs are
 	// this host's), and ensure root has Administrator on "/".
-	mergedUser, needsPVERealm := mergePVEUserCfg(userCfgRaw, readCurrentPVEFile(pveUserCfgPath))
+	currentUser, err := readCurrentPVEFile(pveUserCfgPath)
+	if err != nil {
+		return err
+	}
+	mergedUser, needsPVERealm := mergePVEUserCfg(userCfgRaw, currentUser)
 	requiredRealms := []string{"pam"}
 	if needsPVERealm {
 		requiredRealms = append(requiredRealms, "pve")
@@ -777,11 +808,22 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 
 	// Secrets: restore 1:1 except root@pam's tokens and TFA (this host's). shadow.cfg
 	// holds only users of the pve realm, never root@pam, and is restored as it is.
-	mergedTokens := mergePVETokenCfg(tokenRaw, readCurrentPVEFile(pveTokenCfgPath))
+	var mergedTokens string
+	if tokenPresent {
+		currentTokens, err := readCurrentPVEFile(pveTokenCfgPath)
+		if err != nil {
+			return err
+		}
+		mergedTokens = mergePVETokenCfg(tokenRaw, currentTokens)
+	}
 	var mergedTFA []byte
 	var tfaUsers map[string]json.RawMessage
 	if tfaPresent {
-		if mergedTFA, tfaUsers, err = mergePVETFAJSON(tfaRaw, readCurrentPVEFile(pveTFACfgPath)); err != nil {
+		currentTFA, err := readCurrentPVEFile(pveTFACfgPath)
+		if err != nil {
+			return err
+		}
+		if mergedTFA, tfaUsers, err = mergePVETFAJSON(tfaRaw, currentTFA); err != nil {
 			return err
 		}
 	}
@@ -828,13 +870,18 @@ func applyPVEAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 }
 
 // readCurrentPVEFile returns this host's copy of a PVE access control file, empty
-// when it is absent or unreadable (a fresh node may not have token.cfg or tfa.cfg).
-func readCurrentPVEFile(path string) string {
+// when it is absent (a fresh node may not have token.cfg or tfa.cfg). Any other read
+// failure is returned: merged as empty, an unreadable copy dropped this host's
+// root@pam line, tokens and TFA from what the restore wrote next.
+func readCurrentPVEFile(path string) (string, error) {
 	data, err := restoreFS.ReadFile(path)
 	if err != nil {
-		return ""
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read current %s: %w", path, err)
 	}
-	return string(data)
+	return string(data), nil
 }
 
 func readStageFileOptional(stageRoot, relPath string) (content string, present bool, err error) {
