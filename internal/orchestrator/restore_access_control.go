@@ -403,6 +403,12 @@ func applyPBSACLLineFormat(raw string) error {
 		outLines = append(outLines, fmt.Sprintf("acl:%s:%s:%s:%s", entry.Propagate, entry.Path, entry.UserList, entry.Roles))
 	}
 
+	// root@pam's tokens are this host's (findPBSRootTokenSections keeps them in
+	// user.cfg, their secrets in token.shadow), so their ACL entries are this host's
+	// too: a token's privileges are its own entries, and without them it authenticates
+	// but is denied everywhere (the rule the PVE restore follows).
+	outLines = append(outLines, currentPBSRootTokenACLLines()...)
+
 	if !hasRootAdmin {
 		outLines = append(outLines, "acl:1:/:root@pam:Admin")
 	}
@@ -415,6 +421,32 @@ func applyPBSACLLineFormat(raw string) error {
 		return fmt.Errorf("write %s: %w", pbsACLCfgPath, err)
 	}
 	return nil
+}
+
+// currentPBSRootTokenACLLines returns this host's acl.cfg entries for root@pam's
+// tokens, each restricted to those tokens.
+func currentPBSRootTokenACLLines() []string {
+	data, err := restoreFS.ReadFile(pbsACLCfgPath)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		entry, ok := parsePBSACLLine(line)
+		if !ok || !strings.HasPrefix(entry.Raw, "acl:") {
+			continue
+		}
+		var tokens []string
+		for id := range strings.SplitSeq(entry.UserList, ",") {
+			if id = strings.TrimSpace(id); strings.Contains(id, "!") && isRootPBSAuthID(id) {
+				tokens = append(tokens, id)
+			}
+		}
+		if len(tokens) > 0 {
+			out = append(out, fmt.Sprintf("acl:%s:%s:%s:%s", entry.Propagate, entry.Path, strings.Join(tokens, ","), entry.Roles))
+		}
+	}
+	return out
 }
 
 func filterPBSACLUsers(raw string) (string, bool) {
