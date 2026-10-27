@@ -1487,6 +1487,17 @@ func (c *Collector) collectCustomPaths(ctx context.Context) error {
 			if err := c.safeCopyFile(ctx, physicalPath, dest, fmt.Sprintf("custom file %s", filepath.Base(logicalPath))); err != nil {
 				c.logger.Warning("Failed to copy custom file %s: %v", physicalPath, err)
 			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				if target, logicalTarget, ok := c.symlinkedDirectory(physicalPath); ok {
+					if _, done := seen[logicalTarget]; !done {
+						seen[logicalTarget] = struct{}{}
+						targetDest := filepath.Join(c.tempDir, strings.TrimPrefix(logicalTarget, "/"))
+						if err := c.safeCopyDir(ctx, target, targetDest, fmt.Sprintf("custom directory %s", logicalTarget)); err != nil {
+							c.logger.Warning("Failed to copy custom directory %s: %v", target, err)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -1695,6 +1706,48 @@ func (c *Collector) collectRootHome(ctx context.Context) error {
 	return nil
 }
 
+// symlinkedDirectory resolves a collected symlink (a host path under
+// SystemRootPrefix) and returns the directory it points at, physical and as a host
+// path, when it is one: the link alone holds none of the content, so the caller
+// collects that directory at its own path too. A target that is not a directory, is
+// gone, lies in the staging tree or contains it (a link to "/"), or whose link is
+// excluded by the patterns is not returned.
+func (c *Collector) symlinkedDirectory(physicalLink string) (target, logical string, ok bool) {
+	if c.shouldExclude(physicalLink) {
+		return "", "", false
+	}
+	dest, err := os.Readlink(physicalLink)
+	if err != nil {
+		return "", "", false
+	}
+	if filepath.IsAbs(dest) {
+		dest = c.systemPath(dest)
+	} else {
+		dest = filepath.Join(filepath.Dir(physicalLink), dest)
+	}
+	target, err = filepath.EvalSymlinks(dest)
+	if err != nil || c.isWithinStagingDir(target) {
+		return "", "", false
+	}
+	if c.tempDir != "" {
+		if rel, err := filepath.Rel(target, c.tempDir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", "", false
+		}
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		return "", "", false
+	}
+	logical = target
+	if prefix := filepath.Clean(c.config.SystemRootPrefix); c.config.SystemRootPrefix != "" && prefix != string(filepath.Separator) {
+		rel, err := filepath.Rel(prefix, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", "", false
+		}
+		logical = filepath.Join(string(filepath.Separator), rel)
+	}
+	return target, logical, true
+}
+
 func (c *Collector) collectUserHomes(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1740,6 +1793,23 @@ func (c *Collector) collectUserHomes(ctx context.Context) error {
 
 		if err := c.safeCopyFile(ctx, src, dest, fmt.Sprintf("home entry %s", name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			c.logger.Debug("Failed to copy home entry %s: %v", name, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		// A relocated home (/home/alice -> /data/home/alice): the link alone is a
+		// dangling link once restored, so its directory is collected at its own path.
+		if target, logicalTarget, ok := c.symlinkedDirectory(src); ok {
+			extraExclude := []string(nil)
+			if !c.config.BackupSSHKeys {
+				extraExclude = append(extraExclude, ".ssh")
+			}
+			targetDest := filepath.Join(c.tempDir, strings.TrimPrefix(logicalTarget, "/"))
+			if err := c.withTemporaryExcludes(extraExclude, func() error {
+				return c.safeCopyDir(ctx, target, targetDest, fmt.Sprintf("home directory for %s", name))
+			}); err != nil && !errors.Is(err, os.ErrNotExist) {
+				c.logger.Debug("Failed to copy home for %s: %v", name, err)
+			}
 		}
 	}
 

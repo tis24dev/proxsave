@@ -359,3 +359,78 @@ func TestCustomPathUnderAChainOfStagedSymlinksLeavesTheLiveTreeAlone(t *testing.
 		t.Fatalf("want one WARNING naming /opt/cur, got %d:\n%s", len(hits), buf.String())
 	}
 }
+
+// A CUSTOM_BACKUP_PATHS entry or a /home entry that is a symlink to a directory is
+// collected as the link and, at its own path, as the directory it points at: the
+// link alone holds none of the content.
+func TestSymlinkedDirectoriesAreCollectedWithTheirTarget(t *testing.T) {
+	sysRoot := t.TempDir()
+	for _, f := range []string{"data/app/config.yml", "data/home/alice/notes.txt"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(sysRoot, f)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sysRoot, f), []byte(f), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{"opt/app": "/data/app", "home/alice": "/data/home/alice"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(sysRoot, link)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(sysRoot, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, buf := failureLevelCollector(t, sysRoot, &CollectorConfig{CustomBackupPaths: []string{"/opt/app"}})
+	if err := c.collectCustomPaths(context.Background()); err != nil {
+		t.Fatalf("collectCustomPaths: %v", err)
+	}
+	if err := c.collectUserHomes(context.Background()); err != nil {
+		t.Fatalf("collectUserHomes: %v", err)
+	}
+	for link, target := range map[string]string{"opt/app": "/data/app", "home/alice": "/data/home/alice"} {
+		if got, err := os.Readlink(filepath.Join(c.tempDir, link)); err != nil || got != target {
+			t.Fatalf("staged %s link = %q (err %v), want -> %s\n%s", link, got, err, target, buf.String())
+		}
+	}
+	for _, f := range []string{"data/app/config.yml", "data/home/alice/notes.txt"} {
+		if got, err := os.ReadFile(filepath.Join(c.tempDir, f)); err != nil || string(got) != f {
+			t.Fatalf("staged %s = %q (err %v): the target directory was not collected\n%s", f, got, err, buf.String())
+		}
+	}
+}
+
+// The target of a collected symlink is not collected when it contains the staging
+// tree (a link to "/") or when the link itself is excluded by the patterns.
+func TestSymlinkedDirectoryTargetsThatAreNotCollected(t *testing.T) {
+	sysRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sysRoot, "data", "app"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sysRoot, "data", "app", "config.yml"), []byte("cfg"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sysRoot, "opt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/data/app", filepath.Join(sysRoot, "opt", "app")); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := failureLevelCollector(t, sysRoot, &CollectorConfig{CustomBackupPaths: []string{"/opt/app"}, ExcludePatterns: []string{"/opt/app"}})
+	if err := c.collectCustomPaths(context.Background()); err != nil {
+		t.Fatalf("collectCustomPaths: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.tempDir, "data", "app", "config.yml")); err == nil {
+		t.Fatal("the target of an excluded link was collected")
+	}
+
+	// A link whose target contains the staging tree.
+	c2 := NewCollector(logging.New(types.LogLevelError, false), &CollectorConfig{}, t.TempDir(), types.ProxmoxVE, false)
+	link := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink(filepath.Dir(c2.tempDir), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := c2.symlinkedDirectory(link); ok {
+		t.Fatal("a target containing the staging tree must not be collected")
+	}
+}
