@@ -293,7 +293,7 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 	if getErr == nil && len(out) > 0 {
 		var parsed pveClusterMappingSpec
 		var parsedOK bool
-		if parsed, parsedOK, parseErr = parsePVEClusterMappingObject(out); parseErr == nil && parsedOK {
+		if parsed, parsedOK, parseErr = parsePVEClusterMappingObject(out, id); parseErr == nil && parsedOK {
 			existing, ok = parsed, true
 		}
 	}
@@ -313,7 +313,10 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 	return runPvesh(ctx, logger, setArgs)
 }
 
-func parsePVEClusterMappingObject(data []byte) (pveClusterMappingSpec, bool, error) {
+// parsePVEClusterMappingObject reads one mapping as `pvesh get /cluster/mapping/<type>/<id>`
+// prints it. That object has no "id" (measured on PVE 9.1.9), so the id asked for
+// stands in when it is missing.
+func parsePVEClusterMappingObject(data []byte, id string) (pveClusterMappingSpec, bool, error) {
 	raw := strings.TrimSpace(string(data))
 	if raw == "" {
 		return pveClusterMappingSpec{}, false, nil
@@ -329,7 +332,10 @@ func parsePVEClusterMappingObject(data []byte) (pveClusterMappingSpec, bool, err
 		obj = arr[0]
 	}
 
-	id := strings.TrimSpace(obj.ID)
+	if objID := strings.TrimSpace(obj.ID); objID != "" {
+		id = objID
+	}
+	id = strings.TrimSpace(id)
 	if id == "" {
 		return pveClusterMappingSpec{}, false, nil
 	}
