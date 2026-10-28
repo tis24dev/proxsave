@@ -516,8 +516,8 @@ func TestLocalStorage_List_SkipsSidecars(t *testing.T) {
 func TestLocalStorage_GetStats_ListError(t *testing.T) {
 	logger := newTestLogger()
 	base := t.TempDir()
-	badPath := filepath.Join(base, "[invalid")
-	if err := os.MkdirAll(badPath, 0o700); err != nil {
+	badPath := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(badPath, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

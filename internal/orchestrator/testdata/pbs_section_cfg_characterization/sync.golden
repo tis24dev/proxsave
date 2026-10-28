@@ -86,12 +86,12 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove old-a
   proxmox-backup-manager sync-job remove old-b
 error: (nil)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=0 names=
@@ -398,12 +398,12 @@ reads:
   /etc/proxmox-backup/sync.cfg
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
-error: proxmox-backup-manager sync-job list --output-format=json failed: injected list failure
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
+error: proxmox-backup-manager sync-job list --output-format=json --sync-direction all failed: injected list failure
 error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: injected list failure
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] DEBUG    PBS sync job restore: sync-job list failed error="injected list failure"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
@@ -433,12 +433,12 @@ reads:
   /etc/proxmox-backup/sync.cfg
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
 error: parse sync-job list: invalid character 'o' in literal null (expecting 'u')
 error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *json.SyntaxError
 error is: (none)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] DEBUG    PBS sync job restore: sync-job list returned unparseable output error="invalid character 'o' in literal null (expecting 'u')"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
@@ -468,12 +468,12 @@ reads:
   /etc/proxmox-backup/sync.cfg
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
 error: parse sync-job list: failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])
 error chain: *orchestrator.pbsSectionRestoreStoppedError -> *fmt.wrapError -> *errors.errorString
 error is: (none)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] DEBUG    PBS sync job restore: sync-job list returned unparseable output error="failed to parse PBS list row 1: none of [id name] present as non-empty string (available keys: [comment store])"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
@@ -501,11 +501,11 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
 error: (nil)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha
@@ -536,14 +536,14 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove beta
   proxmox-backup-manager sync-job remove zeta
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
   proxmox-backup-manager sync-job create charlie --store ds-charlie --remote origin --remote-store src --schedule hourly
 error: (nil)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=2 names=alpha,charlie
@@ -584,14 +584,14 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove beta
   proxmox-backup-manager sync-job remove zeta
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
   proxmox-backup-manager sync-job create charlie --store ds-charlie --remote origin --remote-store src --schedule hourly
 error: (nil)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=2 names=alpha,charlie
@@ -627,7 +627,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove beta
   proxmox-backup-manager sync-job remove gamma
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
@@ -635,7 +635,7 @@ error: PBS sync job configuration incomplete: 1 stale sync job(s) not removed [b
 error chain: *orchestrator.pbsSectionRestoreIncompleteError
 error is: (none)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha
@@ -670,7 +670,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove beta
   proxmox-backup-manager sync-job remove delta
   proxmox-backup-manager sync-job remove gamma
@@ -679,7 +679,7 @@ error: PBS sync job configuration incomplete: 2 stale sync job(s) not removed [b
 error chain: *orchestrator.pbsSectionRestoreIncompleteError
 error is: (none)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha
@@ -719,7 +719,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove beta
   proxmox-backup-manager sync-job create bravo --store ds-bravo --remote origin --remote-store src --schedule hourly
   proxmox-backup-manager sync-job update bravo --store ds-bravo --remote origin --remote-store src --schedule hourly
@@ -727,7 +727,7 @@ error: PBS sync job configuration incomplete: 1 sync job(s) not applied [bravo];
 error chain: *orchestrator.pbsSectionRestoreIncompleteError
 error is: (none)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=bravo
@@ -758,7 +758,7 @@ answers:
 reads:
   /stage/etc/proxmox-backup/sync.cfg
 commands:
-  proxmox-backup-manager sync-job list --output-format=json
+  proxmox-backup-manager sync-job list --output-format=json --sync-direction all
   proxmox-backup-manager sync-job remove blank-id
   proxmox-backup-manager sync-job remove blank-name
   proxmox-backup-manager sync-job remove id-x
@@ -769,7 +769,7 @@ commands:
   proxmox-backup-manager sync-job create alpha --store ds-alpha --remote origin --remote-store src --schedule hourly
 error: (nil)
 log:
-  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json"
+  [<TIME>] DEBUG    PBS sync job restore: reading current sync-jobs cmd="proxmox-backup-manager sync-job list --output-format=json --sync-direction all"
   [<TIME>] INFO     Restoring PBS sync jobs...
   [<TIME>] DEBUG    PBS sync job restore: mode=clean staged=/stage/etc/proxmox-backup/sync.cfg
   [<TIME>] DEBUG    PBS sync job restore: backup sync-jobs=1 names=alpha

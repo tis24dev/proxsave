@@ -271,7 +271,7 @@ func TestArmHARollback_CoversSchedulingPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read rollback script: %v", err)
 		}
-		if !strings.Contains(string(script), "BACKUP=/backup.tgz") {
+		if !strings.Contains(string(script), "BACKUP='/backup.tgz'") {
 			t.Fatalf("expected backup path in script, got:\n%s", string(script))
 		}
 

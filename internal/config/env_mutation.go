@@ -25,6 +25,22 @@ func encodeEnvValue(value string) string {
 	return strconv.Quote(value)
 }
 
+// ApplyCloudStorageSettings writes the cloud-storage state into an env template.
+// CLOUD_REMOTE and CLOUD_LOG_PATH are quoted like the secondary paths: unquoted, a
+// '#' in the rclone path (gdrive:Server #2/proxsave) started a comment and the loader
+// read the destination truncated, which validation accepted. Disabled cloud storage
+// clears both.
+func ApplyCloudStorageSettings(template string, enabled bool, remote, logPath string) string {
+	if !enabled {
+		template = utils.SetEnvValue(template, "CLOUD_ENABLED", "false")
+		template = utils.SetEnvValue(template, "CLOUD_REMOTE", "")
+		return utils.SetEnvValue(template, "CLOUD_LOG_PATH", "")
+	}
+	template = utils.SetEnvValue(template, "CLOUD_ENABLED", "true")
+	template = utils.SetEnvValue(template, "CLOUD_REMOTE", encodeEnvValue(remote))
+	return utils.SetEnvValue(template, "CLOUD_LOG_PATH", encodeEnvValue(logPath))
+}
+
 // ApplySecondaryStorageSettings writes the canonical secondary-storage state
 // into an env template. Disabled secondary storage always clears both
 // SECONDARY_PATH and SECONDARY_LOG_PATH so the saved config matches user intent.

@@ -30,7 +30,6 @@ const (
 
 var (
 	pbsDatastoreNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-	listNamespacesFunc      = pbs.ListNamespaces
 	discoverNamespacesFunc  = pbs.DiscoverNamespacesFromFilesystem
 )
 
@@ -387,17 +386,11 @@ func (c *Collector) collectDatastoreNamespacesSnapshot(ctx context.Context, ds p
 		ioTimeout = time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
 	}
 
-	var (
-		namespaces   []pbs.Namespace
-		fromFallback bool
-		err          error
-	)
+	path := ds.Path
 	if ds.isOverride() {
-		namespaces, err = discoverNamespacesFunc(ctx, ds.normalizedPath(), ioTimeout)
-		fromFallback = true
-	} else {
-		namespaces, fromFallback, err = listNamespacesFunc(ctx, ds.cliName(), ds.Path, ioTimeout)
+		path = ds.normalizedPath()
 	}
+	namespaces, err := discoverNamespacesFunc(ctx, path, ioTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -412,11 +405,7 @@ func (c *Collector) collectDatastoreNamespacesSnapshot(ctx context.Context, ds p
 		return nil, fmt.Errorf("failed to write namespaces file: %w", err)
 	}
 
-	if fromFallback {
-		c.logger.Debug("Successfully collected %d namespaces for datastore %s via filesystem fallback", len(namespaces), ds.Name)
-	} else {
-		c.logger.Debug("Successfully collected %d namespaces for datastore %s via CLI", len(namespaces), ds.Name)
-	}
+	c.logger.Debug("Successfully collected %d namespaces for datastore %s from the datastore directory %s", len(namespaces), ds.Name, path)
 	return namespaces, nil
 }
 

@@ -92,7 +92,7 @@ func newInstallRuntimePreparation(configPath, baseDir string, execInfo ExecInfo,
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, schedule)
+			runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, schedule, configPath)
 			if err := ctx.Err(); err != nil {
 				return err
 			}

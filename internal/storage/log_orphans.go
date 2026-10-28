@@ -266,12 +266,24 @@ func listLogFolder(ctx context.Context, op, dir string, timeout time.Duration) (
 
 // countOwnRunLogs counts the run logs of this host among the names of a log folder,
 // with the filter of the orphan-log pass: a backup-<host>-<timestamp>.log whose host
-// this machine answers to. A shared log folder also holds other hosts' logs, which
-// are not this destination's logs remaining.
-func countOwnRunLogs(names []string, hostname string, aliases []string) int {
+// this machine answers to, or the host of one of archives, the archives the
+// retention pass works on: one adopted by server identity keeps the host name it
+// was written under, and deleteAssociatedLog deletes its log with it. A shared log
+// folder also holds other hosts' logs, which are not this destination's logs
+// remaining.
+func countOwnRunLogs(names []string, hostname string, aliases []string, archives []*types.BackupMetadata) int {
+	archiveHosts := make(map[string]bool, len(archives))
+	for _, archive := range archives {
+		if archive == nil {
+			continue
+		}
+		if host, _, ok := extractLogKeyFromBackup(archive.BackupFile); ok {
+			archiveHosts[host] = true
+		}
+	}
 	count := 0
 	for _, name := range names {
-		if host, _, ok := runLogKey(name); ok && hostOwnsName(host, hostname, aliases...) {
+		if host, _, ok := runLogKey(name); ok && (hostOwnsName(host, hostname, aliases...) || archiveHosts[host]) {
 			count++
 		}
 	}

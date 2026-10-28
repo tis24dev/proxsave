@@ -53,6 +53,11 @@ type Collector struct {
 	deps             CollectorDeps
 	unprivilegedOnce sync.Once
 	unprivilegedCtx  unprivilegedContainerContext
+	// realStaging is tempDir with its symlinks resolved, stagingInfo its stat
+	// (stagingRoot).
+	realStagingOnce sync.Once
+	realStaging     string
+	stagingInfo     os.FileInfo
 
 	// clusteredPVE records whether cluster mode was detected during PVE collection.
 	clusteredPVE bool
@@ -597,8 +602,18 @@ func (c *Collector) withTemporaryExcludes(extra []string, fn func() error) error
 	return fn()
 }
 
+// uniqueCandidates returns the forms of path the exclusion patterns are matched
+// against. Patterns name host paths, so a path inside the staging tree tempDir is
+// judged by the host path it stands for and its name only: matched by where the
+// staging tree lives (/tmp/proxsave/...), '/tmp/**' or '**/proxsave/**' dropped every
+// staged file.
 func uniqueCandidates(path, tempDir, systemRootPrefix string) []string {
 	base := filepath.Base(path)
+	if tempDir != "" {
+		if relTemp, err := filepath.Rel(tempDir, path); err == nil && relTemp != "." && relTemp != "" && relTemp != ".." && !strings.HasPrefix(relTemp, ".."+string(filepath.Separator)) {
+			return []string{base, relTemp, filepath.Join(string(filepath.Separator), relTemp)}
+		}
+	}
 	candidates := []string{path}
 	if base != "" && base != "." && base != string(filepath.Separator) {
 		candidates = append(candidates, base)
@@ -618,15 +633,6 @@ func uniqueCandidates(path, tempDir, systemRootPrefix string) []string {
 				if relPrefix != "." && relPrefix != "" && relPrefix != ".." && !strings.HasPrefix(relPrefix, ".."+string(filepath.Separator)) {
 					candidates = append(candidates, filepath.Join(string(filepath.Separator), relPrefix))
 				}
-			}
-		}
-	}
-
-	if tempDir != "" {
-		if relTemp, err := filepath.Rel(tempDir, path); err == nil {
-			if relTemp != "." && relTemp != "" && relTemp != ".." {
-				candidates = append(candidates, relTemp)
-				candidates = append(candidates, filepath.Join(string(filepath.Separator), relTemp))
 			}
 		}
 	}
@@ -732,6 +738,24 @@ func (c *Collector) ensureDir(path string) error {
 		c.incDirsCreated()
 	}
 	return nil
+}
+
+// fsIoTimeout is the FS_IO_TIMEOUT bound of the collector's probes of storage
+// paths; zero means unbounded.
+func (c *Collector) fsIoTimeout() time.Duration {
+	if c.config != nil && c.config.FsIoTimeoutSeconds > 0 {
+		return time.Duration(c.config.FsIoTimeoutSeconds) * time.Second
+	}
+	return 0
+}
+
+// boundedCommandContext bounds a command that touches storage paths by timeout;
+// zero leaves ctx as it is.
+func (c *Collector) boundedCommandContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func preservedMode(mode os.FileMode) os.FileMode {
@@ -914,7 +938,52 @@ func (c *Collector) copySymlinkFile(src, dest string, info os.FileInfo) error {
 	return nil
 }
 
+// stagedSymlinkAncestor returns, as a host path, the first directory between the
+// staging tree and dir that the staging tree holds as a symlink leading out of it:
+// its target, resolved the way the kernel follows it (a chain of links included), is
+// outside the staging tree: /opt/app -> /data/app, or a relative link climbing above
+// it or pointing at such a link. A copy below it would follow the link into the live
+// host, where it truncated the file it was reading and gave its directory the
+// symlink's mode. A link that resolves inside the staging tree is followed as before.
+func (c *Collector) stagedSymlinkAncestor(dir string) (string, bool) {
+	if c.tempDir == "" {
+		return "", false
+	}
+	rel, err := filepath.Rel(c.tempDir, dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	realTemp, err := filepath.EvalSymlinks(c.tempDir)
+	if err != nil {
+		return "", false
+	}
+	cur := c.tempDir
+	for part := range strings.SplitSeq(rel, string(os.PathSeparator)) {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			return "", false
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		link := "/" + strings.TrimPrefix(cur, c.tempDir+string(os.PathSeparator))
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err != nil {
+			// A dangling or looping link: nothing below it can be written safely.
+			return link, true
+		}
+		if r, err := filepath.Rel(realTemp, resolved); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(os.PathSeparator)) {
+			return link, true
+		}
+	}
+	return "", false
+}
+
 func (c *Collector) prepareCopyDestination(src, dest string) error {
+	if link, ok := c.stagedSymlinkAncestor(filepath.Dir(dest)); ok {
+		return fmt.Errorf("it is under %s, a symlink in the backup", link)
+	}
 	if err := c.ensureDir(filepath.Dir(dest)); err != nil {
 		return err
 	}
@@ -1008,13 +1077,71 @@ func (r *writeErrRecorder) Write(p []byte) (int, error) {
 // it. The source walk must never descend into the destination staging tree, or a
 // broad CUSTOM_BACKUP_PATHS entry (e.g. "/", "/tmp", "/tmp/proxsave") would copy
 // the growing archive into itself, recursing and ballooning the backup (#56).
+//
+// path is compared as written and with its symlinks resolved: /alias/run/etc with
+// /alias pointing at the staging tree's parent names a directory inside it under a
+// path that has nothing in common with tempDir, and the archive's own files were
+// copied into it again. It is called once per source; the walk below a source checks
+// each entry with isWithinStagingDirAsText and isStagingDirInfo.
 func (c *Collector) isWithinStagingDir(path string) bool {
+	if c.isWithinStagingDirAsText(path) {
+		return true
+	}
+	if !c.collectingCustomPaths || c.tempDir == "" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	return err == nil && c.isWithinStagingDirAsText(resolved)
+}
+
+// isWithinStagingDirAsText compares path as written with the lexical and the resolved
+// staging root. The resolved root as well: under a symlinked /tmp a source reached
+// through the link's target (CUSTOM_BACKUP_PATHS=/var/tmp) never matched the lexical
+// one, and the staging tree was copied into itself.
+func (c *Collector) isWithinStagingDirAsText(path string) bool {
 	if !c.collectingCustomPaths || c.tempDir == "" {
 		return false
 	}
 	clean := filepath.Clean(path)
-	root := filepath.Clean(c.tempDir)
-	return clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator))
+	for _, root := range []string{filepath.Clean(c.tempDir), c.stagingRoot()} {
+		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// stagingRoot is the staging tempDir with its symlinks resolved, computed once: a
+// resolved path (a symlink's target, or one under a symlinked /tmp) is compared with
+// it. The lexical tempDir stands in when it cannot be resolved.
+func (c *Collector) stagingRoot() string {
+	c.realStagingOnce.Do(func() {
+		if c.tempDir == "" {
+			return
+		}
+		c.realStaging = filepath.Clean(c.tempDir)
+		if real, err := filepath.EvalSymlinks(c.tempDir); err == nil {
+			c.realStaging = real
+		}
+		if info, err := os.Stat(c.tempDir); err == nil {
+			c.stagingInfo = info
+		}
+	})
+	return c.realStaging
+}
+
+// isStagingDirInfo reports whether a directory met while copying CUSTOM_BACKUP_PATHS
+// is the staging tree itself, whatever path reached it: through a symlink in the
+// middle of the source path (/scratch/proxsave with /scratch -> /tmp), /proc/self/root
+// or a bind mount, the path text has nothing in common with tempDir and
+// isWithinStagingDir cannot see it, so the staging tree was copied into itself until
+// the path length limit.
+func (c *Collector) isStagingDirInfo(info os.FileInfo) bool {
+	if !c.collectingCustomPaths || info == nil || !info.IsDir() || c.tempDir == "" {
+		return false
+	}
+	c.stagingRoot()
+	return c.stagingInfo != nil && os.SameFile(info, c.stagingInfo)
 }
 
 func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description string) error {
@@ -1048,6 +1175,12 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 		return nil
 	}
 
+	if link, ok := c.stagedSymlinkAncestor(dest); ok {
+		err := fmt.Errorf("it is under %s, a symlink in the backup", link)
+		c.recordSystemManifestEntry(dest, ManifestEntry{Status: StatusFailed, Error: err.Error()})
+		return err
+	}
+
 	// Suppress per-file recording during the walk so the manifest stays at target
 	// granularity (#59), then record the directory's FINAL status from the actual
 	// outcome below. Recording StatusCollected up front would misreport a directory
@@ -1067,13 +1200,21 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 			}
 
 			if err != nil {
+				// An entry listed by its directory and gone before its lstat (on
+				// /etc/pve, HA and vzdump write through temp siblings that live for
+				// milliseconds) stopped the whole copy, and for /etc/pve the backup.
+				// It is skipped; any other failure still ends the copy.
+				if errors.Is(err, os.ErrNotExist) && path != src {
+					c.logger.Debug("Collecting directory %s: %s vanished during the copy, skipped", description, path)
+					return nil
+				}
 				return err
 			}
 
 			// Never descend into the staging workspace: a broad source (e.g. a custom
 			// path of "/" or "/tmp") would otherwise copy the in-progress archive into
 			// itself (#56).
-			if c.isWithinStagingDir(path) {
+			if c.isWithinStagingDirAsText(path) || c.isStagingDirInfo(info) {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}

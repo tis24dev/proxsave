@@ -174,20 +174,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		}
 	}
 
-	if plan.HasCategoryID("pbs_remotes") {
-		if apiAvailable {
-			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsRemoteSectionCfg(), err, &outcomeLogged); stop != nil {
-					return stop
-				}
-			}
-		} else if allowFileFallback {
-			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsRemoteSectionCfg(), &outcomeLogged)
-		} else {
-			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
-		}
-	}
-
+	// The jobs before the remotes: a Clean restore removes a stale remote only when no
+	// job uses it, so removing the stale jobs first lets it go. PBS accepts a sync job
+	// whose remote does not exist yet (measured on PBS 4.2.8, pull and push).
 	if plan.HasCategoryID("pbs_jobs") {
 		if apiAvailable {
 			if err := pbsStagedApplySyncCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
@@ -211,6 +200,20 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping sync/verification/prune configs: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("pbs_remotes") {
+		if apiAvailable {
+			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsRemoteSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
+				}
+			}
+		} else if allowFileFallback {
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsRemoteSectionCfg(), &outcomeLogged)
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
 		}
 	}
 
@@ -686,6 +689,13 @@ func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logge
 // may be offline), preflight a problem found on the path of a datastore with data;
 // both are written anyway.
 func inspectPBSDatastoreBlock(block pbsDatastoreBlock) (ok bool, reason string, onRootFS bool, preflight string) {
+	// A removable datastore (backing-device) has a relative path that PBS resolves to
+	// /mnt/datastore/<name> on its own device: there is nothing to inspect here.
+	for _, line := range block.Lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "backing-device ") {
+			return true, "", false, ""
+		}
+	}
 	path := filepath.Clean(strings.TrimSpace(block.Path))
 	if path == "" || path == "." || path == string(os.PathSeparator) {
 		return false, "invalid or missing datastore path", false, ""
@@ -1055,7 +1065,10 @@ var (
 		outcome: "PBS metric server configuration",
 	}
 	// pbsTapeFileBlocks are the tape files, written as staged (the drives and
-	// changers need their device, the keys are secret material).
+	// changers need their device). The modes are the ones PBS writes: the keys
+	// 0600, the key configuration 0640 for the backup group, as
+	// proxmox-backup-proxy (user backup) reads it to list the keys and to label
+	// an encrypted media set.
 	pbsTapeFileBlocks = []pbsConfigFileBlock{
 		{rel: "etc/proxmox-backup/tape.cfg", debug: "PBS tape drives restore: ",
 			opening: "Restoring PBS tape drives and changers...", config: "The tape drives and changers", outcome: "PBS tape drives and changers"},
@@ -1068,7 +1081,7 @@ var (
 			json: true, perm: 0o600},
 		{rel: "etc/proxmox-backup/tape-encryption-key-config.json", debug: "PBS tape encryption key configuration restore: ",
 			opening: "Restoring PBS tape encryption key configuration...", config: "The tape encryption key configuration", outcome: "PBS tape encryption key configuration",
-			json: true, perm: 0o600},
+			json: true, perm: 0o640},
 	}
 	pbsProxyFileBlock = pbsConfigFileBlock{
 		rel:     "etc/proxmox-backup/proxy.cfg",

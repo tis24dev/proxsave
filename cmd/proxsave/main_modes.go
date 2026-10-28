@@ -2,12 +2,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tis24dev/proxsave/internal/cli"
+	"github.com/tis24dev/proxsave/internal/installer"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 	"github.com/tis24dev/proxsave/internal/types"
@@ -451,6 +455,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 		sessionLogger.Info("Starting --install (config=%s)", args.ConfigPath)
 	}
 
+	snapshot := takeInstallConfigSnapshot(args.ConfigPath)
 	var err error
 	if installCLI {
 		err = runInstall(ctx, args.ConfigPath, bootstrap)
@@ -461,7 +466,7 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	if err != nil {
 		logInstallModeError(sessionLogger, "install", err)
 		if isInstallAbortedError(err) {
-			return types.ExitSuccess.Int(), true
+			return finishAbortedInstall(snapshot, bootstrap), true
 		}
 		bootstrap.Error("%v", err)
 		return types.ExitConfigError.Int(), true
@@ -471,6 +476,111 @@ func runInstallMode(ctx context.Context, args *cli.Args, bootstrap *logging.Boot
 	}
 	seedWhatsnewOnInstallSuccess(args.ConfigPath)
 	return types.ExitSuccess.Int(), true
+}
+
+// finishAbortedInstall puts backup.env back after an install the operator aborted. A
+// restore that fails is reported and exits as a configuration error: backup.env may be
+// left as the install wrote it, with settings the aborted steps never completed.
+func finishAbortedInstall(snapshot *installConfigSnapshot, bootstrap *logging.BootstrapLogger) int {
+	if err := snapshot.restore(bootstrap); err != nil {
+		bootstrap.Error("%s not restored as it was before the install: %v", snapshot.path, err)
+		return types.ExitConfigError.Int()
+	}
+	return types.ExitSuccess.Int()
+}
+
+// installConfigSnapshot is backup.env as it was before --install. The wizard writes
+// the file before the steps that follow it (AGE recipient, healthchecks, Telegram,
+// scheduler), so an install the operator aborts after the write put it back: left in
+// place, an ENCRYPT_ARCHIVE=true with no recipient, or SCHEDULER_MODE=daemon with no
+// daemon installed, made every later run fail.
+type installConfigSnapshot struct {
+	path    string
+	existed bool
+	data    []byte
+	mode    os.FileMode
+}
+
+func takeInstallConfigSnapshot(configPath string) *installConfigSnapshot {
+	path, err := resolveInstallConfigPath(configPath)
+	if err != nil {
+		return nil
+	}
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &installConfigSnapshot{path: path}
+		}
+		return nil
+	}
+	defer func() { _ = root.Close() }()
+	info, err := root.Stat(filepath.Base(path))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &installConfigSnapshot{path: path}
+		}
+		return nil
+	}
+	data, err := root.ReadFile(filepath.Base(path))
+	if err != nil {
+		return nil
+	}
+	return &installConfigSnapshot{path: path, existed: true, data: data, mode: info.Mode().Perm()}
+}
+
+// restore puts backup.env back as the snapshot found it: removed when the install
+// created it, rewritten when the install changed it. The rewrite goes through a temp
+// file renamed over it, like the wizard's own write (installer.WriteConfigFileAtomic):
+// written in place, a failure partway left a truncated file and the original only in
+// memory. What could not be put back is returned.
+func (s *installConfigSnapshot) restore(bootstrap *logging.BootstrapLogger) error {
+	if s == nil {
+		return nil
+	}
+	debug := func(format string, args ...any) {
+		if bootstrap != nil {
+			bootstrap.Debug(format, args...)
+		}
+	}
+	root, err := os.OpenRoot(filepath.Dir(s.path))
+	if err != nil {
+		debug("Install aborted: cannot open the directory of %s: %v", s.path, err)
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	name := filepath.Base(s.path)
+	if !s.existed {
+		err := root.Remove(name)
+		switch {
+		case err == nil:
+			debug("Install aborted: removed %s, written by this install", s.path)
+		case !os.IsNotExist(err):
+			debug("Install aborted: cannot remove %s: %v", s.path, err)
+			return err
+		}
+		return nil
+	}
+	if current, err := root.ReadFile(name); err == nil && bytes.Equal(current, s.data) {
+		// The wizard writes through a 0600 temp file, so an unchanged content can
+		// still come back with another mode.
+		if info, err := root.Stat(name); err == nil && info.Mode().Perm() != s.mode {
+			if err := root.Chmod(name, s.mode); err != nil {
+				debug("Install aborted: cannot restore the mode of %s: %v", s.path, err)
+				return err
+			}
+		}
+		return nil
+	}
+	if err := installer.WriteConfigFileAtomic(s.path, s.path+".tmp.restore", string(s.data)); err != nil {
+		debug("Install aborted: cannot restore %s: %v", s.path, err)
+		return err
+	}
+	if err := root.Chmod(name, s.mode); err != nil {
+		debug("Install aborted: cannot restore the mode of %s: %v", s.path, err)
+		return err
+	}
+	debug("Install aborted: %s restored as it was before the install", s.path)
+	return nil
 }
 
 func cliFlowLogLevel(args *cli.Args) types.LogLevel {

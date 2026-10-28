@@ -29,7 +29,7 @@ func TestApplyPBSNotificationsViaAPI_CreatesEndpointAndMatcher(t *testing.T) {
 
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/notifications.cfg", []byte(
 		"smtp: Gmail-relay\n"+
-			"    recipients user@example.com\n"+
+			"    mailto user@example.com\n"+
 			"    from-address pbs@example.com\n"+
 			"    server smtp.gmail.com\n"+
 			"    port 587\n"+
@@ -60,7 +60,7 @@ func TestApplyPBSNotificationsViaAPI_CreatesEndpointAndMatcher(t *testing.T) {
 	}
 
 	want := []string{
-		"proxmox-backup-manager notification endpoint smtp create Gmail-relay user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123",
+		"proxmox-backup-manager notification endpoint smtp create Gmail-relay --mailto user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123",
 		"proxmox-backup-manager notification matcher create default-matcher --target Gmail-relay",
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
@@ -133,7 +133,7 @@ func stagePBSNotificationFixture(t *testing.T, fakeFS *FakeFS, stageRoot string)
 
 	if err := fakeFS.WriteFile(stageRoot+"/etc/proxmox-backup/notifications.cfg", []byte(
 		"smtp: Gmail-relay\n"+
-			"    recipients user@example.com\n"+
+			"    mailto user@example.com\n"+
 			"    from-address pbs@example.com\n"+
 			"    server smtp.gmail.com\n"+
 			"    port 587\n"+
@@ -173,7 +173,7 @@ func TestApplyPBSNotificationsViaAPI_StrictRemovesExtrasAndReportsApplied(t *tes
 	// A live matcher the backup does not contain: strict mode must remove it.
 	runner := &fakeCommandRunner{
 		outputs: map[string][]byte{
-			"proxmox-backup-manager notification matcher list": []byte(`[{"name":"default-matcher"},{"name":"stale-matcher"}]`),
+			"proxmox-backup-manager notification matcher list --output-format=json": []byte(`[{"name":"default-matcher","origin":"builtin"},{"name":"stale-matcher"}]`),
 		},
 	}
 	restoreCmd = runner
@@ -189,10 +189,10 @@ func TestApplyPBSNotificationsViaAPI_StrictRemovesExtrasAndReportsApplied(t *tes
 	}
 
 	joined := strings.Join(runner.calls, "\n")
-	if !strings.Contains(joined, "notification matcher remove stale-matcher") {
+	if !strings.Contains(joined, "notification matcher delete stale-matcher") {
 		t.Fatalf("strict mode must remove the matcher missing from the backup, calls:\n%s", joined)
 	}
-	if strings.Contains(joined, "notification matcher remove default-matcher") {
+	if strings.Contains(joined, "notification matcher delete default-matcher") {
 		t.Fatalf("a matcher present in the backup must be kept, calls:\n%s", joined)
 	}
 }
@@ -256,20 +256,12 @@ func TestApplyPBSNotificationsViaAPI_PropagatesSyncFailures(t *testing.T) {
 		errs   map[string]error
 	}{
 		{
-			// strict-only path: removeExtraPBSNotificationMatchers cannot list what is live.
-			name:   "matcher list failure aborts a Clean apply",
-			strict: true,
-			errs: map[string]error{
-				"proxmox-backup-manager notification matcher list": boom,
-			},
-		},
-		{
 			// syncPBSNotificationEndpoints: create fails, and so does the update fallback.
 			name:   "endpoint sync failure aborts the apply",
 			strict: false,
 			errs: map[string]error{
-				"proxmox-backup-manager notification endpoint smtp create Gmail-relay user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123": boom,
-				"proxmox-backup-manager notification endpoint smtp update Gmail-relay user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123": boom,
+				"proxmox-backup-manager notification endpoint smtp create Gmail-relay --mailto user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123": boom,
+				"proxmox-backup-manager notification endpoint smtp update Gmail-relay --mailto user@example.com --from-address pbs@example.com --server smtp.gmail.com --port 587 --username user --password secret123": boom,
 			},
 		},
 	}

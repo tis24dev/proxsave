@@ -1,7 +1,7 @@
 DEBUG    Start local retention: policy=simple max=1
 DEBUG    Local storage: listing backups for retention policy 'simple'
-DEBUG    Start local list: path=<ROOT>/backups[
-DEBUG    End local list (error=primary storage list operation failed for <ROOT>/backups[: syntax error in pattern, duration=<D>)
-DEBUG    Local storage: retention - could not list the backups: primary storage list operation failed for <ROOT>/backups[: syntax error in pattern
-INFO       List failed: syntax error in pattern
-DEBUG    End local retention (error=primary storage apply_retention operation failed for <ROOT>/backups[ (recoverable): primary storage list operation failed for <ROOT>/backups[: syntax error in pattern, duration=<D>)
+DEBUG    Start local list: path=<ROOT>/backups-file
+DEBUG    End local list (error=primary storage list operation failed for <ROOT>/backups-file: open <ROOT>/backups-file: not a directory, duration=<D>)
+DEBUG    Local storage: retention - could not list the backups: primary storage list operation failed for <ROOT>/backups-file: open <ROOT>/backups-file: not a directory
+INFO       List failed: not a directory
+DEBUG    End local retention (error=primary storage apply_retention operation failed for <ROOT>/backups-file (recoverable): primary storage list operation failed for <ROOT>/backups-file: open <ROOT>/backups-file: not a directory, duration=<D>)

@@ -152,6 +152,57 @@ func TestPBSAcmePluginsRestoreBlock_Clean(t *testing.T) {
 	}
 }
 
+// PBS stores the plugin data as base64url without padding (measured on pve-test,
+// PBS 4.2.8, 2026-10-26: "CF_Token=ab?\n" is stored as "Q0ZfVG9rZW49YWI_Cg") and
+// "acme plugin set" refuses that form ("Invalid symbol 95, offset 15"), taking
+// standard base64 only. The added plugin gets the decoded data in its file, the
+// existing one gets it in standard base64.
+func TestPBSAcmePluginsRestoreBlock_Base64URLData(t *testing.T) {
+	stageRoot, fs, _ := setupPBSAPIApplyTestDeps(t)
+	staged := "dns: p1\n\tapi cf\n\tdata Q0ZfVG9rZW49YWI_Cg\n\n" +
+		"dns: p2\n\tapi cf\n\tdata Q0ZfVG9rZW49YWI_Cg\n"
+	writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/acme/plugins.cfg", staged, 0o600)
+	runner := &pbsAcmeRunner{
+		errs: map[string]error{
+			"add p2": errors.New(`exit status 255: Error: parameter verification failed - 'id': ACME plugin ID "p2" already exists`),
+		},
+	}
+	restoreCmd = runner
+	var logBuf bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&logBuf)
+
+	if err := applyPBSAcmePluginsCfgViaAPI(context.Background(), logger, stageRoot, false); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	wantCalls := []string{
+		"proxmox-backup-manager acme plugin add dns p1 --api cf --data <data-file>",
+		"proxmox-backup-manager acme plugin add dns p2 --api cf --data <data-file>",
+		"proxmox-backup-manager acme plugin set p2 --api cf --data Q0ZfVG9rZW49YWI/Cg==",
+	}
+	if strings.Join(runner.calls, "\n") != strings.Join(wantCalls, "\n") {
+		t.Fatalf("calls\n%s\nwant\n%s", strings.Join(runner.calls, "\n"), strings.Join(wantCalls, "\n"))
+	}
+	if runner.data["p1"] != "CF_Token=ab?\n" {
+		t.Fatalf("p1 data file %q, want the decoded data", runner.data["p1"])
+	}
+	for _, line := range []string{
+		"DEBUG    PBS ACME plugin restore: acme-plugin=p1 data decoded from base64",
+		"DEBUG    PBS ACME plugin restore: acme-plugin=p2 data decoded from base64",
+		"INFO     ✓ PBS ACME plugin p1: applied",
+		"INFO     ✓ PBS ACME plugin p2: applied",
+	} {
+		if !strings.Contains(logBuf.String(), line) {
+			t.Fatalf("log lacks %q:\n%s", line, logBuf.String())
+		}
+	}
+	for _, secret := range []string{"CF_Token", "Q0ZfVG9rZW49YWI"} {
+		if strings.Contains(logBuf.String(), secret) {
+			t.Fatalf("secret %q leaked:\n%s", secret, logBuf.String())
+		}
+	}
+}
+
 // The command text of a refused set carries --data redacted, never the data.
 func TestPBSAcmePluginsSetRefusalIsRedacted(t *testing.T) {
 	origCmd := restoreCmd

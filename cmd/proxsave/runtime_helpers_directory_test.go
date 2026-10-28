@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/pkg/utils"
 )
@@ -24,7 +28,7 @@ func TestEnsureDirectoryExistsAlreadyPresent(t *testing.T) {
 	dir := t.TempDir()
 	logger, buf := newBufferedTestLogger()
 
-	ensureDirectoryExists(logger, "Backup directory", dir)
+	ensureDirectoryExists(logger, "Backup directory", dir, time.Second)
 
 	output := buf.String()
 	expected := "Backup directory exists: " + dir
@@ -41,7 +45,7 @@ func TestEnsureDirectoryExistsCreatesMissingDir(t *testing.T) {
 	target := filepath.Join(root, "cloud", "logs")
 	logger, buf := newBufferedTestLogger()
 
-	ensureDirectoryExists(logger, "Cloud log directory", target)
+	ensureDirectoryExists(logger, "Cloud log directory", target, time.Second)
 
 	if !utils.DirExists(target) {
 		t.Fatalf("expected directory %s to be created", target)
@@ -64,7 +68,7 @@ func TestEnsureDirectoryExistsLogsFailure(t *testing.T) {
 	}
 
 	logger, buf := newBufferedTestLogger()
-	ensureDirectoryExists(logger, "Cloud log directory", conflict)
+	ensureDirectoryExists(logger, "Cloud log directory", conflict, time.Second)
 
 	output := buf.String()
 	if !strings.Contains(output, "Cloud log directory not found: "+conflict) {
@@ -253,5 +257,33 @@ func TestVerifyBackupDirectoriesDisablesACloudThatIsALocalOne(t *testing.T) {
 				t.Fatalf("a separate cloud was reported:\n%s", out)
 			}
 		})
+	}
+}
+
+// A directory that does not answer within FS_IO_TIMEOUT (a dead NFS mount) is
+// reported as not checked and nothing else is tried on it: an unbounded stat there
+// blocked the run before the lock.
+func TestDirectoryChecksReportADirectoryThatDoesNotAnswer(t *testing.T) {
+	origStat, origMkdir := dirCheckStat, dirCheckMkdirAll
+	t.Cleanup(func() { dirCheckStat, dirCheckMkdirAll = origStat, origMkdir })
+	dirCheckStat = func(_ context.Context, path string, timeout time.Duration) (fs.FileInfo, error) {
+		return nil, &safefs.TimeoutError{Op: "stat", Path: path, Timeout: timeout}
+	}
+	mkdirs := 0
+	dirCheckMkdirAll = func(context.Context, string, os.FileMode, time.Duration) error {
+		mkdirs++
+		return nil
+	}
+	logger, buf := newBufferedTestLogger()
+
+	ensureDirectoryExists(logger, "Secondary log directory", "/mnt/nas/log", 30*time.Second)
+	reportDirectoryDryRun(logger, "Secondary log directory", "/mnt/nas/log", 30*time.Second)
+
+	want := "WARNING  ✗ Secondary log directory not checked: /mnt/nas/log did not answer within 30s (dead/stale mount?)"
+	if got := strings.Count(buf.String(), want); got != 2 {
+		t.Fatalf("want the line twice, got %d:\n%s", got, buf.String())
+	}
+	if mkdirs != 0 || strings.Contains(buf.String(), "not found") {
+		t.Fatalf("a directory that did not answer must not be reported missing or created (mkdirs=%d):\n%s", mkdirs, buf.String())
 	}
 }

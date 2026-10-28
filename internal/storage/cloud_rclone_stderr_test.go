@@ -304,7 +304,7 @@ func TestCloudStderrIsNeverData(t *testing.T) {
 	if host, _ := newCloud(t, nil).remoteManifestOwner(ctx, name); host != "node" {
 		t.Fatalf("manifest (cat): host %q, want node", host)
 	}
-	if count := newCloud(t, nil).countLogFiles(ctx); count != 1 {
+	if count := newCloud(t, nil).countLogFiles(ctx, nil); count != 1 {
 		t.Fatalf("log count (lsf): %d, want 1", count)
 	}
 }

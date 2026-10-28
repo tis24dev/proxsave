@@ -87,7 +87,7 @@ func TestMigrateLegacyCronEntriesLetsAWorkingDescendantFinish(t *testing.T) {
 fi
 `+descendantFinishesTheInstall)
 
-	migrateLegacyCronEntries(context.Background(), t.TempDir(), "/usr/local/bin/proxsave", nil, "0 2 * * *")
+	migrateLegacyCronEntries(context.Background(), t.TempDir(), "/usr/local/bin/proxsave", nil, "0 2 * * *", "")
 
 	got, err := os.ReadFile(installed)
 	if err != nil {
@@ -126,7 +126,7 @@ func TestMigrateLegacyCronEntriesDefaultsAnEmptySchedule(t *testing.T) {
 fi
 cat > "$PROXSAVE_TEST_CRONTAB_OUT"`)
 
-	migrateLegacyCronEntries(context.Background(), t.TempDir(), "/usr/local/bin/proxsave", nil, " ")
+	migrateLegacyCronEntries(context.Background(), t.TempDir(), "/usr/local/bin/proxsave", nil, " ", "")
 
 	got, err := os.ReadFile(installed)
 	if err != nil {

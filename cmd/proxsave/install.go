@@ -774,7 +774,7 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 	return nil
 }
 
-func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule string) {
+func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 
@@ -789,7 +789,7 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 		cronSchedule = resolveCronScheduleFromEnv()
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
-	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule)
+	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule, configPath)
 }
 
 // runPostInstallEntrypoints is shared by the early daemon and late cron paths.
@@ -996,12 +996,12 @@ func promptSecondaryStorage(ctx context.Context, reader *bufio.Reader, prefill i
 	}
 	var secondaryLog string
 	for {
-		secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): ", prefill.SecondaryLogPath)
+		secondaryLog, err = promptOptionalWithDefault(ctx, reader, "Secondary log path (SECONDARY_LOG_PATH): ", prefill.SecondaryLogPath)
 		if err != nil {
 			return false, "", "", err
 		}
 		secondaryLog = sanitizeEnvValue(secondaryLog)
-		if err := config.ValidateOptionalSecondaryLogPath(secondaryLog); err != nil {
+		if err := config.ValidateRequiredSecondaryLogPath(secondaryLog); err != nil {
 			fmt.Printf("%v\n", err)
 			continue
 		}

@@ -28,6 +28,16 @@ func buildProxmoxManagerFlags(entries []proxmoxNotificationEntry, skipKeys ...st
 	if len(entries) == 0 {
 		return nil
 	}
+	args := make([]string, 0, len(entries)*2)
+	for _, kv := range proxmoxManagerFlagEntries(entries, skipKeys...) {
+		args = append(args, proxmoxManagerFlag(kv.Key, kv.Value)...)
+	}
+	return args
+}
+
+// proxmoxManagerFlagEntries returns the entries that become flags, the key
+// normalized and the value trimmed, without the skipped and no-op keys.
+func proxmoxManagerFlagEntries(entries []proxmoxNotificationEntry, skipKeys ...string) []proxmoxNotificationEntry {
 	skip := make(map[string]struct{}, len(skipKeys)+2)
 	for _, k := range skipKeys {
 		skip[normalizeProxmoxCfgKey(k)] = struct{}{}
@@ -36,7 +46,7 @@ func buildProxmoxManagerFlags(entries []proxmoxNotificationEntry, skipKeys ...st
 	skip["digest"] = struct{}{}
 	skip["name"] = struct{}{}
 
-	args := make([]string, 0, len(entries)*2)
+	out := make([]proxmoxNotificationEntry, 0, len(entries))
 	for _, kv := range entries {
 		key := normalizeProxmoxCfgKey(kv.Key)
 		if key == "" {
@@ -45,11 +55,21 @@ func buildProxmoxManagerFlags(entries []proxmoxNotificationEntry, skipKeys ...st
 		if _, ok := skip[key]; ok {
 			continue
 		}
-		value := strings.TrimSpace(kv.Value)
-		args = append(args, "--"+key)
-		args = append(args, value)
+		out = append(out, proxmoxNotificationEntry{Key: key, Value: strings.TrimSpace(kv.Value)})
 	}
-	return args
+	return out
+}
+
+// proxmoxManagerFlag returns the arguments that pass value to the flag named key.
+// A value that begins with '-' goes as one "--key=value" argument:
+// proxmox-backup-manager reads a separate argument that begins with '-' as an
+// option, refuses the command and names the value in its refusal ("'S3cret':
+// missing parameter value.", measured on PBS 4.2.8).
+func proxmoxManagerFlag(key, value string) []string {
+	if strings.HasPrefix(value, "-") {
+		return []string{"--" + key + "=" + value}
+	}
+	return []string{"--" + key, value}
 }
 
 func popEntryValue(entries []proxmoxNotificationEntry, keys ...string) (value string, remaining []proxmoxNotificationEntry, ok bool) {
@@ -244,12 +264,15 @@ type pbsSectionCfg struct {
 	updateVerb     string
 	createWithType bool
 	// dataFileFlag is the flag whose value create takes as the path of a file
-	// holding it decoded from the staged base64, while update takes it as staged
-	// (ACME plugin --data).
+	// holding it decoded from the staged base64, while update takes it in
+	// standard base64 (ACME plugin --data).
 	dataFileFlag string
 	// builtin are the objects PBS provides itself: never applied, removed,
 	// counted or named.
 	builtin []string
+	// listFlags are added to the list of the current objects: "sync-job list"
+	// returns only pull jobs unless asked for every direction.
+	listFlags []string
 }
 
 func (c pbsSectionCfg) isBuiltin(id string) bool {
@@ -355,23 +378,18 @@ func pbsSectionFlags(debug func(format string, args ...any), key, id string, ent
 		decode[normalizeProxmoxCfgKey(k)] = struct{}{}
 	}
 	args := make([]string, 0, len(entries)*2)
-	for _, kv := range entries {
-		// One entry gives one "--key value" pair, or nothing when the key is skipped.
-		flag := buildProxmoxManagerFlags([]proxmoxNotificationEntry{kv})
-		if len(flag) != 2 {
-			continue
-		}
-		name := strings.TrimPrefix(flag[0], "--")
-		if _, ok := decode[name]; ok {
-			decoded, err := base64.StdEncoding.DecodeString(flag[1])
+	for _, kv := range proxmoxManagerFlagEntries(entries) {
+		value := kv.Value
+		if _, ok := decode[kv.Key]; ok {
+			decoded, err := base64.StdEncoding.DecodeString(value)
 			if err != nil {
-				debug("%s=%s %s is not valid base64, passing the staged value unchanged", key, id, name)
+				debug("%s=%s %s is not valid base64, passing the staged value unchanged", key, id, kv.Key)
 			} else {
-				debug("%s=%s %s decoded from base64", key, id, name)
-				flag[1] = string(decoded)
+				debug("%s=%s %s decoded from base64", key, id, kv.Key)
+				value = string(decoded)
 			}
 		}
-		args = append(args, flag...)
+		args = append(args, proxmoxManagerFlag(kv.Key, value)...)
 	}
 	return args
 }
@@ -473,13 +491,41 @@ func (r *pbsSectionRestore) removeStale(id string) error {
 	return nil
 }
 
-// pbsDecodeStoredBase64 decodes a value PBS stores base64-encoded, with or without
-// the padding: PBS 4.2.8 writes the ACME plugin data without it.
+// pbsDecodeStoredBase64 decodes a value PBS stores base64-encoded, in the standard
+// or the URL-safe alphabet, with or without the padding: PBS 4.2.8 writes the ACME
+// plugin data as base64url without it ("CF_Token=ab?\n" is stored as
+// "Q0ZfVG9rZW49YWI_Cg").
 func pbsDecodeStoredBase64(value string) ([]byte, error) {
 	if data, err := base64.StdEncoding.DecodeString(value); err == nil {
 		return data, nil
 	}
-	return base64.RawStdEncoding.DecodeString(strings.TrimRight(value, "="))
+	trimmed := strings.TrimRight(value, "=")
+	if data, err := base64.RawURLEncoding.DecodeString(trimmed); err == nil {
+		return data, nil
+	}
+	return base64.RawStdEncoding.DecodeString(trimmed)
+}
+
+// updateData returns the update flags of an object whose dataFileFlag value
+// update takes as standard base64, which "acme plugin set" requires: the staged
+// value is decoded and encoded again in the standard alphabet. A value that is
+// not valid base64 is passed as staged (dataFile has said so at DEBUG).
+func (r *pbsSectionRestore) updateData(flags []string) []string {
+	if r.cfg.dataFileFlag == "" {
+		return flags
+	}
+	flag := "--" + r.cfg.dataFileFlag
+	out := append([]string(nil), flags...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] != flag {
+			continue
+		}
+		if data, err := pbsDecodeStoredBase64(out[i+1]); err == nil {
+			out[i+1] = base64.StdEncoding.EncodeToString(data)
+		}
+		return out
+	}
+	return out
 }
 
 // dataFile returns the create flags of an object whose dataFileFlag value create
@@ -540,7 +586,7 @@ func (r *pbsSectionRestore) apply(id string, s proxmoxNotificationSection) error
 	}
 	cleanup()
 	if createErr != nil {
-		return r.update(id, flags, createErr)
+		return r.update(id, r.updateData(flags), createErr)
 	}
 	r.debug("%s=%s created", r.key(), id)
 	r.applied(id)
@@ -609,7 +655,7 @@ func (r *pbsSectionRestore) withoutBuiltin(ids []string) []string {
 // that kept them from being read.
 func (r *pbsSectionRestore) readCurrent() ([]string, error) {
 	kind := strings.Join(r.cfg.command, " ")
-	listArgs := r.commandArgs("list", "--output-format=json")
+	listArgs := r.commandArgs(append([]string{"list", "--output-format=json"}, r.cfg.listFlags...)...)
 	r.debug("reading current %s cmd=%q", r.keys(), "proxmox-backup-manager "+strings.Join(listArgs, " "))
 	out, err := runPBSManager(r.ctx, listArgs...)
 	if err != nil {
@@ -1047,8 +1093,9 @@ func applyPBSS3CfgViaAPI(ctx context.Context, logger *logging.Logger, stageRoot 
 // pbsAcmePluginsSectionCfg is the section config of acme/plugins.cfg. PBS 4.2.8
 // creates a plugin with "acme plugin add <type> <id> --data <file>", the file
 // holding the plugin data decoded, and updates it with "acme plugin set <id>
-// --data <base64>", the form plugins.cfg stores. The standalone plugin is built
-// in: it cannot be added, set or removed.
+// --data <base64>", in standard base64 only, while plugins.cfg stores it as
+// base64url. The standalone plugin is built in: it cannot be added, set or
+// removed.
 func pbsAcmePluginsSectionCfg() pbsSectionCfg {
 	return pbsSectionCfg{
 		file:           "etc/proxmox-backup/acme/plugins.cfg",
@@ -1195,11 +1242,33 @@ func (r *pbsDatastoreRestore) removeStale(name string) error {
 // PBS, keeping its path. createErr is the refused create that led here, if any:
 // when the update is refused too, the event carries the create's error. It
 // returns only a cancellation.
+// pbsDatastoreCreateOnlyFlags are the datastore settings "datastore create" takes and
+// "datastore update" refuses (PBS 4.2.8 usage: the backend of an S3 datastore, the
+// device of a removable one, are fixed once the datastore exists).
+var pbsDatastoreCreateOnlyFlags = []string{"--backend", "--backing-device"}
+
+// withoutPBSDatastoreCreateOnlyFlags drops those settings, in both the "--key value"
+// and the "--key=value" form, from the flags of an update.
+func withoutPBSDatastoreCreateOnlyFlags(flags []string) []string {
+	out := make([]string, 0, len(flags))
+	for i := 0; i < len(flags); i++ {
+		name, _, joined := strings.Cut(flags[i], "=")
+		if slices.Contains(pbsDatastoreCreateOnlyFlags, name) {
+			if !joined {
+				i++
+			}
+			continue
+		}
+		out = append(out, flags[i])
+	}
+	return out
+}
+
 func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent func(), createErr error) error {
 	if ctxErr := r.ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	updateArgs := append([]string{"datastore", "update", name}, flags...)
+	updateArgs := append([]string{"datastore", "update", name}, withoutPBSDatastoreCreateOnlyFlags(flags)...)
 	if _, err := runPBSManager(r.ctx, updateArgs...); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -1221,11 +1290,17 @@ func (r *pbsDatastoreRestore) update(name string, flags []string, keptPathEvent 
 }
 
 // pbsChunkStoreExistsError reports whether PBS refused a datastore create because
-// the path already holds a chunk store: "unable to create chunk store 'ds1' subdir
-// "/srv/ds1/.chunks" - ... - EEXIST: File exists" (PBS 4.2.8, measured on VM 201).
+// the path already holds a chunk store. PBS 4.2.8 says so in two ways: for a chunk
+// store without backups "unable to create chunk store 'ds1' subdir
+// "/srv/ds1/.chunks" - ... - EEXIST: File exists" (measured on VM 201), and for one
+// with backups, whose vm/, ct/, host/ or ns/ directories sit next to .chunks,
+// "datastore path not empty" (measured on pve-test). The second also answers a
+// path that holds other files; there the --reuse-datastore retry is refused as
+// well, "unable to open existing chunk store path", and changes nothing.
 func pbsChunkStoreExistsError(err error) bool {
 	text := pbsManagerErrorText(err)
-	return strings.Contains(text, "unable to create chunk store") && strings.Contains(text, "EEXIST")
+	return strings.Contains(text, "unable to create chunk store") && strings.Contains(text, "EEXIST") ||
+		strings.Contains(text, "datastore path not empty")
 }
 
 // createDatastore creates the datastore name at path. When PBS refuses the create
@@ -1252,6 +1327,13 @@ func (r *pbsDatastoreRestore) createDatastore(ctx context.Context, name, path st
 // (it may exist after all, e.g. when the list could not be read) the datastore is
 // updated instead. It returns only a cancellation.
 func (r *pbsDatastoreRestore) create(name, path string, flags []string) error {
+	if pbsDatastoreMountMissingFn(path, r.logger) {
+		// PBS would build an empty chunk store on the root filesystem, where the disk or
+		// pool should be mounted, and call it applied.
+		r.debug("datastore=%s path=%s on_rootfs=true mount_expected=true action=skip", name, path)
+		r.failed(name, "Datastore %s is at %s, on the root filesystem: its disk is not mounted", name, path)
+		return nil
+	}
 	if err := r.createDatastore(r.ctx, name, path, flags); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -1264,13 +1346,40 @@ func (r *pbsDatastoreRestore) create(name, path string, flags []string) error {
 	return nil
 }
 
+// pbsDatastoreMountMissingFn is pbsDatastoreMountMissing; the package tests, whose
+// datastore paths sit on the build host's root filesystem, replace it.
+var pbsDatastoreMountMissingFn = pbsDatastoreMountMissing
+
+// pbsDatastoreMountMissing reports whether path resolves to the root filesystem while
+// it looks like the mount of a disk or ZFS pool (the guard the file fallback and the
+// directory recreation use), with no datastore data there yet.
+func pbsDatastoreMountMissing(path string, logger *logging.Logger) bool {
+	onRootFS, _, err := isPathOnRootFilesystem(path)
+	if err != nil {
+		return false
+	}
+	suspicious := isSuspiciousDatastoreMountLocation(path) || isLikelyZFSMountPoint(path, logger)
+	hasData, dataErr := pbsDatastoreHasData(path)
+	return rootFilesystemMountShouldSkip(onRootFS, suspicious, hasData, dataErr != nil)
+}
+
 // move re-creates, in Clean (1:1) mode, a datastore whose path on this PBS differs
 // from the backup's: remove (without --destroy-data, so the chunks stay on disk),
 // then create at the backup's path. When that create fails the datastore is
 // re-created at its original path so it is not left deconfigured, even when the
 // restore was cancelled meanwhile: the rollback runs without the cancellation,
 // and the move then returns it. It returns only a cancellation.
+//
+// The mount guard of create runs here before the remove: the create that follows it
+// would build an empty chunk store on the root filesystem where the disk or pool is
+// not mounted, and the move would call it applied. The datastore stays at its
+// current path.
 func (r *pbsDatastoreRestore) move(name, currentPath, path string, flags []string) error {
+	if pbsDatastoreMountMissingFn(path, r.logger) {
+		r.debug("datastore=%s path=%s current_path=%s on_rootfs=true mount_expected=true action=skip", name, path, currentPath)
+		r.failed(name, "Datastore %s is at %s, on the root filesystem: its disk is not mounted", name, path)
+		return nil
+	}
 	pathEvent := "Datastore %s is at %s on this PBS and at %s in the backup"
 	if _, err := runPBSManager(r.ctx, "datastore", "remove", name); err != nil {
 		if ctxErr := r.ctx.Err(); ctxErr != nil {
@@ -1721,6 +1830,9 @@ func pbsSyncSectionCfg() pbsSectionCfg {
 		command:  []string{"sync-job"},
 		listKeys: []string{"id", "name"},
 		labels:   pbsSyncJobLabels,
+		// Without it the list holds pull jobs only (default=pull, PBS 4.2.8 usage),
+		// and a push job the backup does not have survived a Clean restore.
+		listFlags: []string{"--sync-direction", "all"},
 	}
 }
 
@@ -1794,11 +1906,11 @@ func pbsNodeUpdateFlags(raw string) (flags, keys []string) {
 		if !ok || key == "" {
 			continue
 		}
-		flags = append(flags, "--"+key, strings.TrimSpace(value))
+		flags = append(flags, proxmoxManagerFlag(key, strings.TrimSpace(value))...)
 		keys = append(keys, key)
 	}
 	if len(description) > 0 {
-		flags = append(flags, "--description", strings.Join(description, "\n"))
+		flags = append(flags, proxmoxManagerFlag("description", strings.Join(description, "\n"))...)
 		keys = append(keys, "description")
 	}
 	return flags, keys

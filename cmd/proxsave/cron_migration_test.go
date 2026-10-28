@@ -313,3 +313,22 @@ func TestRepointLegacyCronLines(t *testing.T) {
 		t.Errorf("no legacy line -> changed=false, unchanged; got changed=%v out=%v", changed2, out2)
 	}
 }
+
+// The cron line pins the run to the config the daemon or the install used when it is
+// not the default BASE_DIR/configs/backup.env (no environment variable names the
+// config); with the default the line is unchanged.
+func TestReinstallCronLinePinsANonDefaultConfig(t *testing.T) {
+	for _, tc := range []struct{ config, want string }{
+		{"", "0 2 * * * /usr/local/bin/proxsave --backup"},
+		{"/opt/proxsave/configs/backup.env", "0 2 * * * /usr/local/bin/proxsave --backup"},
+		{"/etc/proxsave/site.env", "0 2 * * * /usr/local/bin/proxsave --backup --config /etc/proxsave/site.env"},
+		{"/etc/proxsave/my site.env", "0 2 * * * /usr/local/bin/proxsave --backup --config '/etc/proxsave/my site.env'"},
+		// cron cuts the command at an unescaped '%'.
+		{"/etc/proxsave/a%b.env", `0 2 * * * /usr/local/bin/proxsave --backup --config '/etc/proxsave/a\%b.env'`},
+	} {
+		got := buildReinstallCronLines(nil, "/opt/proxsave", []string{"/usr/local/bin/proxsave"}, "0 2 * * *", "/usr/local/bin/proxsave"+cronConfigArgs("/opt/proxsave", tc.config), nil)
+		if len(got) != 1 || got[0] != tc.want {
+			t.Fatalf("config %q: cron = %q, want %q", tc.config, got, tc.want)
+		}
+	}
+}

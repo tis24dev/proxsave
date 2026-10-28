@@ -397,14 +397,14 @@ func (c *Collector) collectDatastoreNamespaces(ctx context.Context, ds pbsDatast
 }
 
 func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
-	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
-		if name != "store1" || path != "/fake" {
-			t.Fatalf("unexpected datastore %s %s", name, path)
+	stubDiscoverNamespaces(t, func(_ context.Context, path string, _ time.Duration) ([]pbs.Namespace, error) {
+		if path != "/fake" {
+			t.Fatalf("unexpected datastore path %s", path)
 		}
 		return []pbs.Namespace{
 			{Ns: "", Path: "/fake"},
-			{Ns: "child", Path: "/fake/child"},
-		}, true, nil
+			{Ns: "child", Path: "/fake/ns/child"},
+		}, nil
 	})
 
 	collector := newTestCollectorWithDeps(t, CollectorDeps{})
@@ -433,8 +433,8 @@ func TestCollectDatastoreNamespacesSuccess(t *testing.T) {
 }
 
 func TestCollectDatastoreNamespacesError(t *testing.T) {
-	stubListNamespaces(t, func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		return nil, false, fmt.Errorf("boom")
+	stubDiscoverNamespaces(t, func(context.Context, string, time.Duration) ([]pbs.Namespace, error) {
+		return nil, fmt.Errorf("boom")
 	})
 
 	collector := newTestCollectorWithDeps(t, CollectorDeps{})
@@ -450,13 +450,6 @@ func TestCollectDatastoreNamespacesError(t *testing.T) {
 }
 
 func TestCollectDatastoreNamespacesOverrideUsesFilesystemOnly(t *testing.T) {
-	origList := listNamespacesFunc
-	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		t.Fatal("CLI namespace discovery should not be used for override paths")
-		return nil, false, nil
-	}
-
 	collector := newTestCollectorWithDeps(t, CollectorDeps{})
 	dsDir := filepath.Join(collector.tempDir, "datastores")
 	if err := os.MkdirAll(dsDir, 0o755); err != nil {
@@ -464,7 +457,7 @@ func TestCollectDatastoreNamespacesOverrideUsesFilesystemOnly(t *testing.T) {
 	}
 
 	dsPath := filepath.Join(collector.tempDir, "override")
-	if err := os.MkdirAll(filepath.Join(dsPath, "local", "vm"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dsPath, "ns", "local"), 0o755); err != nil {
 		t.Fatalf("failed to create override namespace fixture: %v", err)
 	}
 
@@ -494,8 +487,8 @@ func TestCollectDatastoreNamespacesOverrideUsesFilesystemOnly(t *testing.T) {
 }
 
 func TestCollectDatastoreConfigsDryRun(t *testing.T) {
-	stubListNamespaces(t, func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		return []pbs.Namespace{{Ns: ""}}, false, nil
+	stubDiscoverNamespaces(t, func(context.Context, string, time.Duration) ([]pbs.Namespace, error) {
+		return []pbs.Namespace{{Ns: ""}}, nil
 	})
 
 	collector := newTestCollectorWithDeps(t, CollectorDeps{
@@ -525,11 +518,11 @@ func TestCollectDatastoreConfigs_UsesPathSafeKeyForUnsafeDatastoreName(t *testin
 	unsafeName := "../escape"
 	expectedKey := collectorPathKey(unsafeName)
 
-	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
-		if name != unsafeName || path != "/fake" {
-			t.Fatalf("unexpected datastore args name=%q path=%q", name, path)
+	stubDiscoverNamespaces(t, func(_ context.Context, path string, _ time.Duration) ([]pbs.Namespace, error) {
+		if path != "/fake" {
+			t.Fatalf("unexpected datastore path=%q", path)
 		}
-		return []pbs.Namespace{{Ns: ""}}, false, nil
+		return []pbs.Namespace{{Ns: ""}}, nil
 	})
 
 	var seenArgs []string
@@ -577,13 +570,6 @@ func TestCollectDatastoreConfigs_UsesPathSafeKeyForUnsafeDatastoreName(t *testin
 }
 
 func TestCollectDatastoreConfigsSkipsCLIConfigForOverridePaths(t *testing.T) {
-	origList := listNamespacesFunc
-	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		t.Fatal("CLI namespace discovery should not be used for override paths")
-		return nil, false, nil
-	}
-
 	dsPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dsPath, "vm"), 0o755); err != nil {
 		t.Fatalf("mkdir vm: %v", err)
@@ -633,15 +619,12 @@ func TestCollectDatastoreConfigsDisambiguatesManualCLIAndOverrideKeyCollisions(t
 	}
 
 	collidingKey := buildPBSOverrideOutputKey(overridePath)
-	stubListNamespaces(t, func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
-		return []pbs.Namespace{{Ns: name, Path: path}}, false, nil
+	stubDiscoverNamespaces(t, func(_ context.Context, path string, _ time.Duration) ([]pbs.Namespace, error) {
+		if path == overridePath {
+			return []pbs.Namespace{{Ns: "override", Path: path}}, nil
+		}
+		return []pbs.Namespace{{Ns: "", Path: path}}, nil
 	})
-
-	origDiscover := discoverNamespacesFunc
-	t.Cleanup(func() { discoverNamespacesFunc = origDiscover })
-	discoverNamespacesFunc = func(_ context.Context, path string, _ time.Duration) ([]pbs.Namespace, error) {
-		return []pbs.Namespace{{Ns: "override", Path: path}}, nil
-	}
 
 	collector := newTestCollectorWithDeps(t, CollectorDeps{
 		LookPath: func(cmd string) (string, error) {
@@ -911,12 +894,12 @@ func TestCollectUserConfigsWithTokens(t *testing.T) {
 	}
 }
 
-func stubListNamespaces(t *testing.T, fn func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error)) {
+func stubDiscoverNamespaces(t *testing.T, fn func(context.Context, string, time.Duration) ([]pbs.Namespace, error)) {
 	t.Helper()
-	orig := listNamespacesFunc
-	listNamespacesFunc = fn
+	orig := discoverNamespacesFunc
+	discoverNamespacesFunc = fn
 	t.Cleanup(func() {
-		listNamespacesFunc = orig
+		discoverNamespacesFunc = orig
 	})
 }
 

@@ -531,10 +531,13 @@ func TestPlanAndApplyNICNameRepair_WithFakeInventory(t *testing.T) {
 	if plan.Mapping.BackupSourcePath != "./commands/network_inventory.json" {
 		t.Fatalf("BackupSourcePath=%q", plan.Mapping.BackupSourcePath)
 	}
-	if len(plan.SafeMappings) != 1 || plan.SafeMappings[0].OldName != "ens20" || plan.SafeMappings[0].NewName != "eno1" {
-		t.Fatalf("SafeMappings=%+v", plan.SafeMappings)
+	// ens20->eno1 alone would rename onto eno1, still the name of the conflicting
+	// eno1->eth0: the two form a chain and are both conflicts, applied together or not.
+	if len(plan.SafeMappings) != 0 {
+		t.Fatalf("SafeMappings=%+v, want none: ens20->eno1 is chained to a conflict", plan.SafeMappings)
 	}
-	if len(plan.Conflicts) != 1 || plan.Conflicts[0].Mapping.OldName != "eno1" || plan.Conflicts[0].Mapping.NewName != "eth0" {
+	if len(plan.Conflicts) != 2 || plan.Conflicts[0].Mapping.OldName != "eno1" || plan.Conflicts[0].Mapping.NewName != "eth0" ||
+		plan.Conflicts[1].Mapping.OldName != "ens20" || plan.Conflicts[1].Mapping.NewName != "eno1" {
 		t.Fatalf("Conflicts=%+v", plan.Conflicts)
 	}
 
@@ -552,28 +555,18 @@ func TestPlanAndApplyNICNameRepair_WithFakeInventory(t *testing.T) {
 		t.Fatalf("write interfaces: %v", err)
 	}
 
-	// includeConflicts=false: applies only safe mapping (ens20 -> eno1).
+	// includeConflicts=false: the chain is left alone, the file is not touched (two
+	// stanzas named eno1 is what applying ens20 -> eno1 alone used to produce).
 	res, err := applyNICNameRepair(logger, plan, false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if res == nil || res.SkippedReason != "" {
-		t.Fatalf("result=%+v", res)
+	if res == nil || len(res.ChangedFiles) != 0 {
+		t.Fatalf("result=%+v, want no file changed without the conflicts", res)
 	}
-	if len(res.ChangedFiles) != 1 || res.ChangedFiles[0] != "/etc/network/interfaces" {
-		t.Fatalf("ChangedFiles=%v", res.ChangedFiles)
+	if data, _ := fakeFS.ReadFile("/etc/network/interfaces"); strings.Count(string(data), "auto eno1") != 1 {
+		t.Fatalf("eno1 collapsed:\n%s", string(data))
 	}
-	data, err := fakeFS.ReadFile("/etc/network/interfaces")
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if strings.Contains(string(data), "ens20") {
-		t.Fatalf("expected ens20 to be replaced:\n%s", string(data))
-	}
-	if !strings.Contains(string(data), "auto eno1") {
-		t.Fatalf("expected eno1 to remain:\n%s", string(data))
-	}
-
 	// includeConflicts=true: also applies eno1 -> eth0.
 	if err := fakeFS.WriteFile("/etc/network/interfaces", []byte(strings.Join([]string{
 		"auto ens20",
@@ -597,7 +590,7 @@ func TestPlanAndApplyNICNameRepair_WithFakeInventory(t *testing.T) {
 	if len(res.AppliedNICMap) != 2 {
 		t.Fatalf("conflict AppliedNICMap=%+v", res.AppliedNICMap)
 	}
-	data, err = fakeFS.ReadFile("/etc/network/interfaces")
+	data, err := fakeFS.ReadFile("/etc/network/interfaces")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
