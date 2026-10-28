@@ -237,15 +237,12 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 	)
 
 	// Apply cloud storage
-	if data.EnableCloudStorage {
-		template = setEnvValue(template, "CLOUD_ENABLED", "true")
-		template = setEnvValue(template, "CLOUD_REMOTE", data.RcloneBackupRemote)
-		template = setEnvValue(template, "CLOUD_LOG_PATH", data.RcloneLogRemote)
-	} else {
-		template = setEnvValue(template, "CLOUD_ENABLED", "false")
-		template = setEnvValue(template, "CLOUD_REMOTE", "")
-		template = setEnvValue(template, "CLOUD_LOG_PATH", "")
-	}
+	template = config.ApplyCloudStorageSettings(
+		template,
+		data.EnableCloudStorage,
+		data.RcloneBackupRemote,
+		data.RcloneLogRemote,
+	)
 
 	// Apply firewall rules backup. A nil field means no front-end asked, and the key is
 	// then not written AT ALL -- which is not the same thing on both paths: on a fresh
