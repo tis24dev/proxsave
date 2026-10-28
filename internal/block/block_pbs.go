@@ -310,6 +310,9 @@ func (p *PBS) checkKey(ctx context.Context) *Fact {
 		debugf(p.logger, "pbs init: key show failed, keyfile passed as it is: %v", result.Err)
 		return nil
 	}
+	if strings.TrimSpace(p.target.EncryptionKey) == "1" {
+		debugf(p.logger, "pbs init: storage encryption-key is PVE's bare marker 1, fingerprint not compared")
+	}
 	fact, err := EvaluateKeyShow(result.Stdout, p.target.EncryptionKey)
 	if err != nil {
 		debugf(p.logger, "pbs init: key show output unreadable, keyfile passed as it is: %v", err)

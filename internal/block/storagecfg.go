@@ -251,6 +251,12 @@ type keyShowOutput struct {
 // whose fingerprint differs from the stanza's encryption-key is not the storage's key. An
 // empty encryptionKey skips the comparison. The error reports output that is not the
 // expected JSON.
+//
+// encryption-key 1 is skipped too: pve-storage writes the key's fingerprint, or a bare 1
+// when the key JSON has none (keys from before proxmox-backup-client 1.0.3) and for
+// every storage added before pve-storage 3cc2eb73 (2020-11) and never re-keyed. PVE
+// uses the 1 only as a yes/no marker, so compared with the fingerprint it refused the
+// storage's own key.
 func EvaluateKeyShow(output []byte, encryptionKey string) (*Fact, error) {
 	var shown keyShowOutput
 	if err := json.Unmarshal(output, &shown); err != nil {
@@ -261,7 +267,7 @@ func EvaluateKeyShow(output []byte, encryptionKey string) (*Fact, error) {
 			Err: fmt.Errorf("key show: kdf=%q", shown.KDF)}, nil
 	}
 	want := strings.ToLower(strings.TrimSpace(encryptionKey))
-	if want != "" && strings.ToLower(strings.TrimSpace(shown.Fingerprint)) != want {
+	if want != "" && want != "1" && strings.ToLower(strings.TrimSpace(shown.Fingerprint)) != want {
 		return &Fact{Kind: FactKeyMismatch, Label: "Encryption key", Text: "does not match storage",
 			Err: fmt.Errorf("key show: fingerprint=%s, storage encryption-key=%s", shown.Fingerprint, encryptionKey)}, nil
 	}
