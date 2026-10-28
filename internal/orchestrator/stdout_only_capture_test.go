@@ -162,7 +162,7 @@ func TestPBSManagerListIDsReadStdoutOnly(t *testing.T) {
 	}
 	restoreCmd = fake
 
-	ids, err := listPBSNotificationIDs(context.Background(), "endpoint", "gotify", "list", "--output-format=json")
+	ids, err := listPBSNotificationIDs(context.Background(), "endpoint", "gotify", "list")
 	if err != nil {
 		t.Fatalf("stderr noise refused the endpoint list: %v", err)
 	}

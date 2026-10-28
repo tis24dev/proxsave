@@ -122,13 +122,13 @@ func TestApplyPBSNotificationsViaAPI_CleanSkipsRemovalForKindsWithDroppedSection
 	}
 }
 
-// Clean mode with an empty staged file still deletes. That is real work and must be
-// counted, named, and warned about — previously it was logged nowhere at any level.
-func TestApplyPBSNotificationsViaAPI_CleanEmptyStageWipeIsWarned(t *testing.T) {
+// Clean mode with an empty staged file removes nothing: a file naming nothing is no
+// evidence for wiping the live configuration, and the log says so.
+func TestApplyPBSNotificationsViaAPI_CleanEmptyStageRemovesNothing(t *testing.T) {
 	runner := &fakeCommandRunner{
 		outputs: map[string][]byte{
-			"proxmox-backup-manager notification matcher list":       []byte(`[{"name":"m1"},{"name":"m2"}]`),
-			"proxmox-backup-manager notification endpoint smtp list": []byte(`[{"name":"relay"}]`),
+			"proxmox-backup-manager notification matcher list --output-format=json":       []byte(`[{"name":"m1"},{"name":"m2"}]`),
+			"proxmox-backup-manager notification endpoint smtp list --output-format=json": []byte(`[{"name":"relay"}]`),
 		},
 	}
 	fakeFS := withFakeApplyEnv(t, runner)
@@ -138,24 +138,52 @@ func TestApplyPBSNotificationsViaAPI_CleanEmptyStageWipeIsWarned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(rep.removed) != 3 {
-		t.Fatalf("every deletion must be counted and named, got %v", rep.removed)
+	if len(rep.removed) != 0 || !rep.emptyCleanRefused {
+		t.Fatalf("removed %v, refused %v; want nothing removed and the refusal recorded", rep.removed, rep.emptyCleanRefused)
 	}
-	if !rep.mutated() {
-		t.Fatal("deleting three live objects is a mutation")
+	for _, call := range runner.calls {
+		if strings.Contains(call, " delete ") {
+			t.Fatalf("a delete was run on an empty staged file: %s", call)
+		}
 	}
 
 	var out bytes.Buffer
 	logger := logging.New(types.LogLevelDebug, false)
 	logger.SwapOutput(&out)
 	logPBSNotificationApplyReport(logger, PBSRestoreBehaviorClean, rep)
-
-	logged := out.String()
-	if !strings.Contains(logged, "removed 3 live object(s)") {
-		t.Fatalf("the deletions must be named, got:\n%s", logged)
+	if !strings.Contains(out.String(), "PBS notifications: Clean 1:1 removed nothing: the notifications.cfg in the backup is empty") {
+		t.Fatalf("the refusal is not logged:\n%s", out.String())
 	}
-	if !strings.Contains(logged, "on that evidence alone") {
-		t.Fatalf("a wipe authorised by a file naming nothing must be warned, got:\n%s", logged)
+}
+
+// A kind this PBS cannot list (PBS 3.2 has no webhook list) has its removals skipped
+// and reported; the rest of the apply goes on.
+func TestApplyPBSNotificationsViaAPI_ListFailureSkipsThatKind(t *testing.T) {
+	runner := &fakeCommandRunner{
+		outputs: map[string][]byte{
+			"proxmox-backup-manager notification matcher list --output-format=json":       []byte(`[]`),
+			"proxmox-backup-manager notification endpoint smtp list --output-format=json": []byte(`[{"name":"stale"}]`),
+		},
+		errs: map[string]error{
+			"proxmox-backup-manager notification endpoint webhook list --output-format=json": errors.New("Error: no such command 'webhook'"),
+		},
+	}
+	fakeFS := withFakeApplyEnv(t, runner)
+	stagePBSNotificationFixture(t, fakeFS, "/stage")
+
+	rep, err := applyPBSNotificationsViaAPI(context.Background(), logging.New(types.LogLevelDebug, false), "/stage", true)
+	if err != nil {
+		t.Fatalf("a failed list must not stop the apply: %v", err)
+	}
+	if len(rep.listFailed) != 1 || rep.listFailed[0].kind != "webhook" {
+		t.Fatalf("listFailed = %+v, want webhook", rep.listFailed)
+	}
+	var out bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SwapOutput(&out)
+	logPBSNotificationApplyReport(logger, PBSRestoreBehaviorClean, rep)
+	if line := "PBS notifications: Clean 1:1 did not remove stale webhook endpoint(s): this PBS could not list them ("; !strings.Contains(out.String(), line) || !strings.Contains(out.String(), "no such command 'webhook')") {
+		t.Fatalf("the skipped kind is not reported:\n%s", out.String())
 	}
 }
 

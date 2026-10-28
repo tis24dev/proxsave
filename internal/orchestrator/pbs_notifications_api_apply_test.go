@@ -173,7 +173,7 @@ func TestApplyPBSNotificationsViaAPI_StrictRemovesExtrasAndReportsApplied(t *tes
 	// A live matcher the backup does not contain: strict mode must remove it.
 	runner := &fakeCommandRunner{
 		outputs: map[string][]byte{
-			"proxmox-backup-manager notification matcher list": []byte(`[{"name":"default-matcher"},{"name":"stale-matcher"}]`),
+			"proxmox-backup-manager notification matcher list --output-format=json": []byte(`[{"name":"default-matcher","origin":"builtin"},{"name":"stale-matcher"}]`),
 		},
 	}
 	restoreCmd = runner
@@ -189,10 +189,10 @@ func TestApplyPBSNotificationsViaAPI_StrictRemovesExtrasAndReportsApplied(t *tes
 	}
 
 	joined := strings.Join(runner.calls, "\n")
-	if !strings.Contains(joined, "notification matcher remove stale-matcher") {
+	if !strings.Contains(joined, "notification matcher delete stale-matcher") {
 		t.Fatalf("strict mode must remove the matcher missing from the backup, calls:\n%s", joined)
 	}
-	if strings.Contains(joined, "notification matcher remove default-matcher") {
+	if strings.Contains(joined, "notification matcher delete default-matcher") {
 		t.Fatalf("a matcher present in the backup must be kept, calls:\n%s", joined)
 	}
 }
@@ -255,14 +255,6 @@ func TestApplyPBSNotificationsViaAPI_PropagatesSyncFailures(t *testing.T) {
 		strict bool
 		errs   map[string]error
 	}{
-		{
-			// strict-only path: removeExtraPBSNotificationMatchers cannot list what is live.
-			name:   "matcher list failure aborts a Clean apply",
-			strict: true,
-			errs: map[string]error{
-				"proxmox-backup-manager notification matcher list": boom,
-			},
-		},
 		{
 			// syncPBSNotificationEndpoints: create fails, and so does the update fallback.
 			name:   "endpoint sync failure aborts the apply",

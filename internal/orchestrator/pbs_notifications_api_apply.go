@@ -3,6 +3,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -60,6 +61,13 @@ type pbsNotificationApplyReport struct {
 	removed           []string // objects deleted, named: "matcher:x", "smtp:y"
 	removeFailed      []string // objects PBS refused to delete (left in place)
 	removalsSkipped   []string // endpoint kinds whose Clean removal pass was not run
+	// listFailed are the kinds ("matcher" or an endpoint type) whose live objects this
+	// PBS could not list, so their Clean removal pass was not run; PBS 3.2 has no
+	// webhook list.
+	listFailed []pbsNotificationListFailure
+	// emptyCleanRefused is set when Clean met an empty staged notifications.cfg: it
+	// removes nothing on that evidence.
+	emptyCleanRefused bool
 }
 
 // mutated reports whether at least one mutating command was acknowledged. This is the
@@ -91,16 +99,28 @@ func applyPBSNotificationsViaAPI(ctx context.Context, logger *logging.Logger, st
 	// on the authority of a staged file that names nothing is a policy question this change
 	// deliberately does not answer -- it makes the wipe visible and warns that its only
 	// evidence was such a file.
-	if strict {
+	// An empty staged file names nothing: Clean does not wipe the live configuration on
+	// that evidence alone.
+	removals := strict && !rep.stagedEmpty
+	rep.emptyCleanRefused = strict && rep.stagedEmpty
+	// The order lets every removal go through: a stale matcher goes first (it may hold a
+	// stale endpoint), and a stale endpoint last, once the matchers no longer use it
+	// (PBS refuses to delete an endpoint a matcher references).
+	if removals {
 		if err := removeExtraPBSNotificationMatchers(ctx, logger, desired.matchers, &rep); err != nil {
 			return rep, err
 		}
 	}
-	if err := syncPBSNotificationEndpoints(ctx, logger, desired.endpoints, strict, &rep); err != nil {
+	if err := syncPBSNotificationEndpoints(ctx, desired.endpoints, &rep); err != nil {
 		return rep, err
 	}
 	if err := syncPBSNotificationMatchers(ctx, desired, &rep); err != nil {
 		return rep, err
+	}
+	if removals {
+		if err := removeStalePBSNotificationEndpoints(ctx, logger, desired.endpoints, &rep); err != nil {
+			return rep, err
+		}
 	}
 	// No error is synthesised from rep.removeFailed here. That would make err != nil mean
 	// two different things -- "aborted mid-flight" and "completed but could not finish
@@ -269,21 +289,41 @@ func sortedPBSMatcherNames(matchers map[string]proxmoxNotificationSection) []str
 	return names
 }
 
+// pbsNotificationListFailure is a kind whose live objects could not be listed.
+type pbsNotificationListFailure struct {
+	kind  string
+	cause string
+}
+
+// recordPBSNotificationListFailure turns a failed list into a skipped removal pass; a
+// cancellation is returned instead.
+func recordPBSNotificationListFailure(ctx context.Context, logger *logging.Logger, kind string, err error, rep *pbsNotificationApplyReport) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Debug("PBS notifications API apply: %s list failed, its removals are skipped: %v", kind, err)
+	}
+	cause, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+	rep.listFailed = append(rep.listFailed, pbsNotificationListFailure{kind: kind, cause: cause})
+	return nil
+}
+
 func removeExtraPBSNotificationMatchers(ctx context.Context, logger *logging.Logger, desired map[string]proxmoxNotificationSection, rep *pbsNotificationApplyReport) error {
 	current, err := listPBSNotificationIDs(ctx, "matcher", "list")
 	if err != nil {
-		return err
+		return recordPBSNotificationListFailure(ctx, logger, "matcher", err, rep)
 	}
 	for _, name := range current {
 		if _, ok := desired[name]; ok {
 			continue
 		}
-		if _, err := runPBSManager(ctx, "notification", "matcher", "remove", name); err != nil {
+		if _, err := runPBSManager(ctx, "notification", "matcher", "delete", name); err != nil {
 			// The nil guard the rest of this file already uses and this loop did not:
 			// logWithLabel locks a mutex on the receiver with no nil-receiver check, so a
 			// nil logger panics here rather than no-opping.
 			if logger != nil {
-				logger.Warning("PBS notifications API apply: matcher remove %s failed (continuing): %v", name, err)
+				logger.Warning("PBS notifications API apply: matcher delete %s failed (continuing): %v", name, err)
 			}
 			rep.removeFailed = append(rep.removeFailed, "matcher:"+name)
 			continue
@@ -293,22 +333,29 @@ func removeExtraPBSNotificationMatchers(ctx context.Context, logger *logging.Log
 	return nil
 }
 
-func syncPBSNotificationEndpoints(ctx context.Context, logger *logging.Logger, endpoints []pbsNotificationEndpointSection, strict bool, rep *pbsNotificationApplyReport) error {
+func syncPBSNotificationEndpoints(ctx context.Context, endpoints []pbsNotificationEndpointSection, rep *pbsNotificationApplyReport) error {
 	for _, typ := range []string{"smtp", "sendmail", "gotify", "webhook"} {
-		desired := pbsEndpointsByName(endpoints, typ)
-		if strict {
-			// A kind whose staged section we could not REBUILD has an incomplete desired
-			// set, so "live but not in desired" stops meaning "absent from the backup" and
-			// starts meaning "we failed to translate it". Deleting on that evidence
-			// destroys configuration the backup DID contain and cannot restore. Leaving
-			// stale objects is recoverable by hand; deleting a live endpoint is not.
-			if containsPBSApplyString(rep.droppedTypes, typ) {
-				rep.removalsSkipped = appendUniquePBSString(rep.removalsSkipped, typ)
-			} else if err := removeExtraPBSNotificationEndpoints(ctx, logger, typ, desired, rep); err != nil {
-				return err
-			}
+		if err := upsertPBSNotificationEndpoints(ctx, typ, pbsEndpointsByName(endpoints, typ), rep); err != nil {
+			return err
 		}
-		if err := upsertPBSNotificationEndpoints(ctx, typ, desired, rep); err != nil {
+	}
+	return nil
+}
+
+// removeStalePBSNotificationEndpoints is the Clean removal pass over the endpoints,
+// run after the matchers are updated.
+func removeStalePBSNotificationEndpoints(ctx context.Context, logger *logging.Logger, endpoints []pbsNotificationEndpointSection, rep *pbsNotificationApplyReport) error {
+	for _, typ := range []string{"smtp", "sendmail", "gotify", "webhook"} {
+		// A kind whose staged section we could not REBUILD has an incomplete desired
+		// set, so "live but not in desired" stops meaning "absent from the backup" and
+		// starts meaning "we failed to translate it". Deleting on that evidence
+		// destroys configuration the backup DID contain and cannot restore. Leaving
+		// stale objects is recoverable by hand; deleting a live endpoint is not.
+		if containsPBSApplyString(rep.droppedTypes, typ) {
+			rep.removalsSkipped = appendUniquePBSString(rep.removalsSkipped, typ)
+			continue
+		}
+		if err := removeExtraPBSNotificationEndpoints(ctx, logger, typ, pbsEndpointsByName(endpoints, typ), rep); err != nil {
 			return err
 		}
 	}
@@ -332,15 +379,15 @@ func pbsEndpointsByName(endpoints []pbsNotificationEndpointSection, typ string) 
 func removeExtraPBSNotificationEndpoints(ctx context.Context, logger *logging.Logger, typ string, desired map[string]pbsNotificationEndpointSection, rep *pbsNotificationApplyReport) error {
 	current, err := listPBSNotificationIDs(ctx, "endpoint", typ, "list")
 	if err != nil {
-		return err
+		return recordPBSNotificationListFailure(ctx, logger, typ, err, rep)
 	}
 	for _, name := range current {
 		if _, ok := desired[name]; ok {
 			continue
 		}
-		if _, err := runPBSManager(ctx, "notification", "endpoint", typ, "remove", name); err != nil {
+		if _, err := runPBSManager(ctx, "notification", "endpoint", typ, "delete", name); err != nil {
 			if logger != nil {
-				logger.Warning("PBS notifications API apply: endpoint remove %s:%s failed (continuing): %v", typ, name, err)
+				logger.Warning("PBS notifications API apply: endpoint delete %s:%s failed (continuing): %v", typ, name, err)
 			}
 			rep.removeFailed = append(rep.removeFailed, typ+":"+name)
 			continue
@@ -408,8 +455,12 @@ func upsertPBSNotificationMatcher(ctx context.Context, name string, matcher prox
 	return nil
 }
 
+// listPBSNotificationIDs lists the live objects of one kind that a Clean restore may
+// remove. Built-in objects (origin builtin or modified-builtin: default-matcher,
+// mail-to-root) are left out: PBS resets them on delete instead of removing them.
 func listPBSNotificationIDs(ctx context.Context, args ...string) ([]string, error) {
-	out, err := runPBSManager(ctx, append([]string{"notification"}, args...)...)
+	cmd := append(append([]string{"notification"}, args...), "--output-format=json")
+	out, err := runPBSManager(ctx, cmd...)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +468,24 @@ func listPBSNotificationIDs(ctx context.Context, args ...string) ([]string, erro
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", strings.Join(args, " "), err)
 	}
-	return current, nil
+	data := unwrapPBSJSONData(out)
+	if len(data) == 0 {
+		return current, nil
+	}
+	var rows []struct {
+		Name   string `json:"name"`
+		Origin string `json:"origin"`
+	}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", strings.Join(args, " "), err)
+	}
+	builtin := make(map[string]bool)
+	for _, row := range rows {
+		if origin := strings.TrimSpace(row.Origin); origin == "builtin" || origin == "modified-builtin" {
+			builtin[strings.TrimSpace(row.Name)] = true
+		}
+	}
+	return slices.DeleteFunc(current, func(name string) bool { return builtin[name] }), nil
 }
 
 func pbsNotificationSectionKey(typ, name string) string {

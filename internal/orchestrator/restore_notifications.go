@@ -137,6 +137,13 @@ func logPBSNotificationApplyReport(logger *logging.Logger, behavior PBSRestoreBe
 		logger.Warning("PBS notifications: Clean 1:1 did not remove stale %s endpoint(s): at least one staged section of that kind could not be rebuilt, so a live endpoint missing from the desired set is not evidence that the backup lacked it",
 			strings.Join(rep.removalsSkipped, ", "))
 	}
+	for _, f := range rep.listFailed {
+		if f.kind == "matcher" {
+			logger.Warning("PBS notifications: Clean 1:1 did not remove stale matcher(s): this PBS could not list them (%s)", f.cause)
+			continue
+		}
+		logger.Warning("PBS notifications: Clean 1:1 did not remove stale %s endpoint(s): this PBS could not list them (%s)", f.kind, f.cause)
+	}
 	if rep.dropped() > 0 {
 		logger.Warning("PBS notifications: %d staged section(s) were not applied (%d unknown type, %d missing a required field)",
 			rep.dropped(), rep.droppedUnknownType, rep.droppedIncomplete)
@@ -146,6 +153,8 @@ func logPBSNotificationApplyReport(logger *logging.Logger, behavior PBSRestoreBe
 		switch {
 		case !rep.staged:
 			logger.Info("PBS notifications: this backup contains no notifications.cfg, so nothing was applied and the live configuration is unchanged")
+		case rep.emptyCleanRefused:
+			logger.Warning("PBS notifications: Clean 1:1 removed nothing: the notifications.cfg in the backup is empty")
 		case rep.stagedEmpty:
 			logger.Warning("PBS notifications: the staged notifications.cfg is empty, so nothing was applied and the live configuration is unchanged")
 		case rep.sections == 0:
