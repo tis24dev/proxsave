@@ -183,11 +183,8 @@ marker, the restore's own `<BASE_DIR>/restore/<timestamp>` for the log and the r
 archive), a compile-time prefix, and a timestamp. Each script creates its log `0600` in a
 subshell (`umask 077`), so the umask of the rest of the script, and of what it runs, is
 unchanged. **That provenance is the guarantee.** A `shellQuote`
-helper is applied on the way in, but it only quotes a value containing whitespace or one of
-`"'\$&;|<>`, so in practice every one of these paths is emitted verbatim, and its trigger
-set omits the backtick, the glob characters `*` `?` `[` `]`, the grouping `(` `)`, the
-comment `#`, tilde expansion `~` and brace expansion `{` `}`. Treat it as incidental, not as
-the control.
+helper single-quotes each value on the way in (an embedded `'` is written as `'\''`), so no
+character of it is read as shell syntax. It is a second layer, not the control.
 
 ## Security preflight
 

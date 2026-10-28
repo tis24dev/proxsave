@@ -915,13 +915,10 @@ func buildRollbackScript(markerPath, backupPath, logPath string, restartNetworki
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// shellQuote single-quotes value for /bin/sh, an embedded ' written as '\''. Every
+// value is quoted: quoting only those with whitespace or one of "'\$&;|<> let a
+// BASE_DIR with ( ) or a backtick make every rollback script a syntax error.
 func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	if !strings.ContainsAny(value, " \t\n\"'\\$&;|<>") {
-		return value
-	}
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
