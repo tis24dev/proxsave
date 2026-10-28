@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,10 +38,7 @@ func TestSafeClusterApplyRecreatesMappingDescriptionAndPCIFlags(t *testing.T) {
 		t.Fatalf("runSafeClusterApply: %v", err)
 	}
 	want := "pvesh create /cluster/mapping/pci --id probe8 --description probe desc --mdev 1 --live-migration-capable 1 --map node=pve,path=0000:00:00.0,id=8086:7190"
-	for _, call := range runner.calls {
-		if call == want {
-			return
-		}
+	if !slices.Contains(runner.calls, want) {
+		t.Fatalf("no call %q; calls=%#v", want, runner.calls)
 	}
-	t.Fatalf("no call %q; calls=%#v", want, runner.calls)
 }
