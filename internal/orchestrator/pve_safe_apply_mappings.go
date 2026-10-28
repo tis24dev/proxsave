@@ -14,10 +14,29 @@ import (
 	"github.com/tis24dev/proxsave/internal/logging"
 )
 
+// pveClusterMappingJSON is one mapping as `pvesh get /cluster/mapping/<type>` exports
+// it (measured on PVE 9.1.9: description, and for pci the flags mdev and
+// live-migration-capable as numbers).
 type pveClusterMappingJSON struct {
-	ID      string            `json:"id"`
-	Comment string            `json:"comment,omitempty"`
-	Map     []pveMappingEntry `json:"map,omitempty"`
+	ID                   string            `json:"id"`
+	Description          string            `json:"description,omitempty"`
+	MDev                 pveFlag           `json:"mdev,omitempty"`
+	LiveMigrationCapable pveFlag           `json:"live-migration-capable,omitempty"`
+	Map                  []pveMappingEntry `json:"map,omitempty"`
+}
+
+// pveFlag is a PVE boolean property, which pvesh prints as a number; a bool or a
+// string ("1", "true") reads the same.
+type pveFlag bool
+
+func (f *pveFlag) UnmarshalJSON(data []byte) error {
+	switch v := strings.Trim(strings.TrimSpace(string(data)), `"`); strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		*f = true
+	default:
+		*f = false
+	}
+	return nil
 }
 
 // pveMappingEntry is one per-node mapping inside a cluster resource mapping.
@@ -78,9 +97,11 @@ func parsePVEPropertyString(s string) map[string]string {
 }
 
 type pveClusterMappingSpec struct {
-	ID         string
-	Comment    string
-	MapEntries []string // canonical `k=v,k=v` entries (one per node mapping)
+	ID                   string
+	Description          string
+	MDev                 bool     // pci only
+	LiveMigrationCapable bool     // pci only
+	MapEntries           []string // canonical `k=v,k=v` entries (one per node mapping)
 }
 
 func maybeApplyPVEClusterResourceMappingsWithUI(ctx context.Context, ui RestoreWorkflowUI, logger *logging.Logger, exportRoot string) error {
@@ -187,8 +208,10 @@ func readPVEClusterResourceMappingsFromExport(exportRoot, mappingType string) ([
 			continue
 		}
 		spec := pveClusterMappingSpec{
-			ID:      id,
-			Comment: strings.TrimSpace(item.Comment),
+			ID:                   id,
+			Description:          strings.TrimSpace(item.Description),
+			MDev:                 bool(item.MDev),
+			LiveMigrationCapable: bool(item.LiveMigrationCapable),
 		}
 
 		for _, m := range item.Map {
@@ -233,8 +256,18 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 	}
 
 	createArgs := []string{"create", fmt.Sprintf("/cluster/mapping/%s", mappingType), "--id", id}
-	if strings.TrimSpace(spec.Comment) != "" {
-		createArgs = append(createArgs, "--comment", strings.TrimSpace(spec.Comment))
+	if description := strings.TrimSpace(spec.Description); description != "" {
+		createArgs = append(createArgs, "--description", description)
+	}
+	if mappingType == "pci" {
+		if spec.MDev {
+			createArgs = append(createArgs, "--mdev", "1")
+		}
+		// PVE 8.3+; an older PVE refuses the create and the mapping is reported as
+		// not applied.
+		if spec.LiveMigrationCapable {
+			createArgs = append(createArgs, "--live-migration-capable", "1")
+		}
 	}
 	for _, entry := range spec.MapEntries {
 		createArgs = append(createArgs, "--map", entry)
@@ -268,16 +301,11 @@ func applyPVEClusterResourceMapping(ctx context.Context, logger *logging.Logger,
 		return fmt.Errorf("create %s mapping %q failed and the existing mapping could not be read (get error: %v, parse error: %v): %w", mappingType, id, getErr, parseErr, createErr)
 	}
 
+	// An existing mapping keeps its own description and flags: only the map entries
+	// are merged.
 	mergedEntries := uniqueSortedStrings(append(existing.MapEntries, spec.MapEntries...))
-	comment := strings.TrimSpace(spec.Comment)
-	if comment == "" {
-		comment = strings.TrimSpace(existing.Comment)
-	}
 
 	setArgs := []string{"set", fmt.Sprintf("/cluster/mapping/%s/%s", mappingType, id)}
-	if comment != "" {
-		setArgs = append(setArgs, "--comment", comment)
-	}
 	for _, entry := range mergedEntries {
 		setArgs = append(setArgs, "--map", entry)
 	}
@@ -306,8 +334,8 @@ func parsePVEClusterMappingObject(data []byte) (pveClusterMappingSpec, bool, err
 		return pveClusterMappingSpec{}, false, nil
 	}
 	spec := pveClusterMappingSpec{
-		ID:      id,
-		Comment: strings.TrimSpace(obj.Comment),
+		ID:          id,
+		Description: strings.TrimSpace(obj.Description),
 	}
 	for _, m := range obj.Map {
 		if rendered := renderMappingEntry(m.props); rendered != "" {

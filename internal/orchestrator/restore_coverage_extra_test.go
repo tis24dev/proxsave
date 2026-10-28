@@ -443,7 +443,7 @@ func TestRunSafeClusterApply_AppliesResourceMappingsFromProxsaveInfo(t *testing.
 		t.Fatalf("mkdir mapping dir: %v", err)
 	}
 	if err := os.WriteFile(mappingPath, []byte(strings.TrimSpace(`[
-  {"id":"device1","comment":"GPU","map":[{"node":"pve01","path":"0000:01:00.0"}]}
+  {"id":"device1","description":"GPU","map":[{"node":"pve01","path":"0000:01:00.0"}]}
 ]`)), 0o640); err != nil {
 		t.Fatalf("write mapping_pci.json: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestRunSafeClusterApply_AppliesResourceMappingsFromProxsaveInfo(t *testing.
 		t.Fatalf("runSafeClusterApply error: %v", err)
 	}
 
-	wantPrefix := "pvesh create /cluster/mapping/pci --id device1 --comment GPU --map node=pve01,path=0000:01:00.0"
+	wantPrefix := "pvesh create /cluster/mapping/pci --id device1 --description GPU --map node=pve01,path=0000:01:00.0"
 	found := false
 	for _, call := range runner.calls {
 		if strings.HasPrefix(call, wantPrefix) {
