@@ -156,34 +156,9 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		t.Fatalf("expected ACL removed, stat err=%v", err)
 	}
 
-	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("keep-me\n"), 0o640); err != nil {
-		t.Fatalf("seed acl file for unknown format: %v", err)
-	}
-	if err := applyPBSACLFromStage(logger, "this-is-not-known-format", nil); err != nil {
-		t.Fatalf("unknown ACL format should be ignored, got %v", err)
-	}
-	kept, err := fakeFS.ReadFile(pbsACLCfgPath)
-	if err != nil {
-		t.Fatalf("read acl after unknown format: %v", err)
-	}
-	if string(kept) != "keep-me\n" {
-		t.Fatalf("unknown format should keep previous acl content, got %q", string(kept))
-	}
-
-	// PBS has no section format for acl.cfg: one is left out like any unknown format.
-	sectionACL := strings.Join([]string{
-		"acl: backup-acl",
-		"  path /",
-		"  users root@pam alice@pbs",
-		"  roles Admin",
-		"",
-	}, "\n")
-	if err := applyPBSACLFromStage(logger, sectionACL, nil); err != nil {
-		t.Fatalf("apply section ACL format: %v", err)
-	}
-	if kept, _ := fakeFS.ReadFile(pbsACLCfgPath); string(kept) != "keep-me\n" {
-		t.Fatalf("a section-format acl.cfg must be left out, got %q", string(kept))
-	}
+	// A staged acl.cfg with a line that is not an acl: entry (an unknown or a section
+	// format) never reaches applyPBSACLFromStage: the restore stops before its first
+	// write (TestPBSAccessControlStopsOnAStagedACLNotInLineFormatBeforeAnyWrite).
 
 	lineACL := strings.Join([]string{
 		"acl:1:/:root@pam!old,alice@pbs:Admin",

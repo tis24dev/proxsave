@@ -38,3 +38,36 @@ func TestPBSAccessControlStopsOnAHostACLNotInLineFormat(t *testing.T) {
 	}
 	assertHostFilesUnchanged(t, fakeFS, host)
 }
+
+// A staged acl.cfg with a line that is not an acl: entry was found only after
+// user.cfg, domains.cfg and token.cfg had been written: a WARNING, the ACL left out,
+// and the restored users without their permissions. It now stops the PBS access
+// control restore before the first write.
+func TestPBSAccessControlStopsOnAStagedACLNotInLineFormatBeforeAnyWrite(t *testing.T) {
+	const stageRoot = "/stage"
+	host := map[string]string{
+		pbsDomainsCfgPath: "pam: pam\n\tcomment hostpam\n",
+		pbsUserCfgPath:    "user: root@pam\n\tenable 1\n\ntoken: root@pam!host\n\tcomment host token\n",
+		pbsTokenCfgPath:   "token: root@pam!host\n\tcomment host token\n",
+		pbsACLCfgPath:     "acl:1:/datastore/ds1:root@pam!host:DatastoreBackup\n",
+	}
+	stage := map[string]string{
+		stageRoot + "/etc/proxmox-backup/domains.cfg": "pam: pam\n\tcomment backuppam\n",
+		stageRoot + "/etc/proxmox-backup/user.cfg":    "user: alice@pbs\n\tenable 1\n",
+		stageRoot + "/etc/proxmox-backup/token.cfg":   "token: alice@pbs!tok\n\tcomment alice token\n",
+		stageRoot + "/etc/proxmox-backup/acl.cfg":     "acl:1:/:alice@pbs:Admin\n\nacl: /datastore\n\tusers alice@pbs\n",
+	}
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	hostAccessControlFixture(t, fakeFS, host, stage)
+	restoreFS = fakeFS
+
+	err := applyPBSAccessControlFromStage(context.Background(), newTestLogger(), stageRoot)
+	const want = "parse staged acl.cfg: line 3 is not an acl: entry"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	assertHostFilesUnchanged(t, fakeFS, host)
+}

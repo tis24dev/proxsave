@@ -152,6 +152,9 @@ func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 		if err != nil {
 			return fmt.Errorf("parse staged token.cfg: %w", err)
 		}
+		if n := firstNonPBSACLLine(stagedACLRaw); n > 0 {
+			return fmt.Errorf("parse staged acl.cfg: line %d is not an acl: entry", n)
+		}
 
 		rootUser := findPBSRootUserSection(currentUserSections)
 		if rootUser == nil {
@@ -307,13 +310,27 @@ func applyPBSACLFromStage(logger *logging.Logger, stagedACL string, hostRootToke
 
 	// PBS writes acl.cfg in one format only, acl:<propagate>:<path>:<userlist>:<roles>
 	// (pbs-config/src/acl.rs, the same since 0.8), and refuses to load a file with any
-	// other line, so a staged acl.cfg in another format is left out.
-	if isPBSACLLineFormat(raw) {
-		return applyPBSACLLineFormat(raw, hostRootTokenACL)
-	}
+	// other line. The staged file was checked line by line before the first write of
+	// the restore (firstNonPBSACLLine), and so was this host's, which hostRootTokenACL
+	// comes from.
+	return applyPBSACLLineFormat(raw, hostRootTokenACL)
+}
 
-	logger.Warning("PBS access control: staged acl.cfg has unknown format; skipping apply")
-	return nil
+// firstNonPBSACLLine returns the 1-based number of the first line of an acl.cfg that
+// is neither blank, a comment nor an acl: entry, or 0 when there is none.
+func firstNonPBSACLLine(content string) int {
+	n := 0
+	for line := range strings.SplitSeq(content, "\n") {
+		n++
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if !isPBSACLLineFormat(trimmed) {
+			return n
+		}
+	}
+	return 0
 }
 
 type pbsACLLine struct {
@@ -420,18 +437,16 @@ func currentPBSRootTokenACLLines() ([]string, error) {
 		}
 		return nil, fmt.Errorf("read current %s: %w", pbsACLCfgPath, err)
 	}
+	// PBS writes and loads only acl: lines. Any other line leaves this host's root@pam
+	// token entries unknown, and the acl.cfg written next would drop them.
+	if n := firstNonPBSACLLine(string(data)); n > 0 {
+		return nil, fmt.Errorf("read current %s: line %d is not an acl: entry", pbsACLCfgPath, n)
+	}
 	var out []string
-	n := 0
 	for line := range strings.SplitSeq(string(data), "\n") {
-		n++
 		entry, ok := parsePBSACLLine(line)
-		if !ok {
+		if !ok || !strings.HasPrefix(entry.Raw, "acl:") {
 			continue
-		}
-		// PBS writes and loads only acl: lines. Any other line leaves this host's
-		// root@pam token entries unknown, and the acl.cfg written next would drop them.
-		if !isPBSACLLineFormat(entry.Raw) {
-			return nil, fmt.Errorf("read current %s: line %d is not an acl: entry", pbsACLCfgPath, n)
 		}
 		var tokens []string
 		for id := range strings.SplitSeq(entry.UserList, ",") {
