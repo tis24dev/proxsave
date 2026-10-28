@@ -174,20 +174,9 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 		}
 	}
 
-	if plan.HasCategoryID("pbs_remotes") {
-		if apiAvailable {
-			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
-				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsRemoteSectionCfg(), err, &outcomeLogged); stop != nil {
-					return stop
-				}
-			}
-		} else if allowFileFallback {
-			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsRemoteSectionCfg(), &outcomeLogged)
-		} else {
-			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
-		}
-	}
-
+	// The jobs before the remotes: a Clean restore removes a stale remote only when no
+	// job uses it, so removing the stale jobs first lets it go. PBS accepts a sync job
+	// whose remote does not exist yet (measured on PBS 4.2.8, pull and push).
 	if plan.HasCategoryID("pbs_jobs") {
 		if apiAvailable {
 			if err := pbsStagedApplySyncCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
@@ -211,6 +200,20 @@ func maybeApplyPBSConfigsFromStage(ctx context.Context, logger *logging.Logger, 
 			}
 		} else {
 			logging.DebugStep(logger, "pbs staged apply", "Skipping sync/verification/prune configs: merge mode requires PBS API apply")
+		}
+	}
+
+	if plan.HasCategoryID("pbs_remotes") {
+		if apiAvailable {
+			if err := pbsStagedApplyRemoteCfgViaAPIFn(ctx, logger, stageRoot, strict); err != nil {
+				if stop := pbsSectionApplyFailed(ctx, logger, stageRoot, strict, pbsRemoteSectionCfg(), err, &outcomeLogged); stop != nil {
+					return stop
+				}
+			}
+		} else if allowFileFallback {
+			pbsSectionFileBlock(ctx, logger, stageRoot, true, pbsRemoteSectionCfg(), &outcomeLogged)
+		} else {
+			logging.DebugStep(logger, "pbs staged apply", "Skipping remote.cfg: merge mode requires PBS API apply")
 		}
 	}
 

@@ -867,7 +867,7 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 		if !warned {
 			t.Fatal("restore must end with warnings")
 		}
-		want := "DEBUG    PBS staged config apply: outcome already reported: PBS remote configuration incomplete: 1 remote(s) not applied [r1]; PBS sync job configuration incomplete: 1 sync job(s) not applied [s1]"
+		want := "DEBUG    PBS staged config apply: outcome already reported: PBS sync job configuration incomplete: 1 sync job(s) not applied [s1]; PBS remote configuration incomplete: 1 remote(s) not applied [r1]"
 		lines := pbsBlockLogLines(log)
 		if last := lines[len(lines)-1]; last != want {
 			t.Fatalf("last line %q, want %q\n%s", last, want, log)
