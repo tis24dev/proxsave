@@ -844,7 +844,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 	c.logger.Debug("Collecting %s: %s -> %s", description, src, dest)
 
-	if c.isWithinStagingDir(src) {
+	if c.sourceWithinStagingDir(src) {
 		c.logger.Debug("Skipping file %s: inside the staging workspace (#56)", src)
 		return nil
 	}
@@ -1093,6 +1093,22 @@ func (c *Collector) isWithinStagingDir(path string) bool {
 	return false
 }
 
+// sourceWithinStagingDir is isWithinStagingDir for a source handed to safeCopyFile or
+// safeCopyDir, compared with its symlinks resolved as well: /alias/run/etc with /alias
+// pointing at the staging tree's parent names a directory inside it under a path that
+// has nothing in common with tempDir, and the archive's own files were copied into it
+// again. It is resolved once per source; the walk below it compares paths and inodes.
+func (c *Collector) sourceWithinStagingDir(src string) bool {
+	if c.isWithinStagingDir(src) {
+		return true
+	}
+	if !c.collectingCustomPaths || c.tempDir == "" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(src)
+	return err == nil && c.isWithinStagingDir(resolved)
+}
+
 // stagingRoot is the staging tempDir with its symlinks resolved, computed once: a
 // resolved path (a symlink's target, or one under a symlinked /tmp) is compared with
 // it. The lexical tempDir stands in when it cannot be resolved.
@@ -1133,7 +1149,7 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 
 	c.logger.Debug("Collecting directory %s: %s -> %s", description, src, dest)
 
-	if c.isWithinStagingDir(src) {
+	if c.sourceWithinStagingDir(src) {
 		c.logger.Debug("Skipping directory %s: inside the staging workspace (would copy the archive into itself)", src)
 		return nil
 	}
