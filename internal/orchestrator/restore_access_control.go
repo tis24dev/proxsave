@@ -41,15 +41,6 @@ func maybeApplyAccessControlFromStage(ctx context.Context, logger *logging.Logge
 		return nil
 	}
 
-	// Cluster backups: avoid applying PVE access control in SAFE mode.
-	// Full-fidelity access control + secrets restore requires cluster RECOVERY (config.db) on an isolated/offline cluster.
-	if plan.SystemType.SupportsPVE() &&
-		plan.HasCategoryID("pve_access_control") &&
-		plan.ClusterBackup &&
-		!plan.NeedsClusterRestore {
-		logger.Warning("PVE access control: cluster backup detected; skipping 1:1 access control apply in SAFE mode (use cluster RECOVERY for full fidelity)")
-	}
-
 	done := logging.DebugStart(logger, "access control staged apply", "dryRun=%v stage=%s", dryRun, stageRoot)
 	defer func() { done(err) }()
 

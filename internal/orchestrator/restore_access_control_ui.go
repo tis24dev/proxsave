@@ -32,6 +32,9 @@ type AccessControlApplyNotCommittedError struct {
 	RollbackMarker   string
 	RollbackArmed    bool
 	RollbackDeadline time.Time
+	// FullSafetyBackup is set when the armed rollback restores the full safety backup
+	// (no access control rollback backup was available): it reverts the PBS files too.
+	FullSafetyBackup bool
 }
 
 func (e *AccessControlApplyNotCommittedError) Error() string {
@@ -88,6 +91,15 @@ func buildAccessControlApplyNotCommittedError(handle *accessControlRollbackHandl
 		RollbackArmed:    rollbackArmed,
 		RollbackDeadline: rollbackDeadline,
 	}
+}
+
+// withFullSafetyBackup records on a not-committed error that the armed rollback
+// restores the full safety backup.
+func withFullSafetyBackup(e *AccessControlApplyNotCommittedError, full bool) *AccessControlApplyNotCommittedError {
+	if e != nil {
+		e.FullSafetyBackup = full
+	}
+	return e
 }
 
 func stageHasPVEAccessControlConfig(stageRoot string) (bool, error) {
@@ -149,16 +161,41 @@ func maybeApplyAccessControlWithUI(
 		plan.HasCategoryID("pve_access_control") &&
 		plan.ClusterBackup &&
 		!plan.NeedsClusterRestore {
-		if err := maybeApplyPVEAccessControlFromClusterBackupWithUI(ctx, ui, logger, plan, safetyBackup, accessControlRollbackBackup, stageRoot, dryRun); err != nil {
-			return err
-		}
+		pveErr := maybeApplyPVEAccessControlFromClusterBackupWithUI(ctx, ui, logger, plan, safetyBackup, accessControlRollbackBackup, stageRoot, dryRun)
 		if !plan.SystemType.SupportsPBS() || !plan.HasCategoryID("pbs_access_control") {
-			return nil
+			return pveErr
+		}
+		if pveErr != nil {
+			return applyPBSAccessControlAfterPVEError(ctx, logger, plan, stageRoot, dryRun, pveErr)
 		}
 	}
 
 	// Default behavior for all other cases (PBS, standalone PVE, cluster RECOVERY).
 	return maybeApplyAccessControlFromStage(ctx, logger, plan, stageRoot, dryRun)
+}
+
+// applyPBSAccessControlAfterPVEError still applies the PBS access control after the
+// PVE one ended with pveErr (not committed, rollback not armed, apply failed), and
+// returns pveErr. An abort or an inconsistent state stops it, and so does a rollback
+// armed on the full safety backup, which would revert the PBS files it writes. A PBS
+// failure is logged here: the runner reports only pveErr.
+func applyPBSAccessControlAfterPVEError(ctx context.Context, logger *logging.Logger, plan *RestorePlan, stageRoot string, dryRun bool, pveErr error) error {
+	if restoreAbortOrInput(pveErr) || errors.Is(pveErr, context.Canceled) || errors.Is(pveErr, ErrRestoreInconsistentState) {
+		return pveErr
+	}
+	if notCommitted, ok := errors.AsType[*AccessControlApplyNotCommittedError](pveErr); ok && notCommitted.FullSafetyBackup {
+		logger.Debug("PBS access control: skipped, the armed PVE access control rollback restores the full safety backup (%s)", pveErr)
+		logger.Warning("PBS access control: not applied; the armed rollback restores the full safety backup")
+		return pveErr
+	}
+	logger.Debug("PBS access control: applied after the PVE access control ended with: %v", pveErr)
+	if err := maybeApplyAccessControlFromStage(ctx, logger, plan, stageRoot, dryRun); err != nil {
+		if restoreAbortOrInput(err) || errors.Is(err, ErrRestoreInconsistentState) {
+			return err
+		}
+		logger.Warning("Access control staged apply: %v", err)
+	}
+	return pveErr
 }
 
 func maybeApplyPVEAccessControlFromClusterBackupWithUI(
@@ -246,6 +283,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 		rollbackPath = strings.TrimSpace(accessControlRollbackBackup.BackupPath)
 	}
 	fullRollbackPath := ""
+	fullRollback := false
 	if safetyBackup != nil {
 		fullRollbackPath = strings.TrimSpace(safetyBackup.BackupPath)
 	}
@@ -269,6 +307,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 			return nil
 		}
 		rollbackPath = fullRollbackPath
+		fullRollback = true
 	}
 
 	if rollbackPath == "" {
@@ -312,7 +351,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 
 	remaining := rollbackHandle.remaining(nowRestore())
 	if remaining <= 0 {
-		return buildAccessControlApplyNotCommittedError(rollbackHandle)
+		return withFullSafetyBackup(buildAccessControlApplyNotCommittedError(rollbackHandle), fullRollback)
 	}
 
 	logger.Info("")
@@ -328,7 +367,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 			return err
 		}
 		logger.Warning("Access control commit prompt failed: %v", err)
-		return buildAccessControlApplyNotCommittedError(rollbackHandle)
+		return withFullSafetyBackup(buildAccessControlApplyNotCommittedError(rollbackHandle), fullRollback)
 	}
 
 	if commit {
@@ -337,7 +376,7 @@ func maybeApplyPVEAccessControlFromClusterBackupWithUI(
 		return nil
 	}
 
-	return buildAccessControlApplyNotCommittedError(rollbackHandle)
+	return withFullSafetyBackup(buildAccessControlApplyNotCommittedError(rollbackHandle), fullRollback)
 }
 
 func armAccessControlRollback(ctx context.Context, logger *logging.Logger, backupPath string, timeout time.Duration, workDir string) (handle *accessControlRollbackHandle, err error) {
