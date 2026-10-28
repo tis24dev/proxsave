@@ -1,19 +1,14 @@
 package pbs
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
 
-	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/safefs"
 )
-
-var execCommand = safeexec.CommandContext
 
 // Namespace represents a single PBS namespace.
 type Namespace struct {
@@ -24,104 +19,64 @@ type Namespace struct {
 	Ctime   int64  `json:"ctime"`
 }
 
-type listNamespacesResponse struct {
-	Data []Namespace `json:"data"`
-}
-
-// ListNamespaces tries the PBS CLI first and, if it fails,
-// falls back to the filesystem to infer namespaces.
-func ListNamespaces(ctx context.Context, datastoreName, datastorePath string, ioTimeout time.Duration) ([]Namespace, bool, error) {
-	if namespaces, err := listNamespacesViaCLI(ctx, datastoreName); err == nil {
-		return namespaces, false, nil
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-
-	namespaces, err := discoverNamespacesFromFilesystem(ctx, datastorePath, ioTimeout)
-	if err != nil {
-		return nil, false, err
-	}
-
-	return namespaces, true, nil
-}
-
-// DiscoverNamespacesFromFilesystem skips the PBS CLI and infers namespaces
-// directly from the datastore filesystem layout.
+// DiscoverNamespacesFromFilesystem lists a datastore's namespaces from its directory.
 func DiscoverNamespacesFromFilesystem(ctx context.Context, datastorePath string, ioTimeout time.Duration) ([]Namespace, error) {
 	return discoverNamespacesFromFilesystem(ctx, datastorePath, ioTimeout)
 }
 
-func listNamespacesViaCLI(ctx context.Context, datastore string) ([]Namespace, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	cmd, cmdErr := execCommand(
-		ctx,
-		"proxmox-backup-manager",
-		"datastore",
-		"namespace",
-		"list",
-		datastore,
-		"--output-format=json",
-	)
-	if cmdErr != nil {
-		return nil, cmdErr
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("namespace list command failed: %w (stderr: %s)", err, stderr.String())
-	}
-
-	var parsed listNamespacesResponse
-	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		return nil, fmt.Errorf("namespace list parsing failed: %w", err)
-	}
-
-	return parsed.Data, nil
-}
+// pbsMaxNamespaceDepth is how many levels PBS allows below the root namespace
+// (MAX_NAMESPACE_DEPTH in pbs-api-types).
+const pbsMaxNamespaceDepth = 7
 
 func discoverNamespacesFromFilesystem(ctx context.Context, datastorePath string, ioTimeout time.Duration) ([]Namespace, error) {
 	if datastorePath == "" {
 		return nil, fmt.Errorf("datastore path is empty")
 	}
 
-	entries, err := safefs.ReadDir(ctx, datastorePath, ioTimeout)
-	if err != nil {
+	if _, err := safefs.ReadDir(ctx, datastorePath, ioTimeout); err != nil {
 		return nil, fmt.Errorf("cannot read datastore path %s: %w", datastorePath, err)
 	}
 
-	var namespaces []Namespace
-	namespaces = append(namespaces, Namespace{
+	namespaces := []Namespace{{
 		Ns:      "",
 		Path:    datastorePath,
 		Comment: "root namespace",
-	})
+	}}
 
-	checkDirs := []string{"vm", "ct", "host", "namespace"}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	// PBS keeps a namespace at <ds>/ns/<name> and a child one at <ds>/ns/<name>/ns/<child>
+	// (measured on pve-test, PBS 4.2), up to pbsMaxNamespaceDepth levels. A directory that
+	// cannot be read is skipped like an absent one; a timeout ends the walk.
+	var walk func(dir, parent string, depth int) error
+	walk = func(dir, parent string, depth int) error {
+		if depth > pbsMaxNamespaceDepth {
+			return nil
 		}
-
-		subPath := filepath.Join(datastorePath, entry.Name())
-		for _, chk := range checkDirs {
-			if _, err := safefs.Stat(ctx, filepath.Join(subPath, chk), ioTimeout); err == nil {
-				namespaces = append(namespaces, Namespace{
-					Ns:   entry.Name(),
-					Path: subPath,
-				})
-				break
-			} else if errors.Is(err, safefs.ErrTimeout) {
-				return nil, err
+		nsDir := filepath.Join(dir, "ns")
+		entries, err := safefs.ReadDir(ctx, nsDir, ioTimeout)
+		if err != nil {
+			if errors.Is(err, safefs.ErrTimeout) {
+				return err
+			}
+			return nil
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			ns := entry.Name()
+			if parent != "" {
+				ns = parent + "/" + ns
+			}
+			path := filepath.Join(nsDir, entry.Name())
+			namespaces = append(namespaces, Namespace{Ns: ns, Path: path, Parent: parent})
+			if err := walk(path, ns, depth+1); err != nil {
+				return err
 			}
 		}
+		return nil
+	}
+	if err := walk(datastorePath, "", 1); err != nil {
+		return nil, err
 	}
 
 	return namespaces, nil

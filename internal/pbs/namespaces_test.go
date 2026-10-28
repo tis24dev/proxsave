@@ -3,10 +3,7 @@ package pbs
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,75 +33,12 @@ func TestNamespaceJSONRoundTrip(t *testing.T) {
 	}
 }
 
-func TestListNamespacesResponseParse(t *testing.T) {
-	jsonData := `{
-		"data": [
-			{"ns": "", "path": "/mnt/datastore", "comment": "root namespace"},
-			{"ns": "prod", "path": "/mnt/datastore/prod", "parent": "", "ctime": 1700000000}
-		]
-	}`
-
-	var resp listNamespacesResponse
-	if err := json.Unmarshal([]byte(jsonData), &resp); err != nil {
-		t.Fatalf("Unmarshal failed: %v", err)
-	}
-
-	if len(resp.Data) != 2 {
-		t.Fatalf("expected 2 namespaces, got %d", len(resp.Data))
-	}
-	if resp.Data[0].Ns != "" || resp.Data[0].Comment != "root namespace" {
-		t.Fatalf("unexpected root namespace: %#v", resp.Data[0])
-	}
-	if resp.Data[1].Ns != "prod" || resp.Data[1].Path != "/mnt/datastore/prod" {
-		t.Fatalf("unexpected prod namespace: %#v", resp.Data[1])
-	}
-}
-
-func TestDiscoverNamespacesFromFilesystem_DetectsSupportedDirs(t *testing.T) {
-	tmpDir := t.TempDir()
-	mustMkdirAll(t, filepath.Join(tmpDir, "vm-ns", "vm"))
-	mustMkdirAll(t, filepath.Join(tmpDir, "ct-ns", "ct"))
-	mustMkdirAll(t, filepath.Join(tmpDir, "host-ns", "host"))
-	mustMkdirAll(t, filepath.Join(tmpDir, "nested-ns", "namespace"))
-
-	namespaces, err := discoverNamespacesFromFilesystem(context.Background(), tmpDir, 0)
-	if err != nil {
-		t.Fatalf("discover failed: %v", err)
-	}
-
-	got := namespacesToMap(namespaces)
-	if root, ok := got[""]; !ok {
-		t.Fatalf("root namespace missing in %+v", namespaces)
-	} else {
-		if root.Path != tmpDir {
-			t.Fatalf("root path mismatch: got %q want %q", root.Path, tmpDir)
-		}
-		if root.Comment != "root namespace" {
-			t.Fatalf("root comment mismatch: %q", root.Comment)
-		}
-	}
-
-	want := map[string]string{
-		"vm-ns":     filepath.Join(tmpDir, "vm-ns"),
-		"ct-ns":     filepath.Join(tmpDir, "ct-ns"),
-		"host-ns":   filepath.Join(tmpDir, "host-ns"),
-		"nested-ns": filepath.Join(tmpDir, "nested-ns"),
-	}
-	for ns, path := range want {
-		entry, ok := got[ns]
-		if !ok {
-			t.Fatalf("missing namespace %q in %+v", ns, namespaces)
-		}
-		if entry.Path != path {
-			t.Fatalf("path mismatch for %q: got %q want %q", ns, entry.Path, path)
-		}
-	}
-}
-
 func TestDiscoverNamespacesFromFilesystem_IgnoresNonDirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 	mustWriteFile(t, filepath.Join(tmpDir, "some-file.txt"), []byte("ignore me"))
-	mustMkdirAll(t, filepath.Join(tmpDir, "valid-ns", "vm"))
+	mustMkdirAll(t, filepath.Join(tmpDir, "ns"))
+	mustWriteFile(t, filepath.Join(tmpDir, "ns", "not-a-namespace"), []byte("ignore me"))
+	mustMkdirAll(t, filepath.Join(tmpDir, "ns", "valid-ns"))
 
 	namespaces, err := discoverNamespacesFromFilesystem(context.Background(), tmpDir, 0)
 	if err != nil {
@@ -133,7 +67,7 @@ func TestDiscoverNamespacesFromFilesystem_Errors(t *testing.T) {
 
 func TestDiscoverNamespacesFromFilesystemExportedHelper(t *testing.T) {
 	tmpDir := t.TempDir()
-	mustMkdirAll(t, filepath.Join(tmpDir, "prod", "vm"))
+	mustMkdirAll(t, filepath.Join(tmpDir, "ns", "prod"))
 
 	namespaces, err := DiscoverNamespacesFromFilesystem(context.Background(), tmpDir, 0)
 	if err != nil {
@@ -144,103 +78,6 @@ func TestDiscoverNamespacesFromFilesystemExportedHelper(t *testing.T) {
 	if _, ok := got["prod"]; !ok {
 		t.Fatalf("expected exported helper to discover namespace, got %+v", namespaces)
 	}
-}
-
-func TestListNamespaces_CLISuccess(t *testing.T) {
-	setExecCommandStub(t, "cli-success")
-
-	namespaces, usedFallback, err := ListNamespaces(context.Background(), "dummy", t.TempDir(), 0)
-	if err != nil {
-		t.Fatalf("ListNamespaces failed: %v", err)
-	}
-	if usedFallback {
-		t.Fatal("expected CLI result, got fallback")
-	}
-
-	got := namespacesToMap(namespaces)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 namespaces, got %+v", namespaces)
-	}
-	if _, ok := got["prod"]; !ok {
-		t.Fatalf("CLI namespace missing in %+v", namespaces)
-	}
-}
-
-func TestListNamespaces_CLIFallback(t *testing.T) {
-	setExecCommandStub(t, "cli-error")
-
-	tmpDir := t.TempDir()
-	mustMkdirAll(t, filepath.Join(tmpDir, "local", "vm"))
-
-	namespaces, usedFallback, err := ListNamespaces(context.Background(), "dummy", tmpDir, 0)
-	if err != nil {
-		t.Fatalf("ListNamespaces failed: %v", err)
-	}
-	if !usedFallback {
-		t.Fatal("expected fallback to filesystem")
-	}
-
-	got := namespacesToMap(namespaces)
-	if _, ok := got["local"]; !ok {
-		t.Fatalf("expected filesystem namespace, got %+v", namespaces)
-	}
-}
-
-func TestListNamespacesViaCLI_ErrorIncludesStderr(t *testing.T) {
-	setExecCommandStub(t, "cli-error")
-	if _, err := listNamespacesViaCLI(context.Background(), "dummy"); err == nil || !strings.Contains(err.Error(), "stderr: CLI exploded") {
-		t.Fatalf("expected stderr text in error, got %v", err)
-	}
-}
-
-func TestListNamespacesViaCLI_ExecCommandError(t *testing.T) {
-	setExecCommandStub(t, "cmd-failure")
-	if _, err := listNamespacesViaCLI(context.Background(), "dummy"); err == nil || !strings.Contains(err.Error(), "simulated execCommand failure") {
-		t.Fatalf("expected execCommand error, got %v", err)
-	}
-}
-
-func TestHelperProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
-		return
-	}
-
-	switch os.Getenv("PBS_HELPER_SCENARIO") {
-	case "cli-success":
-		_, _ = fmt.Fprint(os.Stdout, `{"data":[{"ns":"","path":"/mnt/datastore","comment":"root namespace"},{"ns":"prod","path":"/mnt/datastore/prod","parent":"","ctime":1700000000}]}`)
-		os.Exit(0)
-	case "cli-error":
-		_, _ = fmt.Fprint(os.Stderr, "CLI exploded")
-		os.Exit(1)
-	default:
-		_, _ = fmt.Fprint(os.Stderr, "unknown scenario")
-		os.Exit(2)
-	}
-}
-
-func setExecCommandStub(t *testing.T, scenario string) {
-	t.Helper()
-	original := execCommand
-	if scenario == "cmd-failure" {
-		execCommand = func(context.Context, string, ...string) (*exec.Cmd, error) {
-			return nil, errors.New("simulated execCommand failure")
-		}
-		t.Cleanup(func() {
-			execCommand = original
-		})
-		return
-	}
-	execCommand = func(context.Context, string, ...string) (*exec.Cmd, error) {
-		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--")
-		cmd.Env = append(os.Environ(),
-			"GO_WANT_HELPER_PROCESS=1",
-			"PBS_HELPER_SCENARIO="+scenario,
-		)
-		return cmd, nil
-	}
-	t.Cleanup(func() {
-		execCommand = original
-	})
 }
 
 func namespacesToMap(namespaces []Namespace) map[string]Namespace {
