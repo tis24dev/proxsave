@@ -28,7 +28,9 @@ func TestInstallConfigSnapshotRestoresTheModeOfAnUnchangedFile(t *testing.T) {
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
 		t.Fatalf("the wizard's write left mode %v, the test needs 0600", st.Mode().Perm())
 	}
-	snap.restore(nil)
+	if err := snap.restore(nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
 	st, err := os.Stat(path)
 	if err != nil || st.Mode().Perm() != 0o640 {
 		t.Fatalf("backup.env mode = %v (err %v), want the snapshot's 0640", st.Mode().Perm(), err)
@@ -56,7 +58,9 @@ func TestInstallConfigSnapshotRestoreReplacesTheFileAtomically(t *testing.T) {
 		return st.Sys().(*syscall.Stat_t).Ino
 	}
 	before := inode()
-	snap.restore(nil)
+	if err := snap.restore(nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
 	if got, _ := os.ReadFile(path); string(got) != "ENCRYPT_ARCHIVE=false\n" {
 		t.Fatalf("backup.env = %q, want the snapshot", got)
 	}
@@ -75,7 +79,9 @@ func TestInstallConfigSnapshotRestoreReplacesTheFileAtomically(t *testing.T) {
 	if err := os.Mkdir(path+".tmp.restore", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	snap.restore(nil)
+	if err := snap.restore(nil); err == nil {
+		t.Fatal("restore returned nil, want the failed write")
+	}
 	if got, _ := os.ReadFile(path); string(got) != "ENCRYPT_ARCHIVE=true\n" {
 		t.Fatalf("after a failed restore backup.env = %q, want the install's file whole", got)
 	}

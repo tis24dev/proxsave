@@ -18,7 +18,9 @@ func TestInstallConfigSnapshotRestoresBackupEnvOnAbort(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ENCRYPT_ARCHIVE=true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snap.restore(nil)
+	if err := snap.restore(nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
 	got, err := os.ReadFile(path)
 	st, _ := os.Stat(path)
 	if err != nil || string(got) != "ENCRYPT_ARCHIVE=false\n" || st.Mode().Perm() != 0o600 {
@@ -30,7 +32,9 @@ func TestInstallConfigSnapshotRestoresBackupEnvOnAbort(t *testing.T) {
 	if err := os.WriteFile(fresh, []byte("SCHEDULER_MODE=daemon\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snap.restore(nil)
+	if err := snap.restore(nil); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
 	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
 		t.Fatalf("a backup.env the aborted install created must be removed, stat err = %v", err)
 	}
