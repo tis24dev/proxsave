@@ -25,9 +25,7 @@ func TestSafeCopyDirSkipsEntriesThatVanishDuringTheWalk(t *testing.T) {
 	}
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; ; i++ {
 			select {
 			case <-stop:
@@ -38,7 +36,7 @@ func TestSafeCopyDirSkipsEntriesThatVanishDuringTheWalk(t *testing.T) {
 			_ = os.WriteFile(p, []byte("y"), 0o644)
 			_ = os.Remove(p)
 		}
-	}()
+	})
 	failures := 0
 	var lastErr error
 	for range 20 {
