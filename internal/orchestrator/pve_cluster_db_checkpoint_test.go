@@ -122,3 +122,47 @@ func TestPreparePVEClusterRestoreStopsWhenTheCheckpointFails(t *testing.T) {
 		}
 	}
 }
+
+// An old WAL or SHM that cannot be removed (any error but "does not exist") stops the
+// restore before the archive's config.db is written beside it, and the stopped
+// services are started again. A non-empty directory in place of config.db-wal is a
+// removal that fails with ENOTEMPTY.
+func TestPreparePVEClusterRestoreStopsWhenAnOldDatabaseFileCannotBeRemoved(t *testing.T) {
+	fakeFS := pveClusterDBFixture(t)
+	wal := pveClusterDBSidecars[0]
+	if err := fakeFS.Remove(wal); err != nil {
+		t.Fatal(err)
+	}
+	if err := fakeFS.WriteFile(wal+"/held", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := fakeCheckpointRunner(t, "0|0|0\n", nil)
+	cmd.Outputs["umount /etc/pve"] = []byte("not mounted\n")
+	cmd.Errors["umount /etc/pve"] = errors.New("not mounted")
+	cmd.Errors["which systemctl"] = errors.New("missing")
+	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
+		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")
+		cmd.Outputs["systemctl is-active "+svc] = []byte("inactive\n")
+		cmd.Errors["systemctl is-active "+svc] = errors.New("inactive")
+		cmd.Outputs["systemctl reset-failed "+svc] = []byte("ok")
+		cmd.Outputs["systemctl start "+svc] = []byte("ok")
+	}
+	w := &restoreUIWorkflowRun{
+		ctx:    context.Background(),
+		cfg:    &config.Config{},
+		logger: newTestLogger(),
+		ui:     &fakeRestoreWorkflowUI{},
+		plan:   &RestorePlan{NeedsClusterRestore: true},
+	}
+	cleanup, err := w.prepareRestoreServices()
+	want := "failed to remove the old cluster database file (" + wal + "): "
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("err = %v, want prefix %q", err, want)
+	}
+	if cleanup != nil {
+		t.Fatal("expected nil cleanup on prepare error")
+	}
+	if !slices.Contains(cmd.Calls, "systemctl start pve-cluster") {
+		t.Fatalf("pve-cluster not started again: %v", cmd.Calls)
+	}
+}

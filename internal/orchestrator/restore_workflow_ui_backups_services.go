@@ -179,7 +179,11 @@ func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
 		w.restartStoppedPVEClusterServices()
 		return nil, err
 	}
-	removePVEClusterDBSidecars(w.logger)
+	if err := removePVEClusterDBSidecars(w.logger); err != nil {
+		// Still nothing restored: config.db is the checkpointed one.
+		w.restartStoppedPVEClusterServices()
+		return nil, err
+	}
 	return w.restartPVEClusterServicesCleanup(), nil
 }
 
@@ -229,8 +233,9 @@ var pveClusterDBSidecars = []string{"/var/lib/pve-cluster/config.db-wal", "/var/
 
 // removePVEClusterDBSidecars removes them once pve-cluster is stopped and the WAL is
 // folded into config.db (checkpointPVEClusterDB), before the archive's config.db is
-// written.
-func removePVEClusterDBSidecars(logger *logging.Logger) {
+// written. One that is there and cannot be removed stops the restore: left beside the
+// archive's config.db, it is opened with it.
+func removePVEClusterDBSidecars(logger *logging.Logger) error {
 	for _, path := range pveClusterDBSidecars {
 		err := restoreFS.Remove(path)
 		switch {
@@ -238,8 +243,10 @@ func removePVEClusterDBSidecars(logger *logging.Logger) {
 			logger.Debug("Cluster database restore: removed %s, the old database's WAL file", path)
 		case !errors.Is(err, os.ErrNotExist):
 			logger.Debug("Cluster database restore: cannot remove %s: %v", path, err)
+			return fmt.Errorf("failed to remove the old cluster database file (%s): %w", path, err)
 		}
 	}
+	return nil
 }
 
 // restartPVEClusterServicesCleanup is the deferred restart. It only does work when

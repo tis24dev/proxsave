@@ -18,7 +18,9 @@ func TestRemovePVEClusterDBSidecars(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	removePVEClusterDBSidecars(newTestLogger())
+	if err := removePVEClusterDBSidecars(newTestLogger()); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
 	for _, p := range pveClusterDBSidecars {
 		if _, err := fakeFS.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("%s still there (err %v)", p, err)
