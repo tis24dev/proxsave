@@ -209,7 +209,10 @@ func applyPBSAccessControlFromStage(ctx context.Context, logger *logging.Logger,
 		}
 
 		if aclPresent {
-			if err := applyPBSACLFromStage(logger, stagedACLRaw, hostRootTokenACL); err != nil {
+			if stagedACLRaw == "" {
+				logger.Warning("PBS access control: staged acl.cfg is empty; only this host's root@pam entries are kept")
+			}
+			if err := applyPBSACLFromStage(stagedACLRaw, hostRootTokenACL); err != nil {
 				return err
 			}
 		}
@@ -299,14 +302,14 @@ func findPBSRootTokenSections(sections []proxmoxNotificationSection) []proxmoxNo
 	return out
 }
 
-// hostRootTokenACL is this host's acl.cfg entries for root@pam's tokens
-// (currentPBSRootTokenACLLines), read before the first write of the restore.
-func applyPBSACLFromStage(logger *logging.Logger, stagedACL string, hostRootTokenACL []string) error {
+// applyPBSACLFromStage writes acl.cfg: the staged entries without root@pam's tokens,
+// this host's entries for those tokens (hostRootTokenACL, from
+// currentPBSRootTokenACLLines, read before the first write of the restore) and
+// root@pam's Admin on "/". An empty staged acl.cfg (PBS leaves it at 0 bytes when no
+// ACL is set) gets the same: it removed this host's acl.cfg, and the retained root@pam
+// tokens authenticated and were denied everywhere.
+func applyPBSACLFromStage(stagedACL string, hostRootTokenACL []string) error {
 	raw := strings.TrimSpace(stagedACL)
-	if raw == "" {
-		logger.Warning("PBS access control: staged acl.cfg is empty; removing %s", pbsACLCfgPath)
-		return removeIfExists(pbsACLCfgPath)
-	}
 
 	// PBS writes acl.cfg in one format only, acl:<propagate>:<path>:<userlist>:<roles>
 	// (pbs-config/src/acl.rs, the same since 0.8), and refuses to load a file with any

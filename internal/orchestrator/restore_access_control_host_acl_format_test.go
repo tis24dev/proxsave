@@ -71,3 +71,38 @@ func TestPBSAccessControlStopsOnAStagedACLNotInLineFormatBeforeAnyWrite(t *testi
 	}
 	assertHostFilesUnchanged(t, fakeFS, host)
 }
+
+// PBS leaves acl.cfg at 0 bytes when no ACL is set (measured on pve-test). A backup of
+// such a host restored onto one whose root@pam tokens have ACL entries removed this
+// host's acl.cfg: the retained tokens authenticated and were denied everywhere. The
+// host's root@pam token entries are kept, with root@pam's Admin on "/", as for a
+// staged acl.cfg with entries.
+func TestPBSAccessControlKeepsHostRootTokenACLWhenTheStagedACLIsEmpty(t *testing.T) {
+	const stageRoot = "/stage"
+	host := map[string]string{
+		pbsUserCfgPath: "user: root@pam\n\tenable 1\n\ntoken: root@pam!host\n\tcomment host token\n",
+		pbsACLCfgPath:  "acl:1:/datastore/ds1:root@pam!host,alice@pbs:DatastoreBackup\n",
+	}
+	stage := map[string]string{
+		stageRoot + "/etc/proxmox-backup/user.cfg": "user: alice@pbs\n\tenable 1\n",
+		stageRoot + "/etc/proxmox-backup/acl.cfg":  "",
+	}
+	origFS := restoreFS
+	t.Cleanup(func() { restoreFS = origFS })
+	fakeFS := NewFakeFS()
+	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
+	hostAccessControlFixture(t, fakeFS, host, stage)
+	restoreFS = fakeFS
+
+	if err := applyPBSAccessControlFromStage(context.Background(), newTestLogger(), stageRoot); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	got, err := fakeFS.ReadFile(pbsACLCfgPath)
+	if err != nil {
+		t.Fatalf("acl.cfg after restoring an empty one: %v", err)
+	}
+	const want = "acl:1:/datastore/ds1:root@pam!host:DatastoreBackup\nacl:1:/:root@pam:Admin\n"
+	if string(got) != want {
+		t.Fatalf("acl.cfg = %q, want %q", got, want)
+	}
+}

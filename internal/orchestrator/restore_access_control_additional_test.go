@@ -144,16 +144,16 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
 
-	logger := newTestLogger()
-
 	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("old\n"), 0o640); err != nil {
 		t.Fatalf("seed old acl file: %v", err)
 	}
-	if err := applyPBSACLFromStage(logger, " \n\t", nil); err != nil {
-		t.Fatalf("empty ACL should remove current file: %v", err)
+	// An empty staged acl.cfg keeps root@pam's Admin on "/" (and this host's root@pam
+	// token entries, none here) instead of removing the file.
+	if err := applyPBSACLFromStage(" \n\t", nil); err != nil {
+		t.Fatalf("empty ACL: %v", err)
 	}
-	if _, err := fakeFS.Stat(pbsACLCfgPath); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected ACL removed, stat err=%v", err)
+	if got, err := fakeFS.ReadFile(pbsACLCfgPath); err != nil || string(got) != "acl:1:/:root@pam:Admin\n" {
+		t.Fatalf("empty ACL: acl.cfg = %q (err %v), want root@pam's Admin on /", got, err)
 	}
 
 	// A staged acl.cfg with a line that is not an acl: entry (an unknown or a section
@@ -166,7 +166,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		"keep-verbatim-line",
 		"",
 	}, "\n")
-	if err := applyPBSACLFromStage(logger, lineACL, nil); err != nil {
+	if err := applyPBSACLFromStage(lineACL, nil); err != nil {
 		t.Fatalf("apply line ACL format: %v", err)
 	}
 	gotLine, err := fakeFS.ReadFile(pbsACLCfgPath)
