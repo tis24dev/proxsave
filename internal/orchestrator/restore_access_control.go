@@ -411,7 +411,7 @@ func applyPBSACLLineFormat(raw string, hostRootTokenACL []string) error {
 
 // currentPBSRootTokenACLLines returns this host's acl.cfg entries for root@pam's
 // tokens, each restricted to those tokens. An absent acl.cfg has none; any other read
-// failure is returned.
+// failure, or a line that is not an acl: entry, is returned.
 func currentPBSRootTokenACLLines() ([]string, error) {
 	data, err := restoreFS.ReadFile(pbsACLCfgPath)
 	if err != nil {
@@ -421,10 +421,17 @@ func currentPBSRootTokenACLLines() ([]string, error) {
 		return nil, fmt.Errorf("read current %s: %w", pbsACLCfgPath, err)
 	}
 	var out []string
+	n := 0
 	for line := range strings.SplitSeq(string(data), "\n") {
+		n++
 		entry, ok := parsePBSACLLine(line)
-		if !ok || !strings.HasPrefix(entry.Raw, "acl:") {
+		if !ok {
 			continue
+		}
+		// PBS writes and loads only acl: lines. Any other line leaves this host's
+		// root@pam token entries unknown, and the acl.cfg written next would drop them.
+		if !isPBSACLLineFormat(entry.Raw) {
+			return nil, fmt.Errorf("read current %s: line %d is not an acl: entry", pbsACLCfgPath, n)
 		}
 		var tokens []string
 		for id := range strings.SplitSeq(entry.UserList, ",") {
