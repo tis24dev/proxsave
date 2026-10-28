@@ -702,7 +702,9 @@ func rollbackNetworkFilesNow(ctx context.Context, logger *logging.Logger, backup
 	}
 
 	logging.DebugStep(logger, "rollback network files", "Run rollback script now: %s", scriptPath)
-	output, runErr := restoreCmd.Run(ctx, "sh", scriptPath)
+	// The rollback runs even when ctx is cancelled: it is what undoes a network apply
+	// that a Ctrl+C or SIGTERM interrupted, and with the cancelled ctx it never started.
+	output, runErr := restoreCmd.Run(context.WithoutCancel(ctx), "sh", scriptPath)
 	if len(output) > 0 {
 		logger.Debug("Rollback script output: %s", strings.TrimSpace(string(output)))
 	}

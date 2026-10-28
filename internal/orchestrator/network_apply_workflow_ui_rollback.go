@@ -286,6 +286,15 @@ func (f *networkRollbackUIApplyFlow) rollbackStagedPreflightFailure(preflight ne
 		return fmt.Errorf("network preflight validation failed; rollback attempt failed: %w", rbErr)
 	}
 	f.captureAfterRollbackDiagnostics()
+	if err := f.ctx.Err(); err != nil {
+		f.debug("Network preflight interrupted: %v (%s, error: %v)", err, preflight.Summary(), preflight.ExitError)
+		f.warning(
+			"Network apply interrupted before validation finished (%s). Rolled back the managed network configuration (/etc/network, /etc/netplan, /etc/systemd/network, /etc/NetworkManager/system-connections, /etc/hosts, /etc/hostname, /etc/resolv.conf) to the pre-restore state (rollback=%s).",
+			preflight.CommandLine(),
+			strings.TrimSpace(f.networkRollbackPath),
+		)
+		return fmt.Errorf("network apply interrupted; network files rolled back: %w", err)
+	}
 	f.warning(
 		"Network apply aborted: preflight validation failed (%s). Rolled back the managed network configuration (/etc/network, /etc/netplan, /etc/systemd/network, /etc/NetworkManager/system-connections, /etc/hosts, /etc/hostname, /etc/resolv.conf) to the pre-restore state (rollback=%s).",
 		preflight.CommandLine(),
