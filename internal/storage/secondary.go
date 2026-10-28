@@ -433,8 +433,8 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 
 	// Find all backup files (legacy + Go naming)
 	globPatterns := []string{
-		filepath.Join(s.basePath, "proxmox-backup-*.tar.*"), // Legacy Bash naming
-		filepath.Join(s.basePath, "*-backup-*.tar*"),        // Go pipeline naming (bundle included)
+		"proxmox-backup-*.tar.*", // Legacy Bash naming
+		"*-backup-*.tar*",        // Go pipeline naming (bundle included)
 	}
 
 	timeout := fsIoTimeout(s.config)
@@ -442,7 +442,7 @@ func (s *SecondaryStorage) List(ctx context.Context) (backups []*types.BackupMet
 	seen := make(map[string]struct{})
 	for _, pattern := range globPatterns {
 		patternMatches, err := safefs.Run(ctx, "secondary-glob", s.basePath, timeout, func() ([]string, error) {
-			return filepath.Glob(pattern)
+			return globBackupNames(s.basePath, pattern)
 		})
 		if err != nil {
 			s.logger.Debug("Secondary Storage: listing - failed: %v", err)

@@ -223,8 +223,8 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 
 	// Find all backup files (legacy "proxmox-backup-*.tar.*" or new "*-backup-*.tar*")
 	globPatterns := []string{
-		filepath.Join(l.basePath, "proxmox-backup-*.tar.*"), // Legacy Bash naming
-		filepath.Join(l.basePath, "*-backup-*.tar*"),        // Go pipeline naming (+ bundle)
+		"proxmox-backup-*.tar.*", // Legacy Bash naming
+		"*-backup-*.tar*",        // Go pipeline naming (+ bundle)
 	}
 
 	timeout := fsIoTimeout(l.config)
@@ -232,7 +232,7 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 	seen := make(map[string]struct{})
 	for _, pattern := range globPatterns {
 		patternMatches, err := safefs.Run(ctx, "local-glob", l.basePath, timeout, func() ([]string, error) {
-			return filepath.Glob(pattern)
+			return globBackupNames(l.basePath, pattern)
 		})
 		if err != nil {
 			return nil, &StorageError{

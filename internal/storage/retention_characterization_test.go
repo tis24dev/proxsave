@@ -1027,23 +1027,21 @@ func charScenarios() []charScenario {
 			},
 		},
 		{
-			// The backup folder cannot be listed (its name is not a valid glob).
+			// The backup folder cannot be listed (it is a file, not a directory).
 			name:   "apply_list_fails",
 			logDir: "logs",
 			policy: RetentionConfig{Policy: "simple", MaxBackups: 1},
 			setup: func(e *charEnv) {
-				e.backups = filepath.Join(e.root, "backups[")
-				if err := os.MkdirAll(e.backups, 0o755); err != nil {
-					e.t.Fatalf("mkdir: %v", err)
+				e.backups = filepath.Join(e.root, "backups-file")
+				if err := os.WriteFile(e.backups, []byte("x"), 0o600); err != nil {
+					e.t.Fatalf("write: %v", err)
 				}
-				e.addBackup(charBackup{day: "2024-06-20", log: charLogFile})
-				e.addBackup(charBackup{day: "2024-06-10", log: charLogFile})
 			},
 			want: func(flavor string) charWant {
 				if flavor == "local" {
-					return charWant{errText: "primary storage apply_retention operation failed for <ROOT>/backups[ (recoverable): primary storage list operation failed for <ROOT>/backups[: syntax error in pattern"}
+					return charWant{errText: "primary storage apply_retention operation failed for <ROOT>/backups-file (recoverable): primary storage list operation failed for <ROOT>/backups-file: open <ROOT>/backups-file: not a directory"}
 				}
-				return charWant{errText: "secondary storage apply_retention operation failed for <ROOT>/backups[ (recoverable): list: syntax error in pattern"}
+				return charWant{errText: "secondary storage apply_retention operation failed for <ROOT>/backups-file (recoverable): list: open <ROOT>/backups-file: not a directory"}
 			},
 		},
 		{

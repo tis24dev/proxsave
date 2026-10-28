@@ -220,8 +220,8 @@ func TestSecondaryStorage_ApplyRetention(t *testing.T) {
 func TestSecondaryStorage_List_ReturnsErrorForInvalidGlobPattern(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	base := t.TempDir()
-	badDir := filepath.Join(base, "[invalid")
-	if err := os.MkdirAll(badDir, 0o700); err != nil {
+	badDir := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: badDir}
@@ -243,8 +243,8 @@ func TestSecondaryStorage_List_ReturnsErrorForInvalidGlobPattern(t *testing.T) {
 func TestSecondaryStorage_CountBackups_ReturnsMinusOneWhenListFails(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	base := t.TempDir()
-	badDir := filepath.Join(base, "[invalid")
-	if err := os.MkdirAll(badDir, 0o700); err != nil {
+	badDir := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: badDir}
@@ -593,8 +593,8 @@ func TestSecondaryStorage_DeleteAssociatedLog_ReturnsFalseOnRemoveError(t *testi
 func TestSecondaryStorage_ApplyRetention_HandlesListFailure(t *testing.T) {
 	logger := logging.New(types.LogLevelInfo, false)
 	base := t.TempDir()
-	badDir := filepath.Join(base, "[invalid")
-	if err := os.MkdirAll(badDir, 0o700); err != nil {
+	badDir := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(badDir, []byte("x"), 0o600); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	cfg := &config.Config{SecondaryEnabled: true, SecondaryPath: badDir}
