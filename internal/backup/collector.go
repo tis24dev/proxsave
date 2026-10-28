@@ -844,7 +844,7 @@ func (c *Collector) safeCopyFile(ctx context.Context, src, dest, description str
 
 	c.logger.Debug("Collecting %s: %s -> %s", description, src, dest)
 
-	if c.sourceWithinStagingDir(src) {
+	if c.isWithinStagingDir(src) {
 		c.logger.Debug("Skipping file %s: inside the staging workspace (#56)", src)
 		return nil
 	}
@@ -1077,36 +1077,38 @@ func (r *writeErrRecorder) Write(p []byte) (int, error) {
 // it. The source walk must never descend into the destination staging tree, or a
 // broad CUSTOM_BACKUP_PATHS entry (e.g. "/", "/tmp", "/tmp/proxsave") would copy
 // the growing archive into itself, recursing and ballooning the backup (#56).
+//
+// path is compared as written and with its symlinks resolved: /alias/run/etc with
+// /alias pointing at the staging tree's parent names a directory inside it under a
+// path that has nothing in common with tempDir, and the archive's own files were
+// copied into it again. It is called once per source; the walk below a source checks
+// each entry with isWithinStagingDirAsText and isStagingDirInfo.
 func (c *Collector) isWithinStagingDir(path string) bool {
+	if c.isWithinStagingDirAsText(path) {
+		return true
+	}
+	if !c.collectingCustomPaths || c.tempDir == "" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	return err == nil && c.isWithinStagingDirAsText(resolved)
+}
+
+// isWithinStagingDirAsText compares path as written with the lexical and the resolved
+// staging root. The resolved root as well: under a symlinked /tmp a source reached
+// through the link's target (CUSTOM_BACKUP_PATHS=/var/tmp) never matched the lexical
+// one, and the staging tree was copied into itself.
+func (c *Collector) isWithinStagingDirAsText(path string) bool {
 	if !c.collectingCustomPaths || c.tempDir == "" {
 		return false
 	}
 	clean := filepath.Clean(path)
-	// The resolved root as well: under a symlinked /tmp a source reached through the
-	// link's target (CUSTOM_BACKUP_PATHS=/var/tmp) never matched the lexical one, and
-	// the staging tree was copied into itself.
 	for _, root := range []string{filepath.Clean(c.tempDir), c.stagingRoot()} {
 		if clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return true
 		}
 	}
 	return false
-}
-
-// sourceWithinStagingDir is isWithinStagingDir for a source handed to safeCopyFile or
-// safeCopyDir, compared with its symlinks resolved as well: /alias/run/etc with /alias
-// pointing at the staging tree's parent names a directory inside it under a path that
-// has nothing in common with tempDir, and the archive's own files were copied into it
-// again. It is resolved once per source; the walk below it compares paths and inodes.
-func (c *Collector) sourceWithinStagingDir(src string) bool {
-	if c.isWithinStagingDir(src) {
-		return true
-	}
-	if !c.collectingCustomPaths || c.tempDir == "" {
-		return false
-	}
-	resolved, err := filepath.EvalSymlinks(src)
-	return err == nil && c.isWithinStagingDir(resolved)
 }
 
 // stagingRoot is the staging tempDir with its symlinks resolved, computed once: a
@@ -1149,7 +1151,7 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 
 	c.logger.Debug("Collecting directory %s: %s -> %s", description, src, dest)
 
-	if c.sourceWithinStagingDir(src) {
+	if c.isWithinStagingDir(src) {
 		c.logger.Debug("Skipping directory %s: inside the staging workspace (would copy the archive into itself)", src)
 		return nil
 	}
@@ -1212,7 +1214,7 @@ func (c *Collector) safeCopyDir(ctx context.Context, src, dest, description stri
 			// Never descend into the staging workspace: a broad source (e.g. a custom
 			// path of "/" or "/tmp") would otherwise copy the in-progress archive into
 			// itself (#56).
-			if c.isWithinStagingDir(path) || c.isStagingDirInfo(info) {
+			if c.isWithinStagingDirAsText(path) || c.isStagingDirInfo(info) {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
