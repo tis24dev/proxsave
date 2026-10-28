@@ -2,8 +2,11 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
 )
@@ -46,6 +49,20 @@ func RecreateStorageDirectories(logger *logging.Logger) error {
 }
 
 // RecreateDatastoreDirectories parses datastore.cfg and recreates datastore directories (PBS)
+// logRemovableDatastore reports a removable datastore, which recreation leaves to PBS:
+// its chunk store lives on the device, which PBS mounts at /mnt/datastore/<name>, and
+// anything created there with the device absent would land on the root filesystem.
+func logRemovableDatastore(entry pbsDatastoreEntry, logger *logging.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := restoreCmd.Run(ctx, "blkid", "-U", entry.BackingDevice)
+	device := strings.TrimSpace(string(out))
+	logger.Debug("Datastore %s: removable (backing-device %s, path %s), not recreated; blkid -U: device=%q err=%v", entry.Name, entry.BackingDevice, entry.Path, device, err)
+	if err != nil || device == "" {
+		logger.Warning("Datastore %s: removable, device not connected", entry.Name)
+	}
+}
+
 func RecreateDatastoreDirectories(logger *logging.Logger) error {
 	entries, err := loadPBSDatastoreEntries(datastoreCfgPath, logger)
 	if err != nil {
@@ -55,6 +72,10 @@ func RecreateDatastoreDirectories(logger *logging.Logger) error {
 	directoriesCreated := 0
 	var errs []error
 	for _, entry := range entries {
+		if entry.BackingDevice != "" {
+			logRemovableDatastore(entry, logger)
+			continue
+		}
 		created, err := createPBSDatastoreStructure(entry.Path, entry.Name, logger)
 		if err != nil {
 			logger.Warning("Failed to create datastore structure for %s: %v", entry.Name, err)

@@ -689,6 +689,13 @@ func shouldApplyPBSDatastoreBlock(block pbsDatastoreBlock, logger *logging.Logge
 // may be offline), preflight a problem found on the path of a datastore with data;
 // both are written anyway.
 func inspectPBSDatastoreBlock(block pbsDatastoreBlock) (ok bool, reason string, onRootFS bool, preflight string) {
+	// A removable datastore (backing-device) has a relative path that PBS resolves to
+	// /mnt/datastore/<name> on its own device: there is nothing to inspect here.
+	for _, line := range block.Lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "backing-device ") {
+			return true, "", false, ""
+		}
+	}
 	path := filepath.Clean(strings.TrimSpace(block.Path))
 	if path == "" || path == "." || path == string(os.PathSeparator) {
 		return false, "invalid or missing datastore path", false, ""
