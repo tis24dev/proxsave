@@ -303,21 +303,37 @@ func (w *restoreUIWorkflowRun) confirmContinueWithPBSServicesRunning(stopErr err
 	return nil, nil
 }
 
+// restartPBSServicesCleanup is the deferred restart. It only does work when the run
+// ends before restartStoppedPBSServices ran ahead of the verdict, i.e. on an error or
+// an abort while the services were down.
 func (w *restoreUIWorkflowRun) restartPBSServicesCleanup() func() {
-	return func() {
-		restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
-		defer cancel()
-		if err := startPBSServices(restartCtx, w.logger); err != nil {
-			w.logger.Warning("Failed to restart PBS services after restore: %v", err)
-			return
+	return w.restartStoppedPBSServices
+}
+
+// restartStoppedPBSServices starts, once, the PBS services preparePBSServices
+// stopped, then verifies and repairs the PBS notifications. The run calls it before
+// the verdict, so what it reports is counted there and the closing advice says which
+// units it left down.
+func (w *restoreUIWorkflowRun) restartStoppedPBSServices() {
+	if !w.pbsServicesStopped || w.pbsServicesRestarted {
+		return
+	}
+	w.pbsServicesRestarted = true
+	restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
+	defer cancel()
+	if err := startPBSServices(restartCtx, w.logger); err != nil {
+		w.logger.Warning("Failed to restart PBS services after restore: %v", err)
+		if startErr, ok := errors.AsType[*pbsServicesStartError](err); ok {
+			w.pbsServicesNotRunning = startErr
 		}
-		// Also reached on an abort during staging: the restart stays, the repair from
-		// a partial stage does not.
-		if w.skipForIncompleteStage("PBS notifications verification/repair") {
-			return
-		}
-		if err := verifyAndRepairPBSNotificationsFunc(restartCtx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
-			w.logger.Warning("PBS notifications verification/repair: %v", err)
-		}
+		return
+	}
+	// Also reached on an abort during staging: the restart stays, the repair from a
+	// partial stage does not.
+	if w.skipForIncompleteStage("PBS notifications verification/repair") {
+		return
+	}
+	if err := verifyAndRepairPBSNotificationsFunc(restartCtx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
+		w.logger.Warning("PBS notifications verification/repair: %v", err)
 	}
 }

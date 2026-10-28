@@ -52,8 +52,12 @@ type restoreUIWorkflowRun struct {
 	// advice; nil when every unit started.
 	clusterServicesNotRunning *pveClusterStartError
 	pbsServicesStopped        bool
-	needsPBSServices          bool
-	needsFilesystemRestore    bool
+	// pbsServicesRestarted is set once restartStoppedPBSServices ran;
+	// pbsServicesNotRunning records what it left down, for the closing advice.
+	pbsServicesRestarted   bool
+	pbsServicesNotRunning  *pbsServicesStartError
+	needsPBSServices       bool
+	needsFilesystemRestore bool
 	// needsBootConfiguration is set when the boot category is selected: it is taken
 	// out of the system-path extraction and applied by applyBootConfiguration.
 	needsBootConfiguration bool
@@ -117,6 +121,9 @@ func (w *restoreUIWorkflowRun) runSelectiveRestore() error {
 	if err := w.applyBootConfiguration(); err != nil {
 		return err
 	}
+	// The PBS services come back, and the notifications are verified, before the
+	// verdict and the advice that report on them.
+	w.restartStoppedPBSServices()
 	w.logRestoreCompletion()
 	w.logServiceRestartAdvice()
 	w.checkZFSPoolsAfterRestore()
