@@ -2445,7 +2445,7 @@ Optional maintenance:
 
 For PVE storages that use mountpoints (notably `nfs`, `cifs`, `cephfs`, `glusterfs`, and `dir` storages on dedicated mountpoints), ProxSave applies the same "restore even if offline" safety model:
 
-- Network storages use `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>` with a short timeout.
+- Network storages use the storage's `path` (by default `/mnt/pve/<storageid>`). ProxSave attempts `pvesm activate <storageid>` with a short timeout.
 - If the mountpoint still resolves to the root filesystem afterwards (mount missing/offline), ProxSave applies a **read-only bind-mount guard** on the mountpoint. If the bind mount cannot be created it logs a warning and proceeds unguarded (no persistent flag is set; see the PBS section above).
 - For `dir` storages, guards are only applied when the storage `path` can be associated with a mountpoint present in `/etc/fstab` (to avoid guarding local root filesystem paths).
 
