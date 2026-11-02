@@ -18,6 +18,14 @@ func pbsChunkStoreExists(p string) string {
 	return `exit status 255: Error: task failed (status unable to create chunk store 'ds1' subdir "` + p + `/.chunks" - unable to create directory "` + p + `/.chunks" - EEXIST: File exists)`
 }
 
+// pbsDatastorePathNotEmpty is the refusal of "datastore create" when the path
+// holds anything besides dot entries and lost+found, as a chunk store with
+// backups does (vm/, ct/, host/, ns/): measured on pve-test, PBS 4.2.8, 2026-10-26.
+// "--reuse-datastore true" then configures the datastore over its data; over a
+// directory that is no chunk store PBS refuses it too, "unable to open existing
+// chunk store path", and changes nothing there.
+const pbsDatastorePathNotEmpty = "exit status 255: Error: task failed (status datastore path not empty)"
+
 // A create PBS refuses because the path already holds a chunk store is retried
 // with --reuse-datastore true, which PBS 4.2.8 needs to configure a datastore over
 // its existing data: for a datastore this PBS does not list, for the backup's path
@@ -94,6 +102,60 @@ func TestApplyPBSDatastoreCfgViaAPI_ReusesAnExistingChunkStore(t *testing.T) {
 			errs: map[string]error{
 				"proxmox-backup-manager datastore create ds1 /new --comment c1": errors.New("exit status 255: Error: refused"),
 				"proxmox-backup-manager datastore create ds1 /old --comment c1": errors.New(pbsChunkStoreExists("/old")),
+			},
+			wantLines: []string{head1, count, names,
+				"INFO     Datastore ds1 is at /old on this PBS and at /new in the backup",
+				"WARNING  ⚠ PBS datastore ds1: not applied",
+				"WARNING  ⚠ PBS datastore configuration: not applied",
+			},
+			wantCalls: []string{pbsDatastoreBlockListCmd,
+				"proxmox-backup-manager datastore remove ds1",
+				"proxmox-backup-manager datastore create ds1 /new --comment c1",
+				"proxmox-backup-manager datastore create ds1 /old --comment c1",
+				"proxmox-backup-manager datastore create ds1 /old --comment c1 --reuse-datastore true",
+			},
+			notApplied: true,
+		},
+		{
+			name: "create-over-a-datastore-with-backups",
+			rows: `[]`,
+			errs: map[string]error{"proxmox-backup-manager datastore create ds1 /new --comment c1": errors.New(pbsDatastorePathNotEmpty)},
+			wantLines: []string{head1, count, names,
+				"INFO     ✓ PBS datastore ds1: applied",
+				"INFO     ✓ PBS datastore configuration: applied",
+			},
+			wantCalls: []string{pbsDatastoreBlockListCmd,
+				"proxmox-backup-manager datastore create ds1 /new --comment c1",
+				"proxmox-backup-manager datastore create ds1 /new --comment c1 --reuse-datastore true",
+			},
+		},
+		{
+			name: "path-not-empty-and-no-chunk-store-keeps-the-create-refusal",
+			rows: `[]`,
+			errs: map[string]error{
+				"proxmox-backup-manager datastore create ds1 /new --comment c1":                        errors.New(pbsDatastorePathNotEmpty),
+				"proxmox-backup-manager datastore create ds1 /new --comment c1 --reuse-datastore true": errors.New(`exit status 255: Error: task failed (status unable to open existing chunk store path "/new" - permissions or owner not correct)`),
+				"proxmox-backup-manager datastore update ds1 --comment c1":                             errors.New("exit status 255: Error: no such datastore 'ds1'"),
+			},
+			wantLines: []string{head1, count, names,
+				`INFO     Datastore ds1 was rejected by PBS: "task failed (status datastore path not empty)"`,
+				"WARNING  ⚠ PBS datastore ds1: not applied",
+				"WARNING  ⚠ PBS datastore configuration: not applied",
+			},
+			wantCalls: []string{pbsDatastoreBlockListCmd,
+				"proxmox-backup-manager datastore create ds1 /new --comment c1",
+				"proxmox-backup-manager datastore create ds1 /new --comment c1 --reuse-datastore true",
+				"proxmox-backup-manager datastore update ds1 --comment c1",
+			},
+			notApplied: true,
+		},
+		{
+			name:   "move-rollback-over-backups",
+			strict: true,
+			rows:   `[{"name":"ds1","path":"/old"}]`,
+			errs: map[string]error{
+				"proxmox-backup-manager datastore create ds1 /new --comment c1": errors.New("exit status 255: Error: refused"),
+				"proxmox-backup-manager datastore create ds1 /old --comment c1": errors.New(pbsDatastorePathNotEmpty),
 			},
 			wantLines: []string{head1, count, names,
 				"INFO     Datastore ds1 is at /old on this PBS and at /new in the backup",

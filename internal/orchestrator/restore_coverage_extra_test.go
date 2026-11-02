@@ -385,13 +385,8 @@ func TestRunSafeClusterApply_AppliesPoolsFromUserCfg(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(userCfgPath), 0o755); err != nil {
 		t.Fatalf("mkdir user.cfg dir: %v", err)
 	}
-	userCfg := strings.Join([]string{
-		"pool: dev",
-		"    comment Dev pool",
-		"    vms 100,101",
-		"    storage local,backup_ext",
-		"",
-	}, "\n")
+	// The format PVE writes (measured on PVE 9.1.9): pool:<id>:<comment>:<vms>:<storage>:
+	userCfg := "user:root@pam:1:0::::::\n\npool:dev:Dev pool:100,101:local,backup_ext:\n"
 	if err := os.WriteFile(userCfgPath, []byte(userCfg), 0o640); err != nil {
 		t.Fatalf("write user.cfg: %v", err)
 	}
@@ -448,7 +443,7 @@ func TestRunSafeClusterApply_AppliesResourceMappingsFromProxsaveInfo(t *testing.
 		t.Fatalf("mkdir mapping dir: %v", err)
 	}
 	if err := os.WriteFile(mappingPath, []byte(strings.TrimSpace(`[
-  {"id":"device1","comment":"GPU","map":[{"node":"pve01","path":"0000:01:00.0"}]}
+  {"id":"device1","description":"GPU","map":[{"node":"pve01","path":"0000:01:00.0"}]}
 ]`)), 0o640); err != nil {
 		t.Fatalf("write mapping_pci.json: %v", err)
 	}
@@ -458,7 +453,7 @@ func TestRunSafeClusterApply_AppliesResourceMappingsFromProxsaveInfo(t *testing.
 		t.Fatalf("runSafeClusterApply error: %v", err)
 	}
 
-	wantPrefix := "pvesh create /cluster/mapping/pci --id device1 --comment GPU --map node=pve01,path=0000:01:00.0"
+	wantPrefix := "pvesh create /cluster/mapping/pci --id device1 --description GPU --map node=pve01,path=0000:01:00.0"
 	found := false
 	for _, call := range runner.calls {
 		if strings.HasPrefix(call, wantPrefix) {

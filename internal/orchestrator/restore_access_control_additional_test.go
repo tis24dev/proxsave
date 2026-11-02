@@ -144,52 +144,21 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(fakeFS.Root) })
 	restoreFS = fakeFS
 
-	logger := newTestLogger()
-
 	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("old\n"), 0o640); err != nil {
 		t.Fatalf("seed old acl file: %v", err)
 	}
-	if err := applyPBSACLFromStage(logger, " \n\t"); err != nil {
-		t.Fatalf("empty ACL should remove current file: %v", err)
+	// An empty staged acl.cfg keeps root@pam's Admin on "/" (and this host's root@pam
+	// token entries, none here) instead of removing the file.
+	if err := applyPBSACLFromStage(" \n\t", nil); err != nil {
+		t.Fatalf("empty ACL: %v", err)
 	}
-	if _, err := fakeFS.Stat(pbsACLCfgPath); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected ACL removed, stat err=%v", err)
-	}
-
-	if err := fakeFS.WriteFile(pbsACLCfgPath, []byte("keep-me\n"), 0o640); err != nil {
-		t.Fatalf("seed acl file for unknown format: %v", err)
-	}
-	if err := applyPBSACLFromStage(logger, "this-is-not-known-format"); err != nil {
-		t.Fatalf("unknown ACL format should be ignored, got %v", err)
-	}
-	kept, err := fakeFS.ReadFile(pbsACLCfgPath)
-	if err != nil {
-		t.Fatalf("read acl after unknown format: %v", err)
-	}
-	if string(kept) != "keep-me\n" {
-		t.Fatalf("unknown format should keep previous acl content, got %q", string(kept))
+	if got, err := fakeFS.ReadFile(pbsACLCfgPath); err != nil || string(got) != "acl:1:/:root@pam:Admin\n" {
+		t.Fatalf("empty ACL: acl.cfg = %q (err %v), want root@pam's Admin on /", got, err)
 	}
 
-	sectionACL := strings.Join([]string{
-		"acl: backup-acl",
-		"  path /",
-		"  users root@pam alice@pbs",
-		"  roles Admin",
-		"",
-	}, "\n")
-	if err := applyPBSACLFromStage(logger, sectionACL); err != nil {
-		t.Fatalf("apply section ACL format: %v", err)
-	}
-	gotSection, err := fakeFS.ReadFile(pbsACLCfgPath)
-	if err != nil {
-		t.Fatalf("read section ACL output: %v", err)
-	}
-	if !strings.Contains(string(gotSection), "users alice@pbs") {
-		t.Fatalf("expected root user filtered from staged users, got:\n%s", string(gotSection))
-	}
-	if !strings.Contains(string(gotSection), "acl: proxsave-root-admin") {
-		t.Fatalf("expected root admin safety ACL injected, got:\n%s", string(gotSection))
-	}
+	// A staged acl.cfg with a line that is not an acl: entry (an unknown or a section
+	// format) never reaches applyPBSACLFromStage: the restore stops before its first
+	// write (TestPBSAccessControlStopsOnAStagedACLNotInLineFormatBeforeAnyWrite).
 
 	lineACL := strings.Join([]string{
 		"acl:1:/:root@pam!old,alice@pbs:Admin",
@@ -197,7 +166,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		"keep-verbatim-line",
 		"",
 	}, "\n")
-	if err := applyPBSACLFromStage(logger, lineACL); err != nil {
+	if err := applyPBSACLFromStage(lineACL, nil); err != nil {
 		t.Fatalf("apply line ACL format: %v", err)
 	}
 	gotLine, err := fakeFS.ReadFile(pbsACLCfgPath)
@@ -241,7 +210,7 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		t.Fatalf("expected all-root ACL users to be filtered out, got=%q ok=%v", got, ok)
 	}
 
-	if err := applyPBSACLLineFormat("acl:1:/:root@pam:Admin\n"); err != nil {
+	if err := applyPBSACLLineFormat("acl:1:/:root@pam:Admin\n", nil); err != nil {
 		t.Fatalf("applyPBSACLLineFormat with root already present: %v", err)
 	}
 	withRoot, err := fakeFS.ReadFile(pbsACLCfgPath)
@@ -252,56 +221,6 @@ func TestPBSACLApplyAndHelpers_Branches(t *testing.T) {
 		t.Fatalf("root admin line should not be duplicated, got:\n%s", string(withRoot))
 	}
 
-	entries := []proxmoxNotificationEntry{
-		{Key: "users", Value: "old"},
-		{Key: "users", Value: "duplicate"},
-		{Key: "roles", Value: "Admin"},
-	}
-	replaced := setSectionEntryValue(entries, "users", "alice@pbs")
-	if findSectionEntryValue(replaced, "users") != "alice@pbs" {
-		t.Fatalf("setSectionEntryValue should replace first matching key")
-	}
-	countUsers := 0
-	for _, e := range replaced {
-		if strings.TrimSpace(e.Key) == "users" {
-			countUsers++
-		}
-	}
-	if countUsers != 1 {
-		t.Fatalf("setSectionEntryValue should collapse duplicate keys, count=%d", countUsers)
-	}
-	appended := setSectionEntryValue(replaced, "path", "/")
-	if findSectionEntryValue(appended, "path") != "/" {
-		t.Fatalf("setSectionEntryValue should append missing key")
-	}
-	unchanged := setSectionEntryValue(replaced, "   ", "ignored")
-	if len(unchanged) != len(replaced) {
-		t.Fatalf("empty key should not modify entries")
-	}
-
-	sectionsWithRoot := []proxmoxNotificationSection{
-		{
-			Type: "acl",
-			Name: "rule /",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "users", Value: "root@pam"},
-				{Key: "roles", Value: "Admin"},
-			},
-		},
-	}
-	if !hasPBSRootAdminOnRootSectionFormat(sectionsWithRoot) {
-		t.Fatalf("expected root Admin ACL on / to be detected")
-	}
-	if hasPBSRootAdminOnRootSectionFormat([]proxmoxNotificationSection{{Type: "acl", Name: "rule /vms"}}) {
-		t.Fatalf("unexpected root Admin ACL detection")
-	}
-
-	if got := aclPathFromSectionName("rule-name /pool/one extra"); got != "/pool/one" {
-		t.Fatalf("aclPathFromSectionName=%q want %q", got, "/pool/one")
-	}
-	if got := aclPathFromSectionName("rule-name-without-path"); got != "" {
-		t.Fatalf("aclPathFromSectionName=%q want empty", got)
-	}
 }
 
 func TestPBSSecretFilesFromStage_Branches(t *testing.T) {
@@ -561,21 +480,13 @@ func TestApplyPVEAccessControlFromStage_AdditionalBranches(t *testing.T) {
 		restoreFS = fakeFS
 
 		stageRoot := "/stage"
-		stagedUser := strings.Join([]string{
-			"user: alice@pve",
-			"  enable 1",
-			"",
-		}, "\n")
+		stagedUser := "user:alice@pve:1:0::::::\n"
 		stagedDomains := strings.Join([]string{
 			"pam: pam",
 			"  comment backup-pam",
 			"",
 		}, "\n")
-		stagedTFA := strings.Join([]string{
-			"webauthn: alice-key",
-			"  user alice@pve",
-			"",
-		}, "\n")
+		stagedTFA := `{"users":{"alice@pve":{"webauthn":[{"id":"k1"}]}}}`
 
 		if err := fakeFS.WriteFile(stageRoot+"/etc/pve/user.cfg", []byte(stagedUser), 0o640); err != nil {
 			t.Fatalf("write staged user.cfg: %v", err)
@@ -595,11 +506,11 @@ func TestApplyPVEAccessControlFromStage_AdditionalBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read merged user.cfg: %v", err)
 		}
-		if !strings.Contains(string(gotUser), "user: root@pam") || !strings.Contains(string(gotUser), "enable 1") {
+		if !strings.Contains(string(gotUser), "user:root@pam:1:0::::::\n") {
 			t.Fatalf("expected root@pam bootstrap user to be present, got:\n%s", string(gotUser))
 		}
-		if !strings.Contains(string(gotUser), "acl: proxsave-root-admin") {
-			t.Fatalf("expected root admin ACL to be injected, got:\n%s", string(gotUser))
+		if !strings.Contains(string(gotUser), "acl:1:/:root@pam:Administrator:\n") {
+			t.Fatalf("expected root admin ACL to be added, got:\n%s", string(gotUser))
 		}
 
 		gotDomains, err := fakeFS.ReadFile(pveDomainsCfgPath)
@@ -765,22 +676,9 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 		if listContains("   ", "root@pam") {
 			t.Fatalf("listContains should reject empty haystack")
 		}
-
-		if !hasRootAdminOnRoot([]proxmoxNotificationSection{
-			{
-				Type: "acl",
-				Name: "rule /",
-				Entries: []proxmoxNotificationEntry{
-					{Key: "users", Value: "root@pam"},
-					{Key: "roles", Value: "Administrator"},
-				},
-			},
-		}) {
-			t.Fatalf("hasRootAdminOnRoot should detect root Administrator ACL on /")
-		}
 	})
 
-	t.Run("token/tfa/shadow identity helpers", func(t *testing.T) {
+	t.Run("token identity helpers", func(t *testing.T) {
 		if user := tokenSectionUserID(proxmoxNotificationSection{Type: "role", Name: "x"}); user != "" {
 			t.Fatalf("tokenSectionUserID for non-token should be empty, got %q", user)
 		}
@@ -789,40 +687,6 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 		}
 		if user := tokenSectionUserID(proxmoxNotificationSection{Type: "token", Name: "alice@pve!tok1"}); user != "alice@pve" {
 			t.Fatalf("tokenSectionUserID=%q want alice@pve", user)
-		}
-
-		if user := tfaSectionUserID(proxmoxNotificationSection{Name: "alice@pve"}); user != "alice@pve" {
-			t.Fatalf("tfaSectionUserID by name=%q want alice@pve", user)
-		}
-		if user := tfaSectionUserID(proxmoxNotificationSection{
-			Name: "entry-only",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "user", Value: "bob@pve"},
-			},
-		}); user != "bob@pve" {
-			t.Fatalf("tfaSectionUserID by entry=%q want bob@pve", user)
-		}
-		if user := tfaSectionUserID(proxmoxNotificationSection{Name: "no-user"}); user != "" {
-			t.Fatalf("tfaSectionUserID expected empty, got %q", user)
-		}
-
-		if user := shadowSectionUserID(proxmoxNotificationSection{Type: "user", Name: "alice@pve"}); user != "alice@pve" {
-			t.Fatalf("shadowSectionUserID by user type=%q want alice@pve", user)
-		}
-		if user := shadowSectionUserID(proxmoxNotificationSection{Type: "hash", Name: "bob@pve"}); user != "bob@pve" {
-			t.Fatalf("shadowSectionUserID by name=%q want bob@pve", user)
-		}
-		if user := shadowSectionUserID(proxmoxNotificationSection{
-			Type: "hash",
-			Name: "fallback",
-			Entries: []proxmoxNotificationEntry{
-				{Key: "userid", Value: "carol@pve"},
-			},
-		}); user != "carol@pve" {
-			t.Fatalf("shadowSectionUserID by userid entry=%q want carol@pve", user)
-		}
-		if user := shadowSectionUserID(proxmoxNotificationSection{Name: "nobody"}); user != "" {
-			t.Fatalf("shadowSectionUserID expected empty, got %q", user)
 		}
 
 		if _, _, ok := splitPVETokenSectionName("invalid"); ok {
@@ -844,17 +708,6 @@ func TestAccessControlUtilityFunctions_Branches(t *testing.T) {
 	})
 
 	t.Run("webauthn extractors and misc helpers", func(t *testing.T) {
-		pveUsers := extractWebAuthnUsersFromPVETFA([]proxmoxNotificationSection{
-			{Type: "webauthn", Name: "k1", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "alice@pve"}}},
-			{Type: "u2f", Name: "k2", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "alice@pve"}}},
-			{Type: "webauthn", Name: "k3", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "root@pam"}}},
-			{Type: "totp", Name: "k4", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "bob@pve"}}},
-			{Type: "u2f", Name: "k5", Entries: []proxmoxNotificationEntry{{Key: "user", Value: "carol@pve"}}},
-		})
-		if len(pveUsers) != 2 || pveUsers[0] != "alice@pve" || pveUsers[1] != "carol@pve" {
-			t.Fatalf("extractWebAuthnUsersFromPVETFA unexpected users: %v", pveUsers)
-		}
-
 		pbsUsers := map[string]json.RawMessage{
 			"root@pam":  json.RawMessage(`{"webauthn":[{}]}`),
 			"alice@pbs": json.RawMessage(`{"webauthn":[{"id":"a"}]}`),
@@ -1021,13 +874,7 @@ func TestApplyPBSAccessControlFromStage_WriteErrorBranches(t *testing.T) {
 		t.Cleanup(func() { _ = os.RemoveAll(base.Root) })
 
 		stageRoot := "/stage"
-		aclCfg := strings.Join([]string{
-			"acl: staged-acl",
-			"  path /",
-			"  users alice@pbs",
-			"  roles Admin",
-			"",
-		}, "\n")
+		aclCfg := "acl:1:/:alice@pbs:Admin\n"
 		if err := base.WriteFile(stageRoot+"/etc/proxmox-backup/acl.cfg", []byte(aclCfg), 0o640); err != nil {
 			t.Fatalf("write staged acl.cfg: %v", err)
 		}
@@ -1100,25 +947,25 @@ func TestApplyPVEAccessControlFromStage_WriteErrorBranches(t *testing.T) {
 		{
 			name:     "user write failure",
 			stageRel: "etc/pve/user.cfg",
-			content:  "user: alice@pve\n  enable 1\n",
+			content:  "user:alice@pve:1:0::::::\n",
 			wantPath: pveUserCfgPath,
 		},
 		{
 			name:     "shadow write failure",
 			stageRel: "etc/pve/priv/shadow.cfg",
-			content:  "user: alice@pve\n  hash abc\n",
+			content:  "alice:abc:\n",
 			wantPath: pveShadowCfgPath,
 		},
 		{
 			name:     "token write failure",
 			stageRel: "etc/pve/priv/token.cfg",
-			content:  "token: alice@pve!tok\n  comment x\n",
+			content:  "alice@pve!tok 00000000-0000-0000-0000-000000000000\n",
 			wantPath: pveTokenCfgPath,
 		},
 		{
 			name:     "tfa write failure",
 			stageRel: "etc/pve/priv/tfa.cfg",
-			content:  "totp: alice@pve\n  user alice@pve\n",
+			content:  "{\"users\":{}}\n",
 			wantPath: pveTFACfgPath,
 		},
 	}

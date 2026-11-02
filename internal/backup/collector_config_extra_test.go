@@ -183,3 +183,26 @@ func TestGlobToRegexCoversSpecialCases(t *testing.T) {
 		}
 	}
 }
+
+// Exclusion patterns name host paths. A staged path (/tmp/proxsave/<run>/etc/pve/x)
+// is matched by the host path it stands for (/etc/pve/x) and its name, never by
+// where the staging tree lives: '/tmp/**' or '**/proxsave/**' would otherwise drop
+// every staged file and leave an empty archive.
+func TestFindExcludeMatchJudgesAStagedPathByItsHostPath(t *testing.T) {
+	tempDir := "/tmp/proxsave/proxsave-pve-20261027-000000-1"
+	staged := tempDir + "/etc/pve/storage.cfg"
+	for _, pattern := range []string{"/tmp/**", "**/tmp/**", "tmp/**", "**/proxsave/**"} {
+		if excluded, _ := FindExcludeMatch([]string{pattern}, staged, tempDir, ""); excluded {
+			t.Fatalf("pattern %q excludes the staged %s", pattern, staged)
+		}
+	}
+	for _, pattern := range []string{"/etc/pve/**", "etc/pve/*", "storage.cfg", "**/pve/**"} {
+		if excluded, _ := FindExcludeMatch([]string{pattern}, staged, tempDir, ""); !excluded {
+			t.Fatalf("pattern %q no longer excludes the staged %s", pattern, staged)
+		}
+	}
+	// A host path under /tmp is still excluded by '/tmp/**'.
+	if excluded, _ := FindExcludeMatch([]string{"/tmp/**"}, "/tmp/cache/x", tempDir, ""); !excluded {
+		t.Fatal("'/tmp/**' no longer excludes the host's /tmp/cache/x")
+	}
+}

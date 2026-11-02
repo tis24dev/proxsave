@@ -776,6 +776,9 @@ func TestCreatePBSDatastoreStructureSkipsExistingData(t *testing.T) {
 		t.Fatalf("mkdir .chunks: %v", err)
 	}
 	writeFile(t, filepath.Join(baseDir, ".chunks", "0000"), "data")
+	// PBS writes .lock with the chunk store; without it the chunk store is one
+	// whose creation stopped half-way, which the recreation completes.
+	writeFile(t, filepath.Join(baseDir, ".lock"), "")
 
 	created, err := createPBSDatastoreStructure(baseDir, "ds", logger)
 	if err != nil {

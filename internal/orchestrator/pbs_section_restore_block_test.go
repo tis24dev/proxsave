@@ -434,7 +434,7 @@ func TestPBSSectionRestoreBlock_LabelsPerKind(t *testing.T) {
 			stageRoot, fs, runner := setupPBSAPIApplyTestDeps(t)
 			writeStageFile(t, fs, stageRoot, "etc/proxmox-backup/"+k.file, k.header+": a1\n\tcomment c\n\n"+k.header+": a2\n\tcomment c\n", 0o640)
 			cmd := "proxmox-backup-manager " + k.command
-			runner.outputs = map[string][]byte{cmd + " list --output-format=json": []byte("[" + strings.ReplaceAll(k.listRow, "%q", `"a1"`) + "," + strings.ReplaceAll(k.listRow, "%q", `"old"`) + "]")}
+			runner.outputs = map[string][]byte{pbsListCmdFor(cmd): []byte("[" + strings.ReplaceAll(k.listRow, "%q", `"a1"`) + "," + strings.ReplaceAll(k.listRow, "%q", `"old"`) + "]")}
 			runner.errs = map[string]error{
 				cmd + " create a1 --comment c": errors.New(pbsRemoteCreateExists),
 				cmd + " create a2 --comment c": errors.New(pbsRemoteCreateBadFingerprint),
@@ -450,7 +450,7 @@ func TestPBSSectionRestoreBlock_LabelsPerKind(t *testing.T) {
 			createBad := `error="exit status 255: Error: parameter verification failed - 'fingerprint': value does not match the regex pattern\n\nUsage: proxmox-backup-manager remote create <name> --auth-id <string> --host <string> --password <string> [OPTIONS]"`
 			updateBad := `error="exit status 255: Error: no such remote 'r1'"`
 			assertPBSBlockLog(t, logBuf.String(), []string{
-				`DEBUG    ` + k.prefix + `reading current ` + k.keys + ` cmd="` + cmd + ` list --output-format=json"`,
+				`DEBUG    ` + k.prefix + `reading current ` + k.keys + ` cmd="` + pbsListCmdFor(cmd) + `"`,
 				"INFO     " + k.opening,
 				"DEBUG    " + k.prefix + "mode=clean staged=/stage/etc/proxmox-backup/" + k.file,
 				"DEBUG    " + k.prefix + "backup " + k.keys + "=2 names=a1,a2",
@@ -471,7 +471,7 @@ func TestPBSSectionRestoreBlock_LabelsPerKind(t *testing.T) {
 				"WARNING  ⚠ " + k.outcome + ": partially applied",
 			})
 			wantCalls := []string{
-				cmd + " list --output-format=json",
+				pbsListCmdFor(cmd),
 				cmd + " remove old",
 				cmd + " create a1 --comment c",
 				cmd + " update a1 --comment c",
@@ -867,7 +867,7 @@ func TestMaybeApplyPBSConfigsFromStage_SectionBlockOutcomeIsNotRepeated(t *testi
 		if !warned {
 			t.Fatal("restore must end with warnings")
 		}
-		want := "DEBUG    PBS staged config apply: outcome already reported: PBS remote configuration incomplete: 1 remote(s) not applied [r1]; PBS sync job configuration incomplete: 1 sync job(s) not applied [s1]"
+		want := "DEBUG    PBS staged config apply: outcome already reported: PBS sync job configuration incomplete: 1 sync job(s) not applied [s1]; PBS remote configuration incomplete: 1 remote(s) not applied [r1]"
 		lines := pbsBlockLogLines(log)
 		if last := lines[len(lines)-1]; last != want {
 			t.Fatalf("last line %q, want %q\n%s", last, want, log)
@@ -1005,7 +1005,7 @@ func TestPBSSectionRestoreBlock_StoppedBlockPerKind(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := "proxmox-backup-manager " + k.command
-			runner.errs = map[string]error{cmd + " list --output-format=json": errors.New(pbsRemoteListUnparsable)}
+			runner.errs = map[string]error{pbsListCmdFor(cmd): errors.New(pbsRemoteListUnparsable)}
 			var logBuf bytes.Buffer
 			logger := logging.New(types.LogLevelDebug, false)
 			logger.SetOutput(&logBuf)
@@ -1031,7 +1031,7 @@ func TestPBSSectionRestoreBlock_StoppedBlockPerKind(t *testing.T) {
 			if !errors.As(err, &stopped) || !pbsSectionOutcomeLogged(err) {
 				t.Fatalf("err=%T %v, want a pbsSectionRestoreStoppedError", err, err)
 			}
-			if strings.Join(runner.calls, "\n") != cmd+" list --output-format=json" {
+			if strings.Join(runner.calls, "\n") != pbsListCmdFor(cmd) {
 				t.Fatalf("only the list may run, calls: %v", runner.calls)
 			}
 			for _, f := range files {
@@ -1360,4 +1360,13 @@ func TestPBSSectionRestoreBlock_APIUnavailableJobsWriteOneFileEach(t *testing.T)
 			t.Fatalf("%s %q (err %v), want its own staged file", f, got, err)
 		}
 	}
+}
+
+// pbsListCmdFor is the list command the block runs for the kind whose command is cmd:
+// sync jobs are listed in every direction.
+func pbsListCmdFor(cmd string) string {
+	if strings.HasSuffix(cmd, " sync-job") {
+		return cmd + " list --output-format=json --sync-direction all"
+	}
+	return cmd + " list --output-format=json"
 }

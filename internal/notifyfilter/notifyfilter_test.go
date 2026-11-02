@@ -286,3 +286,16 @@ func TestDecideNamesWhyTheRelayAnswerWasUnavailable(t *testing.T) {
 		})
 	}
 }
+
+// Self mode whose monitor is not confirmed to receive (no backup check, or the last
+// heartbeat did not reach it): NOTIFY_ON is not applied, every channel sends.
+func TestDecideSelfUnconfirmedSendsEverything(t *testing.T) {
+	cfg := &config.Config{NotifyOn: config.NotifyOnWarning, HealthcheckMode: config.HealthcheckModeSelf}
+	d := Decide(context.Background(), cfg, nil, SectionSelfUnconfirmed, "op")
+	if d.Effective != config.NotifyOnAlways || d.Status != StatusSelf || d.Reason != ReasonSelfUnconfirmed {
+		t.Fatalf("decision = %+v, want effective always, status self, reason %s", d, ReasonSelfUnconfirmed)
+	}
+	if got := Decide(context.Background(), cfg, nil, SectionInitialized, "op"); got.Effective != config.NotifyOnWarning {
+		t.Fatalf("a confirmed self monitor keeps the filter, got %+v", got)
+	}
+}

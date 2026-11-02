@@ -1847,7 +1847,7 @@ if cleanDestRoot == "/" && strings.HasPrefix(target, "/etc/pve") {
 
 **PVE Storage Mount Guards**:
 - When restoring PVE storage definitions (from `storage.cfg`), ProxSave applies the same "restore even if offline" strategy for mount-backed storage:
-  - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use mountpoints under `/mnt/pve/<storageid>`. ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary read-only bind-mount guard (or, if the bind mount cannot be created, logs a warning and proceeds unguarded).
+  - Network storages (`nfs`, `cifs`, `cephfs`, `glusterfs`) use the storage's `path` as mountpoint (by default `/mnt/pve/<storageid>`). ProxSave attempts `pvesm activate <storageid>`; if the mountpoint still resolves to the root filesystem, it applies a temporary read-only bind-mount guard (or, if the bind mount cannot be created, logs a warning and proceeds unguarded).
   - `dir` storages are guarded only when their `path` lives under a mountpoint restored via `/etc/fstab` (to avoid guarding local root filesystem paths).
 - Purpose: prevent PVE from writing into `/mnt/pve/...` (or other mount roots) when the backing storage is offline at restore time.
 - Optional cleanup: dashboard **Recovery > Cleanup guards**. Its first screen is a read-only check before Apply. See **Clearing mount guards after the storage is back** below.

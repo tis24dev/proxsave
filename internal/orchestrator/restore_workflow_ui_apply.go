@@ -324,6 +324,10 @@ func (w *restoreUIWorkflowRun) logPVERestartAdvice() {
 
 func (w *restoreUIWorkflowRun) logPBSRestartAdvice() {
 	if w.pbsServicesStopped {
+		if w.pbsServicesNotRunning != nil {
+			w.logger.Warning("  PBS services - stopped for this restore and not running: %s", w.pbsServicesNotRunning.notRunning())
+			return
+		}
 		w.logger.Info("  PBS services - stopped and started again during this restore")
 		return
 	}

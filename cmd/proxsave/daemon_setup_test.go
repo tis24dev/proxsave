@@ -114,7 +114,7 @@ func TestApplyCronMode_PersistsCronModeBeforeTeardown(t *testing.T) {
 		migrateLegacyCronEntriesFn = origMigrate
 	})
 	migrateCalled := false
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {
 		migrateCalled = true
 	}
 	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
@@ -172,7 +172,7 @@ func TestApplyCronModeDefersWhileBackupRunning(t *testing.T) {
 		return nil
 	}
 	migrateCalled := false
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {
 		migrateCalled = true
 	}
 
@@ -216,7 +216,7 @@ func TestApplyCronModeProceedsWhenIdle(t *testing.T) {
 		removeCalled = true
 		return nil
 	}
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	// See TestApplyCronMode_PersistsCronModeBeforeTeardown: applyCronMode now reads the
 	// crontab AND the system cron habitat (#298), and either left unstubbed would make this
 	// test depend on the host it runs on.
@@ -278,7 +278,7 @@ func TestRunDaemonRemoveDefersWhenBackupRunning(t *testing.T) {
 		removeCalled = true
 		return nil
 	}
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "backup.env")
@@ -326,7 +326,7 @@ func TestApplyCronModeRollsBackHealthcheckEnabled(t *testing.T) {
 	})
 	restartVerifyBackupRunning = func(string) bool { return false } // idle
 	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	// This test is about the env write, not the crontab: pin the "ordinary host, no
 	// wrapper" shape so applyCronMode takes its normal append path and never touches the
 	// real `crontab -l` of the machine running the suite.

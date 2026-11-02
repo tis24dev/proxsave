@@ -27,7 +27,6 @@ import (
 	"github.com/tis24dev/proxsave/internal/storage"
 	"github.com/tis24dev/proxsave/internal/types"
 	"github.com/tis24dev/proxsave/internal/ui/theme"
-	"github.com/tis24dev/proxsave/pkg/utils"
 )
 
 type ExecInfo struct {
@@ -897,7 +896,7 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
 }
 
-func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule string) {
+func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
 		logBootstrapWarning(bootstrap, "Unable to update cron entry: executable path is unknown")
@@ -982,7 +981,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	// chosen schedule, while unrelated operator cron lines are preserved. Upgrades
 	// no longer call this, so it only runs on install (CRON-INSTALL-002 /
 	// CRON-MIXED-001).
-	updatedLines := buildReinstallCronLines(lines, baseDir, correctPaths, schedule, newCommandToken, bootstrap)
+	updatedLines := buildReinstallCronLines(lines, baseDir, correctPaths, schedule, newCommandToken+cronConfigArgs(baseDir, configPath), bootstrap)
 
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
@@ -1151,13 +1150,41 @@ func repointLegacyCronEntries(ctx context.Context, bootstrap *logging.BootstrapL
 // entry at the chosen schedule. Unrelated operator lines, comments and blanks are
 // preserved. This deliberately resets proxsave's schedule to the chosen one
 // (CRON-INSTALL-002) and removes stale/duplicate entries (CRON-MIXED-001).
-func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, commandToken string, bootstrap *logging.BootstrapLogger) []string {
+func buildReinstallCronLines(lines []string, baseDir string, correctPaths []string, schedule, command string, bootstrap *logging.BootstrapLogger) []string {
 	lines = dropLegacyBashCronLines(lines, baseDir, bootstrap)
 	updated := filterCronLines(lines, correctPaths)
 	updated = dropCanonicalCronLines(updated, correctPaths)
 	// --backup pins the non-interactive behavior: even if a scheduler ever
 	// allocates a pty, the run can never land on the interactive dashboard.
-	return append(updated, fmt.Sprintf("%s %s --backup", schedule, commandToken))
+	token, configArgs, _ := strings.Cut(command, " ")
+	if configArgs != "" {
+		configArgs = " " + configArgs
+	}
+	return append(updated, fmt.Sprintf("%s %s --backup%s", schedule, token, configArgs))
+}
+
+// cronConfigArgs returns the arguments that pin the cron run to configPath when it is
+// not the default BASE_DIR/configs/backup.env: no environment variable names the
+// config, so without them the cron run read the default file, not the one the
+// daemon or the install used. Empty for the default, so that line is unchanged.
+func cronConfigArgs(baseDir, configPath string) string {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" || filepath.Clean(configPath) == filepath.Join(baseDir, "configs", "backup.env") {
+		return ""
+	}
+	// cron turns an unescaped '%' into a newline and feeds the rest to stdin, quotes or
+	// not (crontab(5)): the shell then got "--config '/a" and stopped on an unterminated
+	// quote, so no backup ran. cron drops the backslash of "\%" and the shell sees '%'
+	// (measured with cron 3.0pl1-197).
+	return " --config " + strings.ReplaceAll(cronShellQuote(filepath.Clean(configPath)), "%", `\%`)
+}
+
+// cronShellQuote quotes a path for the shell cron runs the line with, when it needs it.
+func cronShellQuote(path string) string {
+	if !strings.ContainsAny(path, " \t'\"\\$`;&|<>()*?[]#~%") {
+		return path
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 func logBootstrapWarning(bootstrap *logging.BootstrapLogger, format string, args ...any) {
@@ -1467,9 +1494,30 @@ func addPathExclusion(excludes []string, path string) []string {
 	return excludes
 }
 
+// dirCheckStat and dirCheckMkdirAll are the bounded operations of the directory
+// checks; only tests replace them.
+var (
+	dirCheckStat     = safefs.Stat
+	dirCheckMkdirAll = safefs.MkdirAll
+)
+
+// checkDirectory reports whether dirPath is a directory. A stat that does not answer
+// within timeout (a dead NFS/CIFS mount) is reported and gives answered=false: an
+// unbounded stat there blocked the run in the kernel before the lock and the storage
+// initialization, which would have disabled the secondary and kept the backup going.
+func checkDirectory(logger *logging.Logger, name, dirPath string, timeout time.Duration) (exists, answered bool) {
+	info, err := dirCheckStat(context.Background(), dirPath, timeout)
+	if errors.Is(err, safefs.ErrTimeout) {
+		logger.Debug("Directory check: stat of %s timed out after %s", dirPath, timeout)
+		logger.Warning("✗ %s not checked: %s did not answer within %s (dead/stale mount?)", name, dirPath, timeout)
+		return false, false
+	}
+	return err == nil && info.IsDir(), true
+}
+
 // ensureDirectoryExists verifies that dirPath exists and attempts to create it when missing.
 // All events are logged using the provided logger.
-func ensureDirectoryExists(logger *logging.Logger, name, path string) {
+func ensureDirectoryExists(logger *logging.Logger, name, path string, timeout time.Duration) {
 	if logger == nil {
 		return
 	}
@@ -1477,13 +1525,17 @@ func ensureDirectoryExists(logger *logging.Logger, name, path string) {
 	if dirPath == "" {
 		return
 	}
-	if utils.DirExists(dirPath) {
+	exists, answered := checkDirectory(logger, name, dirPath, timeout)
+	if !answered {
+		return
+	}
+	if exists {
 		logger.Info("✓ %s exists: %s", name, dirPath)
 		return
 	}
 
 	logger.Warning("✗ %s not found: %s", name, dirPath)
-	if err := os.MkdirAll(dirPath, defaultDirPerm); err != nil {
+	if err := dirCheckMkdirAll(context.Background(), dirPath, defaultDirPerm, timeout); err != nil {
 		logger.Warning("Failed to create %s: %v", dirPath, err)
 		return
 	}
@@ -1493,7 +1545,7 @@ func ensureDirectoryExists(logger *logging.Logger, name, path string) {
 // reportDirectoryDryRun is ensureDirectoryExists for a dry run, which creates no
 // destination directory: a missing directory is reported with the line the checks use
 // ("[DRY RUN] Would create directory: <path>") and left missing.
-func reportDirectoryDryRun(logger *logging.Logger, name, path string) {
+func reportDirectoryDryRun(logger *logging.Logger, name, path string, timeout time.Duration) {
 	if logger == nil {
 		return
 	}
@@ -1501,7 +1553,11 @@ func reportDirectoryDryRun(logger *logging.Logger, name, path string) {
 	if dirPath == "" {
 		return
 	}
-	if utils.DirExists(dirPath) {
+	exists, answered := checkDirectory(logger, name, dirPath, timeout)
+	if !answered {
+		return
+	}
+	if exists {
 		logger.Info("✓ %s exists: %s", name, dirPath)
 		return
 	}

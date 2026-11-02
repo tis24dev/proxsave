@@ -249,8 +249,9 @@ func buildBackupExcludePatterns(cfg *config.Config) []string {
 
 func verifyBackupDirectories(cfg *config.Config, logger *logging.Logger) {
 	logging.Step("Verifying directory structure")
+	timeout := fsIoTimeoutDuration(cfg)
 	checkDir := func(name, path string) {
-		ensureDirectoryExists(logger, name, path)
+		ensureDirectoryExists(logger, name, path, timeout)
 	}
 
 	checkDir("Backup directory", cfg.BackupPath)
@@ -261,7 +262,7 @@ func verifyBackupDirectories(cfg *config.Config, logger *logging.Logger) {
 		switch {
 		case secondaryLogPath != "" && cfg.DryRun:
 			// A dry run creates no destination directory: a missing one is reported.
-			reportDirectoryDryRun(logger, "Secondary log directory", secondaryLogPath)
+			reportDirectoryDryRun(logger, "Secondary log directory", secondaryLogPath, timeout)
 		case secondaryLogPath != "":
 			checkDir("Secondary log directory", secondaryLogPath)
 		default:

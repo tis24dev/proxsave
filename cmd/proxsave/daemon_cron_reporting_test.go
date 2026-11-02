@@ -205,7 +205,7 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return []string{wrapper}, nil }
 	wrapperCronLinesFn = func([]string) []string { return []string{wrapper} }
 	migrated := ""
-	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule string) {
+	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule, _ string) {
 		migrated = schedule
 	}
 
@@ -264,7 +264,7 @@ func TestApplyCronModeStillWritesTheCronLineWithoutAWrapper(t *testing.T) {
 	}
 	wrapperCronLinesFn = func([]string) []string { return nil }
 	migrated := ""
-	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule string) {
+	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule, _ string) {
 		migrated = schedule
 	}
 	crontabWriteLinesFn = func(context.Context, []string) error {
@@ -307,7 +307,7 @@ func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.
 		return nil
 	}
 	migrated := false
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {
 		migrated = true
 	}
 
@@ -350,7 +350,7 @@ func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *tes
 		}}
 	}
 	migrated := ""
-	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule string) {
+	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule, _ string) {
 		migrated = schedule
 	}
 	crontabWriteLinesFn = func(context.Context, []string) error {
@@ -379,7 +379,7 @@ func TestApplyCronModeEmitsTheSystemCronAdvisory(t *testing.T) {
 
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	systemCronProxsaveRefsFn = func() []indirectCronRef {
 		return []indirectCronRef{{
 			Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
@@ -418,7 +418,7 @@ func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
 
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	// TWO findings, so a per-line WARNING cannot be mistaken for the one-warning shape.
 	systemCronProxsaveRefsFn = func() []indirectCronRef {
 		return []indirectCronRef{
@@ -542,7 +542,7 @@ func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 
 		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 		if err != nil {
@@ -557,7 +557,7 @@ func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 		// A directory where the file is expected: every write fails, nothing else does.
 		if err := os.Remove(configPath); err != nil {
 			t.Fatal(err)
@@ -589,7 +589,7 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 	t.Run("the line is there afterwards", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 		crontabReadLinesFn = func(context.Context) ([]string, error) {
 			return []string{"00 02 * * * /usr/local/bin/proxsave --backup"}, nil
 		}
@@ -606,7 +606,7 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 	t.Run("the write silently did nothing", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 		crontabReadLinesFn = func(context.Context) ([]string, error) {
 			return []string{"0 6 * * * /usr/bin/rsync /a /b"}, nil
 		}
@@ -627,7 +627,7 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 	t.Run("the crontab cannot be read: not scheduled AND not verified", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 		crontabReadLinesFn = func(context.Context) ([]string, error) {
 			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
 		}
@@ -651,7 +651,7 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 		} {
 			cfg, configPath := cronModeFixture(t)
 			wrapperCronLinesFn = func([]string) []string { return nil }
-			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 			crontabReadLinesFn = func(context.Context) ([]string, error) { return lines, nil }
 
 			report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
@@ -667,7 +667,7 @@ func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
 	t.Run("the crontab cannot be read: fail closed", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 		crontabReadLinesFn = func(context.Context) ([]string, error) {
 			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
 		}
@@ -727,7 +727,7 @@ func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
 			})
 			restartVerifyBackupRunning = func(string) bool { return false }
 			removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
-			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 			wrapperCronLinesFn = func([]string) []string { return nil }
 			systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, nil }
@@ -793,7 +793,7 @@ func TestApplyCronModeDuplicateWarningStatesTheCrontabItRead(t *testing.T) {
 			cfg, configPath := cronModeFixture(t)
 			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, nil }
 			wrapperCronLinesFn = func([]string) []string { return []string{wrapper} }
-			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 
 			seen := captureConsole(t, func() {
 				if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
@@ -817,7 +817,7 @@ func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
 
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string) {}
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	seen := captureConsole(t, func() {

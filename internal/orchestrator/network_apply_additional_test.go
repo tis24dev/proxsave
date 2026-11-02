@@ -1836,7 +1836,7 @@ func TestShellQuote(t *testing.T) {
 	if got := shellQuote(""); got != "''" {
 		t.Fatalf("shellQuote empty=%q", got)
 	}
-	if got := shellQuote("simple"); got != "simple" {
+	if got := shellQuote("simple"); got != "'simple'" {
 		t.Fatalf("shellQuote simple=%q", got)
 	}
 	want := `'a b '\''c'\'''`

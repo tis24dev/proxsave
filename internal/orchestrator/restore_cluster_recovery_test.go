@@ -67,8 +67,12 @@ func runClusterRecoveryRestore(t *testing.T, opts clusterRecoveryOptions) cluste
 	}
 
 	cmd := &FakeCommandRunner{
-		Outputs: map[string][]byte{"umount /etc/pve": []byte("not mounted\n")},
-		Errors:  map[string]error{"umount /etc/pve": errors.New("not mounted")},
+		Outputs: map[string][]byte{
+			"umount /etc/pve": []byte("not mounted\n"),
+			// The WAL of the live database is folded into it before the restore.
+			pveClusterDBCheckpointCmd: []byte("0|0|0\n"),
+		},
+		Errors: map[string]error{"umount /etc/pve": errors.New("not mounted")},
 	}
 	for _, svc := range clusterRecoveryServices {
 		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")

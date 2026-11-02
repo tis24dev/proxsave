@@ -266,6 +266,15 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 		return "", err
 	}
 
+	return writeDecryptedBundle(ctx, ui, logger, prepared, destDir)
+}
+
+// writeDecryptedBundle writes the decrypted bundle into destDir: the archive, its
+// .metadata and .sha256 are bundled in the temp work directory, and only the bundle is
+// moved out. The bundle is the only file written in destDir, so it is the only one
+// whose existing copy is asked about; asked about the archive too, Overwrite deleted a
+// file the workflow never writes. A different path is created when missing.
+func writeDecryptedBundle(ctx context.Context, ui DecryptWorkflowUI, logger *logging.Logger, prepared *preparedBundle, destDir string) (string, error) {
 	if err := restoreFS.MkdirAll(destDir, 0o755); err != nil {
 		return "", fmt.Errorf("create destination directory: %w", err)
 	}
@@ -273,19 +282,7 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 	logger.Info("Destination directory: %s", destDir)
 
 	destArchivePath := filepath.Join(destDir, filepath.Base(prepared.ArchivePath))
-	destArchivePath, err = ensureWritablePathWithUI(ctx, ui, destArchivePath, "decrypted archive")
-	if err != nil {
-		return "", err
-	}
-
-	workDir := filepath.Dir(prepared.ArchivePath)
-	archiveBase := filepath.Base(destArchivePath)
-	tempArchivePath := filepath.Join(workDir, archiveBase)
-	if tempArchivePath != prepared.ArchivePath {
-		if err := moveFileSafe(prepared.ArchivePath, tempArchivePath); err != nil {
-			return "", fmt.Errorf("move decrypted archive within temp dir: %w", err)
-		}
-	}
+	tempArchivePath := prepared.ArchivePath
 
 	manifestCopy := prepared.Manifest
 	manifestCopy.ArchivePath = destArchivePath
@@ -316,6 +313,11 @@ func runDecryptWorkflowWithUI(ctx context.Context, cfg *config.Config, logger *l
 
 	if err := restoreFS.Remove(targetBundlePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.Warning("Failed to remove existing bundle target: %v", err)
+	}
+	bundleDir := filepath.Dir(targetBundlePath)
+	logger.Debug("Decrypt: bundle directory %s (created when missing)", bundleDir)
+	if err := restoreFS.MkdirAll(bundleDir, 0o755); err != nil {
+		return "", fmt.Errorf("create bundle directory: %w", err)
 	}
 	if err := moveFileSafe(tempBundlePath, targetBundlePath); err != nil {
 		return "", fmt.Errorf("move decrypted bundle: %w", err)

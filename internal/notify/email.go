@@ -1439,12 +1439,14 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 	}
 	e.logger.Debug("✓ Sendmail binary found at %s", sendmailPath)
 
-	// Check MTA service status
+	// The service and config checks guess from fixed lists: a working stock Debian
+	// exim4 (it ships exim4.conf.template, never exim4.conf) or a daemonless MTA
+	// (msmtp-mta, dma) reads as missing. They stay at DEBUG; what is visible comes from
+	// the post-send checks below, which look at what happened to this email.
 	if active, service := e.isMTAServiceActive(ctx); active {
 		e.logger.Debug("✓ MTA service '%s' is active", service)
 	} else {
-		e.logger.Warning("⚠ No MTA service appears to be running (checked: postfix, sendmail, exim4)")
-		e.logger.Warning("  Emails may be accepted but not delivered. Consider using EMAIL_DELIVERY_METHOD=relay")
+		e.logger.Debug("No MTA service found active (checked: postfix, sendmail, exim4): %s", service)
 	}
 
 	// Check MTA configuration
@@ -1460,8 +1462,7 @@ func (e *EmailNotifier) sendViaSendmail(ctx context.Context, recipient, subject,
 			}
 		}
 	} else {
-		e.logger.Warning("⚠ No MTA configuration file found")
-		e.logger.Warning("  Sendmail may queue emails but not deliver them")
+		e.logger.Debug("No MTA configuration file found (checked: /etc/postfix/main.cf, /etc/mail/sendmail.cf, /etc/exim4/exim4.conf)")
 	}
 
 	// Check current mail queue; its entries for the recipient are left out when this

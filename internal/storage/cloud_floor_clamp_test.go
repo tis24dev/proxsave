@@ -96,7 +96,7 @@ func TestCountLogFilesFloorsWedgedDeadlessCtx(t *testing.T) {
 	}
 
 	done := make(chan int, 1)
-	go func() { done <- cs.countLogFiles(t.Context()) }()
+	go func() { done <- cs.countLogFiles(t.Context(), nil) }()
 	select {
 	case <-done: // returns (-1 best-effort) promptly; not hung
 	case <-time.After(3 * time.Second):

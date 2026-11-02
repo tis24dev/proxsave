@@ -223,8 +223,8 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 
 	// Find all backup files (legacy "proxmox-backup-*.tar.*" or new "*-backup-*.tar*")
 	globPatterns := []string{
-		filepath.Join(l.basePath, "proxmox-backup-*.tar.*"), // Legacy Bash naming
-		filepath.Join(l.basePath, "*-backup-*.tar*"),        // Go pipeline naming (+ bundle)
+		"proxmox-backup-*.tar.*", // Legacy Bash naming
+		"*-backup-*.tar*",        // Go pipeline naming (+ bundle)
 	}
 
 	timeout := fsIoTimeout(l.config)
@@ -232,7 +232,7 @@ func (l *LocalStorage) List(ctx context.Context) (backups []*types.BackupMetadat
 	seen := make(map[string]struct{})
 	for _, pattern := range globPatterns {
 		patternMatches, err := safefs.Run(ctx, "local-glob", l.basePath, timeout, func() ([]string, error) {
-			return filepath.Glob(pattern)
+			return globBackupNames(l.basePath, pattern)
 		})
 		if err != nil {
 			return nil, &StorageError{
@@ -432,6 +432,7 @@ func (l *LocalStorage) retention() fsRetention {
 		basePath: l.basePath,
 		hostname: l.hostname,
 		aliases:  l.hostAliases,
+		thisRun:  l.thisRunArchive,
 		tally:    &l.retTally,
 		lastRet:  &l.lastRet,
 		text:     localRetentionText,
@@ -497,12 +498,13 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 			Recoverable: true,
 		}
 	}
-	l.retTally.noMetadata = logListingNoMetadata(l.logger, l.lastNoMetadata)
+	id := retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID, thisRunArchive: l.thisRunArchive}
+	l.retTally.noMetadata = logListingNoMetadata(l.logger, l.ownedNoMetadata(backups, id))
 
 	// Drop anything this host does not own before counting or deleting: the
 	// "*-backup-*" glob that produced this list matches every hostname, and the list
 	// also carries other spellings of this host's own name.
-	scope, err := applyRetentionHostScope("Local storage", retentionIdentity{hostname: l.hostname, aliases: l.hostAliases, serverID: l.serverID, thisRunArchive: l.thisRunArchive}, backups, l.logger)
+	scope, err := applyRetentionHostScope("Local storage", id, backups, l.logger)
 	if err != nil {
 		// This machine cannot name itself, so no backup can be attributed to it: the
 		// pass does not start and the caller closes the block with "Retention not
@@ -552,6 +554,29 @@ func (l *LocalStorage) ApplyRetention(ctx context.Context, config RetentionConfi
 		return deleted, err
 	}
 	return deleted, nil
+}
+
+// ownedNoMetadata returns the names of the last List's archives without metadata that
+// this host rotates. Another host's archive, or one nothing names, is never deleted
+// here: named and counted, it repeated the WARNING and exit 1 on every run.
+func (l *LocalStorage) ownedNoMetadata(backups []*types.BackupMetadata, id retentionIdentity) []string {
+	if len(l.lastNoMetadata) == 0 {
+		return nil
+	}
+	owned, _ := scopeRetentionToHost(backups, id)
+	ownedNames := make(map[string]bool, len(owned))
+	for _, b := range owned {
+		ownedNames[filepath.Base(b.BackupFile)] = true
+	}
+	var names []string
+	for _, name := range l.lastNoMetadata {
+		if ownedNames[name] {
+			names = append(names, name)
+			continue
+		}
+		l.logger.Debug("Local storage: retention - %s has no metadata and is not this host's, left out of the count", name)
+	}
+	return names
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on LOG_PATH once the

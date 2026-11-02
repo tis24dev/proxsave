@@ -84,8 +84,10 @@ func createPBSDatastoreLockFile(lockPath string) error {
 		return fmt.Errorf("unsafe datastore lock path: %w", err)
 	}
 	// 0600: both callers chown the lock to the datastore owner right after
-	// (setDatastoreOwnership), the user PBS takes it as, and nobody else reads it; the
-	// .lock PBS 3.4.9 creates is an empty file owned backup:backup. Created by base name
+	// (setDatastoreOwnership), the user PBS takes it as, and initializePBSDatastore
+	// then gives it the 0644 PBS creates it with and requires to reopen the chunk
+	// store (setPBSChunkStoreModes); the .lock PBS creates is an empty file owned
+	// backup:backup. Created by base name
 	// inside its validated directory opened as an os.Root, so no path built from a
 	// variable reaches open (gosec G304) and the mode is within G302, without a #nosec.
 	root, err := os.OpenRoot(dir)

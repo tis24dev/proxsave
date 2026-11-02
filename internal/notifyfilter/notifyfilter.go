@@ -44,6 +44,10 @@ const (
 	SectionDisabled        = "disabled"
 	SectionNotTransmitting = "not_transmitting"
 	SectionInitialized     = "initialized"
+	// SectionSelfUnconfirmed: self mode with healthchecks running, but the operator's
+	// monitor is not confirmed to receive (no backup check, or the last heartbeat did
+	// not reach it): NOTIFY_ON is not applied, every channel sends.
+	SectionSelfUnconfirmed = "self_unconfirmed"
 )
 
 // Reasons a decision falls back to always (DEBUG vocabulary).
@@ -54,6 +58,7 @@ const (
 	ReasonStatusUnavailable    = "delivery_status_unavailable"
 	ReasonAlertsNotVerified    = "alerts_not_verified"
 	ReasonPolicyUnconfirmed    = "policy_unconfirmed"
+	ReasonSelfUnconfirmed      = "self_monitor_unconfirmed"
 )
 
 // Why the relay's delivery status could not be used (Decision.Unavailable).
@@ -174,6 +179,8 @@ func Decide(ctx context.Context, cfg *config.Config, logger *logging.Logger, sec
 		d.Status, d.Reason = StatusDisabled, ReasonHealthchecksDisabled
 	case section == SectionNotTransmitting:
 		d.Status, d.Reason = StatusNotTransmitting, ReasonNotTransmitting
+	case section == SectionSelfUnconfirmed:
+		d.Status, d.Reason = StatusSelf, ReasonSelfUnconfirmed
 	case cfg.HealthcheckMode == config.HealthcheckModeSelf:
 		d.Status = StatusSelf
 		logging.DebugStep(logger, op, "self notify_urls=%t", SelfNotifyChecksConfigured(cfg))

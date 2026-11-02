@@ -112,14 +112,16 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	origList := listNamespacesFunc
-	listNamespacesFunc = func(_ context.Context, name, path string, _ time.Duration) ([]pbs.Namespace, bool, error) {
-		if name != ds.Name || path != ds.Path {
-			t.Fatalf("unexpected args %s %s", name, path)
+	fail := false
+	stubDiscoverNamespaces(t, func(_ context.Context, path string, _ time.Duration) ([]pbs.Namespace, error) {
+		if path != ds.Path {
+			t.Fatalf("unexpected path %s", path)
 		}
-		return []pbs.Namespace{{Ns: "root", Path: "/root"}}, true, nil
-	}
-	t.Cleanup(func() { listNamespacesFunc = origList })
+		if fail {
+			return nil, errors.New("fail")
+		}
+		return []pbs.Namespace{{Ns: "root", Path: "/root"}}, nil
+	})
 
 	if err := c.collectDatastoreNamespaces(context.Background(), ds, targetDir); err != nil {
 		t.Fatalf("collectDatastoreNamespaces error: %v", err)
@@ -129,9 +131,7 @@ func TestCollectDatastoreNamespacesSuccessAndError(t *testing.T) {
 		t.Fatalf("expected namespaces file, got %v", err)
 	}
 
-	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		return nil, false, errors.New("fail")
-	}
+	fail = true
 	if err := c.collectDatastoreNamespaces(context.Background(), ds, targetDir); err == nil {
 		t.Fatalf("expected error when namespace listing fails")
 	}

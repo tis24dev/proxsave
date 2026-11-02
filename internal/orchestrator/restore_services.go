@@ -273,19 +273,34 @@ func restartPBSServicesAfterFailedStop(logger *logging.Logger, stopped []string)
 	}
 }
 
+// pbsServicesStartError is a PBS service start that left units down: msg is what the
+// start reported, units the units not running, for the restore's closing advice.
+type pbsServicesStartError struct {
+	msg   string
+	units []string
+}
+
+func (e *pbsServicesStartError) Error() string { return e.msg }
+
+// notRunning names the units left down: "proxmox-backup-proxy (start failed)".
+func (e *pbsServicesStartError) notRunning() string {
+	return strings.Join(e.units, ", ") + " (start failed)"
+}
+
 func startPBSServices(ctx context.Context, logger *logging.Logger) error {
-	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
-		return fmt.Errorf("systemctl not available: %w", err)
-	}
 	services := []string{"proxmox-backup", "proxmox-backup-proxy"}
-	var failures []string
+	if _, err := restoreCmd.Run(ctx, "which", "systemctl"); err != nil {
+		return &pbsServicesStartError{msg: fmt.Sprintf("systemctl not available: %v", err), units: services}
+	}
+	var failures, units []string
 	for _, service := range services {
 		if err := startServiceWithRetries(ctx, logger, service); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", service, err))
+			units = append(units, service)
 		}
 	}
 	if len(failures) > 0 {
-		return errors.New(strings.Join(failures, "; "))
+		return &pbsServicesStartError{msg: strings.Join(failures, "; "), units: units}
 	}
 	return nil
 }

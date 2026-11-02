@@ -11,9 +11,11 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/backup"
@@ -26,9 +28,9 @@ import (
 )
 
 // cloudExecWaitDelay bounds how long defaultRunCommand waits, after ctx
-// cancellation/deadline, for a SIGKILLed rclone to be reaped and its stdout/stderr
-// pipes to drain before they are force-closed and Wait is released with
-// exec.ErrWaitDelay. It is the reaping half of the WithTimeout+WaitDelay pair: a
+// cancellation/deadline, for a SIGTERMed rclone to exit and its stdout/stderr
+// pipes to drain before it is SIGKILLed, the pipes are force-closed and Wait is
+// released with exec.ErrWaitDelay. It is the reaping half of the WithTimeout+WaitDelay pair: a
 // rclone interruptibly stalled on the network (or one whose child holds the pipe
 // open) would otherwise block Run's Wait forever. A var (not const) so
 // tests can shrink it; 3s mirrors orchestrator.defaultCommandWaitDelay.
@@ -1193,6 +1195,9 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 			issues.add(StoreIssueSidecarNotSaved)
 			c.setLocalPermissions(ctx, remoteFile, issues)
 		}
+		if primaryFailed && !errors.As(err, &verifyErr) {
+			c.removeFailedUpload(ctx, filename, remoteFile)
+		}
 		return &StorageError{
 			Location:     LocationCloud,
 			Operation:    op,
@@ -1215,6 +1220,41 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 	}
 
 	return nil
+}
+
+// removeFailedUpload deletes what a failed copy of the primary left at its final name.
+// rclone before 1.63 (the Debian package on PVE 8 and 9) writes local, sftp, ftp and
+// pcloud uploads in place, so a copy stopped midway leaves a truncated object there;
+// the listing counts every bundle as verified, and retention would keep it and delete
+// a good backup in its place. rclone 1.63 and later write to "<name>.<hash>.partial"
+// and remove it on SIGTERM, so there is usually nothing to delete. A copy that went
+// through and failed only its verification keeps its object: it may be good. The run
+// ctx may be the one that stopped the copy, so the delete is bounded by
+// RCLONE_TIMEOUT_CONNECTION instead.
+func (c *CloudStorage) removeFailedUpload(ctx context.Context, filename, remoteFile string) {
+	timeoutSeconds := c.config.RcloneTimeoutConnection
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	args := c.buildRcloneArgs("deletefile")
+	args = append(args, remoteFile)
+	// Not the argv: RCLONE_FLAGS may carry secrets.
+	c.logger.Debug("Cloud Storage: upload - deleting what the failed copy left at %s", filename)
+	output, err := c.exec(ctx, args[0], args[1:]...)
+	if err != nil {
+		msg := strings.TrimSpace(string(output.transcript()))
+		if isRcloneObjectNotFound(msg) {
+			c.logger.Debug("Cloud Storage: upload - the failed copy left nothing at %s", filename)
+			return
+		}
+		c.logger.Debug("Cloud Storage: upload - could not delete what the failed copy left at %s: %s", filename, rcloneFailureDetail(msg, err))
+		return
+	}
+	c.logger.Debug("Cloud Storage: upload - deleted what the failed copy left at %s", filename)
+	c.removeRemoteSnapshotEntry(filename)
 }
 
 // statTimeout is the duration a timed-out stat waited, for the fact line: the one the
@@ -2095,6 +2135,14 @@ func (c *CloudStorage) isBackupEntry(filename string, snapshot map[string]struct
 		return false
 	}
 
+	// Skip in-flight uploads: rclone 1.63 and later write local, sftp, ftp and pcloud
+	// uploads to "<name>.<hash>.partial" and rename it at the end, so a transfer
+	// stopped before the rename can leave one behind. Shared with the local/secondary
+	// List filters.
+	if isBackupTempArtifact(filename) {
+		return false
+	}
+
 	// When bundling is enabled, skip standalone files that have a corresponding bundle
 	if c.config != nil && c.config.BundleAssociatedFiles {
 		if !strings.HasSuffix(filename, ".bundle.tar") {
@@ -2135,10 +2183,11 @@ func (c *CloudStorage) Delete(ctx context.Context, backupFile string) error {
 // rcloneFailureDetail merges rclone's own output with the exec error for a failed
 // rclone call. rclone's stderr names the object and the reason, so it leads; the
 // exec error is appended only when it says more than "exit status N". That "more"
-// is the SIGKILL shape: defaultRunCommand sets cmd.WaitDelay, so a cancelled or
-// stalled call gets its process killed and defaultRunCommand returns whatever rclone
-// printed so far - typically a NOTICE - plus "signal: killed". Printing the output
-// alone presented that NOTICE as the failure cause and left the kill on no line.
+// is the stop shape: a cancelled or stalled call gets its process stopped (SIGTERM,
+// then SIGKILL after cmd.WaitDelay) and defaultRunCommand returns whatever rclone
+// printed so far - typically a NOTICE - plus "signal: terminated" or "signal: killed".
+// Printing the output alone presented that NOTICE as the failure cause and left the
+// stop on no line.
 func rcloneFailureDetail(msg string, err error) string {
 	msg = stripRcloneTimestamps(msg)
 	if err == nil {
@@ -2359,7 +2408,7 @@ func (c *CloudStorage) deleteAssociatedLog(ctx context.Context, backupFile strin
 	return true
 }
 
-func (c *CloudStorage) countLogFiles(ctx context.Context) int {
+func (c *CloudStorage) countLogFiles(ctx context.Context, archives []*types.BackupMetadata) int {
 	if c == nil || c.config == nil {
 		return -1
 	}
@@ -2402,7 +2451,7 @@ func (c *CloudStorage) countLogFiles(ctx context.Context) int {
 			names = append(names, name)
 		}
 	}
-	return countOwnRunLogs(names, c.hostname, c.hostAliases)
+	return countOwnRunLogs(names, c.hostname, c.hostAliases, archives)
 }
 
 func (c *CloudStorage) cloudLogBase(basePath string) string {
@@ -2666,7 +2715,7 @@ func (c *CloudStorage) applyGFSRetention(ctx context.Context, backups []*types.B
 	})
 
 	// Delete in batches to avoid API rate limits
-	return c.deleteBatched(ctx, toDelete, len(backups))
+	return c.deleteBatched(ctx, toDelete, backups)
 }
 
 // applySimpleRetention applies simple count-based retention policy
@@ -2692,21 +2741,28 @@ func (c *CloudStorage) applySimpleRetention(ctx context.Context, backups []*type
 		totalBackups, maxBackups, toDelete)
 	logRetentionScale(c.logger, totalBackups, maxBackups)
 
-	// Collect oldest backups (already sorted newest first)
-	oldBackups := backups[maxBackups:]
+	// The expired backups, oldest first (the list is sorted newest first), as the
+	// folder destinations delete them: a pass stopped midway has removed the oldest
+	// and kept the newer ones.
+	oldBackups := slices.Clone(backups[maxBackups:])
+	slices.Reverse(oldBackups)
 
 	// Delete in batches to avoid API rate limits
-	return c.deleteBatched(ctx, oldBackups, totalBackups)
+	return c.deleteBatched(ctx, oldBackups, backups)
 }
 
-// deleteBatched deletes backups in batches to avoid API rate limits
-func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.BackupMetadata, totalBackups int) (int, error) {
+// deleteBatched deletes backups in batches to avoid API rate limits. all is every
+// backup the policy looked at: its count is the total, and its archives name the
+// logs counted as this destination's.
+func (c *CloudStorage) deleteBatched(ctx context.Context, backups []*types.BackupMetadata, all []*types.BackupMetadata) (int, error) {
+	backups = withoutRetentionProtected(c.logger, "Cloud storage", backups, c.thisRunArchive, time.Now())
+	totalBackups := len(all)
 	deleted := 0
 	logsDeleted := 0
 	c.retTally.planned = len(backups)
 	batchSize := c.config.CloudBatchSize
 	batchPause := time.Duration(c.config.CloudBatchPause) * time.Second
-	initialLogs := c.countLogFiles(ctx)
+	initialLogs := c.countLogFiles(ctx, all)
 
 	for i, backup := range backups {
 		if err := ctx.Err(); err != nil {
@@ -2986,20 +3042,44 @@ func defaultRunCommand(ctx context.Context, name string, args ...string) (rclone
 	if err != nil {
 		return rcloneOutput{}, err
 	}
-	// Once ctx is cancelled/expired the process is SIGKILLed; WaitDelay then bounds
-	// how long Wait blocks for it to be reaped / for orphaned pipes to drain before
-	// they are force-closed. Unlike osCommandRunner.Run (deps.go) we deliberately do
+	// Once ctx is cancelled/expired the process gets SIGTERM; WaitDelay then bounds
+	// how long Wait blocks for it to exit / for orphaned pipes to drain before it is
+	// SIGKILLed and they are force-closed. Unlike osCommandRunner.Run (deps.go) we deliberately do
 	// NOT swallow exec.ErrWaitDelay to nil: a WaitDelay-killed rclone is an INCOMPLETE
 	// upload/op, and rcloneCopy/uploadWithRetry/verify rely on a non-nil error to
 	// retry or fail rather than record a phantom success. Run returns ErrWaitDelay as a
 	// non-nil error, so we propagate it unchanged.
 	cmd.WaitDelay = cloudExecWaitDelay
+	// SIGTERM first, not the default SIGKILL: rclone 1.63 and later then remove the
+	// "<name>.<hash>.partial" of an upload they did not finish, which a SIGKILL
+	// leaves on the remote. One that does not exit within WaitDelay is SIGKILLed.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && ctx.Err() != nil && exitErr.ExitCode() == rcloneTerminatedExitCode {
+		err = &rcloneTerminatedError{err: err}
+	}
 	return rcloneOutput{stdout: stdout.Bytes(), stderr: stderr.Bytes()}, err
 }
+
+// rcloneTerminatedExitCode is the status rclone exits with once it has handled the
+// SIGTERM defaultRunCommand sends (128 + SIGTERM, measured with rclone 1.75.2): it
+// cleans up and exits instead of dying by the signal.
+const rcloneTerminatedExitCode = 128 + int(syscall.SIGTERM)
+
+// rcloneTerminatedError is an rclone that exited after the SIGTERM a done ctx sent it.
+// Its text is the one a process killed by SIGTERM has: as a plain "exit status 143"
+// the cause helpers would skip it and show rclone's last line, typically a NOTICE,
+// and the stop would appear on no line.
+type rcloneTerminatedError struct {
+	err error
+}
+
+func (e *rcloneTerminatedError) Error() string { return "signal: terminated" }
+
+func (e *rcloneTerminatedError) Unwrap() error { return e.err }
 
 func normalizeRemoteRelativePath(name string) string {
 	name = strings.TrimSpace(name)

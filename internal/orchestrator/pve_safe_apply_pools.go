@@ -35,38 +35,19 @@ func readPVEPoolsFromExportUserCfg(exportRoot string) ([]pvePoolSpec, error) {
 		return nil, nil
 	}
 
-	sections, err := parseProxmoxNotificationSections(raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse user.cfg: %w", err)
-	}
-
+	// user.cfg is colon lines, not a section config (restore_access_control_pve.go):
+	// pool:<poolid>:<comment>:<vmids,...>:<storages,...>: (measured on PVE 9.1.9).
 	var pools []pvePoolSpec
-	for _, s := range sections {
-		if !strings.EqualFold(strings.TrimSpace(s.Type), "pool") {
+	for _, l := range parsePVEUserCfg(raw) {
+		if l.typ != "pool" || l.field(0) == "" {
 			continue
 		}
-		id := strings.TrimSpace(s.Name)
-		if id == "" {
-			continue
-		}
-
-		spec := pvePoolSpec{ID: id}
-		for _, kv := range s.Entries {
-			key := strings.ToLower(strings.TrimSpace(kv.Key))
-			val := strings.TrimSpace(kv.Value)
-			switch key {
-			case "comment":
-				spec.Comment = val
-			case "vms":
-				spec.VMIDs = splitProxmoxCSV(val)
-			case "storage":
-				spec.Storages = splitProxmoxCSV(val)
-			}
-		}
-
-		spec.VMIDs = uniqueSortedStrings(spec.VMIDs)
-		spec.Storages = uniqueSortedStrings(spec.Storages)
-		pools = append(pools, spec)
+		pools = append(pools, pvePoolSpec{
+			ID:       l.field(0),
+			Comment:  l.field(1),
+			VMIDs:    uniqueSortedStrings(splitProxmoxCSV(l.field(2))),
+			Storages: uniqueSortedStrings(splitProxmoxCSV(l.field(3))),
+		})
 	}
 
 	sort.Slice(pools, func(i, j int) bool { return pools[i].ID < pools[j].ID })

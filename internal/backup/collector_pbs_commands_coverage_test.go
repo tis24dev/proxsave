@@ -291,11 +291,9 @@ func TestPBSPXARRecipeSkipsOutputsWhenTempVarIsFile(t *testing.T) {
 }
 
 func TestCollectDatastoreConfigsCreatesConfigAndNamespaceFiles(t *testing.T) {
-	origList := listNamespacesFunc
-	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		return []pbs.Namespace{{Ns: "root", Path: "/"}}, false, nil
-	}
+	stubDiscoverNamespaces(t, func(context.Context, string, time.Duration) ([]pbs.Namespace, error) {
+		return []pbs.Namespace{{Ns: "root", Path: "/"}}, nil
+	})
 
 	cfg := GetDefaultCollectorConfig()
 	deps := CollectorDeps{
@@ -413,11 +411,9 @@ func TestCollectPBSConfigsEndToEndWithStubs(t *testing.T) {
 		t.Fatalf("write pxar: %v", err)
 	}
 
-	origList := listNamespacesFunc
-	t.Cleanup(func() { listNamespacesFunc = origList })
-	listNamespacesFunc = func(context.Context, string, string, time.Duration) ([]pbs.Namespace, bool, error) {
-		return []pbs.Namespace{{Ns: "root", Path: "/"}}, false, nil
-	}
+	stubDiscoverNamespaces(t, func(context.Context, string, time.Duration) ([]pbs.Namespace, error) {
+		return []pbs.Namespace{{Ns: "root", Path: "/"}}, nil
+	})
 
 	cfg := GetDefaultCollectorConfig()
 	cfg.PBSConfigPath = pbsRoot

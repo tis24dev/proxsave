@@ -58,6 +58,10 @@ func maybeInstallNetworkConfigFromStage(
 
 	logger.Info("Network restore: validating staged configuration before writing to /etc (no live reload)")
 
+	// Nothing is written once the restore is cancelled.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	logging.DebugStep(logger, "network staged install", "Apply staged network files to system paths (no reload)")
 	applied, err := applyNetworkFilesFromStage(logger, stageRoot)
 	if err != nil {
@@ -96,7 +100,14 @@ func maybeInstallNetworkConfigFromStage(
 		return true, nil
 	}
 
-	logger.Warning("%s", preflight.Summary())
+	// A cancel (Ctrl+C, SIGTERM) during the check ends it as a failure: the files are
+	// rolled back the same way, and the restore still aborts on the cancel.
+	interrupted := ctx.Err() != nil
+	if interrupted {
+		logger.Debug("Network preflight interrupted: %v (%s, error: %v)", ctx.Err(), preflight.Summary(), preflight.ExitError)
+	} else {
+		logger.Warning("%s", preflight.Summary())
+	}
 	if out := strings.TrimSpace(preflight.Output); out != "" {
 		logger.Debug("Network preflight output:\n%s", out)
 	}
@@ -111,6 +122,14 @@ func maybeInstallNetworkConfigFromStage(
 		return false, fmt.Errorf("network staged install preflight failed; rollback attempt failed: %w", rbErr)
 	}
 
+	if interrupted {
+		logger.Warning(
+			"Network restore interrupted before validation finished (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
+			preflight.CommandLine(),
+			rollbackPath,
+		)
+		return false, fmt.Errorf("network staged install interrupted; network files rolled back: %w", ctx.Err())
+	}
 	logger.Warning(
 		"Network restore aborted: staged configuration failed validation (%s). Rolled back /etc/network/*, /etc/hosts, /etc/hostname, /etc/resolv.conf to the pre-restore state (rollback=%s).",
 		preflight.CommandLine(),

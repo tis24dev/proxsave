@@ -682,6 +682,29 @@ func retentionSharedIdentity(location string, owned, adopted []*types.BackupMeta
 // retentionArchiveKey is the name an archive is matched by against this run's own:
 // its base name without the bundle suffix, because a destination may list the bundle
 // of the archive Store was handed ("<archive>.bundle.tar") or the archive itself.
+// withoutRetentionProtected drops from toDelete what retention never deletes,
+// whatever its tier: the archive this run stored (thisRunArchive) and any archive
+// dated after now. Both policies give their slots to the newest archives by date, so
+// archives dated in the future (a clock that was ahead on an earlier run, or is
+// behind now) filled them, and the fresh archive, or with the clock behind the whole
+// weekly, monthly and yearly history, was deleted in the same pass. Those stay until
+// the clock passes their date.
+func withoutRetentionProtected(logger *logging.Logger, location string, toDelete []*types.BackupMetadata, thisRunArchive string, now time.Time) []*types.BackupMetadata {
+	thisRun := retentionArchiveKey(thisRunArchive)
+	kept := make([]*types.BackupMetadata, 0, len(toDelete))
+	for _, b := range toDelete {
+		switch {
+		case thisRun != "" && retentionArchiveKey(b.BackupFile) == thisRun:
+			logger.Debug("%s: retention keeps %s: it is the archive of this run", location, filepath.Base(b.BackupFile))
+		case b.Timestamp.After(now):
+			logger.Debug("%s: retention keeps %s: dated %s, after the current time", location, filepath.Base(b.BackupFile), b.Timestamp.Format(time.RFC3339))
+		default:
+			kept = append(kept, b)
+		}
+	}
+	return kept
+}
+
 func retentionArchiveKey(file string) string {
 	file = strings.TrimSpace(file)
 	if file == "" {

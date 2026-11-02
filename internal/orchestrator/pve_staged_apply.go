@@ -592,12 +592,12 @@ func pveStorageMountGuardCandidatesFromSections(sections []proxmoxNotificationSe
 			StorageID:   storageID,
 			StorageType: storageType,
 		}
-		if storageType == "dir" {
-			for _, kv := range s.Entries {
-				if strings.EqualFold(strings.TrimSpace(kv.Key), "path") {
-					c.Path = filepath.Clean(strings.TrimSpace(kv.Value))
-					break
-				}
+		// Every type: a dir storage is its path, and a network storage is mounted there
+		// (/mnt/pve/<id> unless another path was given).
+		for _, kv := range s.Entries {
+			if strings.EqualFold(strings.TrimSpace(kv.Key), "path") {
+				c.Path = filepath.Clean(strings.TrimSpace(kv.Value))
+				break
 			}
 		}
 		out = append(out, c)
@@ -624,8 +624,14 @@ func pveStorageMountGuardItems(candidates []pveStorageMountGuardCandidate, mount
 
 		switch storageType {
 		case "nfs", "cifs", "cephfs", "glusterfs":
+			// PVE mounts the storage at its path; /mnt/pve/<id> only when the stanza has
+			// none. A path outside the mount roots is skipped where the guard is applied.
+			target := filepath.Join("/mnt/pve", storageID)
+			if path := filepath.Clean(strings.TrimSpace(c.Path)); path != "" && path != "." {
+				target = path
+			}
 			out = append(out, pveStorageMountGuardItem{
-				GuardTarget:   filepath.Join("/mnt/pve", storageID),
+				GuardTarget:   target,
 				StorageID:     storageID,
 				StorageType:   storageType,
 				IsNetwork:     true,

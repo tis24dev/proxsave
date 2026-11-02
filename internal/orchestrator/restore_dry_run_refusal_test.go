@@ -47,8 +47,11 @@ func setupRecoveryRestoreFixture(t *testing.T) (*FakeFS, *FakeCommandRunner, *fa
 	restoreSystem = fakeSystemDetector{systemType: SystemTypePVE}
 
 	cmd := &FakeCommandRunner{
-		Outputs: map[string][]byte{"umount /etc/pve": []byte("not mounted\n")},
-		Errors:  map[string]error{"umount /etc/pve": errors.New("not mounted")},
+		Outputs: map[string][]byte{
+			"umount /etc/pve":         []byte("not mounted\n"),
+			pveClusterDBCheckpointCmd: []byte("0|0|0\n"),
+		},
+		Errors: map[string]error{"umount /etc/pve": errors.New("not mounted")},
 	}
 	for _, svc := range []string{"pve-ha-lrm", "pve-ha-crm", "pve-cluster", "pvedaemon", "pveproxy", "pvestatd"} {
 		cmd.Outputs["systemctl stop --no-block "+svc] = []byte("ok")

@@ -149,10 +149,11 @@ The exact wire behavior, in case you are reading the monitor's event log:
   **supervised** run that failed or hung. The daemon keeps the last 8 KiB of the run's
   output for this, and the ping body is hard-capped at 100 kB regardless. A standalone
   run (see below) hands off only its exit code, so its finish ping carries no log tail.
-- The updates check only pings `/0` on a definite up-to-date answer. An inconclusive
-  check, for instance GitHub unreachable or rate limited, re-affirms the previous
-  verdict instead of flapping a real `/1` back to green, and pings nothing at all when
-  there is no previous verdict to re-affirm.
+- An inconclusive updates check, for instance GitHub unreachable or rate limited,
+  does not flap a real `/1` back to green. It compares the last release it saw with
+  the version now running: `/1` while that release is newer, `/0` once it is running,
+  as right after an upgrade. It pings nothing at all when there is no previous
+  verdict to compare.
 - The per-channel checks are driven by what the backup actually attempted, recorded per
   run, and not by cached configuration. A channel you turn off does not leave a stale
   down check behind. In centralized mode there is one check per enabled channel among

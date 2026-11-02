@@ -70,7 +70,10 @@ import re
 import sys
 
 marker = sys.argv[1]
-body = os.environ.get("PR_BODY", "")
+# GitHub stores a body edited through the API or the web form with CRLF line endings, and
+# "$" does not match before "\r": without this the marker of an edited release PR is not
+# found and its merge publishes nothing (PR #343, v0.45.0).
+body = os.environ.get("PR_BODY", "").replace("\r\n", "\n").replace("\r", "\n")
 pattern = rf"^<!-- {re.escape(marker)}: ([^<\n]+) -->$"
 match = re.search(pattern, body, re.MULTILINE)
 if not match:

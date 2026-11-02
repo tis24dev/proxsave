@@ -5,7 +5,7 @@ IMPORTANT: Secondary path must be a filesystem-mounted directory (e.g., /mnt/nas
 Network shares must be mounted BEFORE running this backup tool.
 For direct network access without mounting, use cloud storage (rclone) instead.
 (You can change these settings later in backup.env)
-Enable secondary backup path? [y/N]: Secondary backup path (SECONDARY_PATH): Secondary log path (SECONDARY_LOG_PATH, optional - press Enter to skip): 
+Enable secondary backup path? [y/N]: Secondary backup path (SECONDARY_PATH): Secondary log path (SECONDARY_LOG_PATH): 
 --- Cloud storage (rclone) ---
 Remember to configure rclone manually before enabling cloud backups.
 Enable cloud backups? [y/N]: Rclone remote for backups (e.g. myremote:pbs-backups): Rclone remote for logs (e.g. myremote:/logs): [/proxsave/log] 

@@ -21,6 +21,9 @@ type pveStorageEntry struct {
 type pbsDatastoreEntry struct {
 	Name string
 	Path string
+	// BackingDevice is the filesystem UUID of a removable datastore (PBS 3.3+): its
+	// path is relative and PBS mounts the device at /mnt/datastore/<name>.
+	BackingDevice string
 }
 
 func loadPVEStorageEntries(path string, logger *logging.Logger) (entries []pveStorageEntry, err error) {
@@ -105,21 +108,34 @@ func parsePBSDatastoreEntries(reader io.Reader) ([]pbsDatastoreEntry, error) {
 	var entries []pbsDatastoreEntry
 	var current pbsDatastoreEntry
 
+	// An entry closes at the next header or at the end: PBS writes backing-device
+	// before path (measured on PBS 4.2).
+	flush := func() {
+		if current.Name != "" && current.Path != "" {
+			entries = append(entries, current)
+		}
+		current = pbsDatastoreEntry{}
+	}
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if isIgnoredConfigLine(line) {
 			continue
 		}
 		if entry, ok := parsePBSDatastoreHeader(line); ok {
+			flush()
 			current = entry
 			continue
 		}
-		if path, ok := parseConfigPath(line); ok && current.Name != "" {
+		if current.Name == "" {
+			continue
+		}
+		if path, ok := parseConfigPath(line); ok {
 			current.Path = path
-			entries = append(entries, current)
-			current = pbsDatastoreEntry{}
+		} else if device, ok := strings.CutPrefix(line, "backing-device "); ok {
+			current.BackingDevice = strings.TrimSpace(device)
 		}
 	}
+	flush()
 
 	return entries, scanner.Err()
 }

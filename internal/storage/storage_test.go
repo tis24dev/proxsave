@@ -316,8 +316,8 @@ func TestLocalStorageApplyRetentionWrapsListError(t *testing.T) {
 	t.Parallel()
 
 	base := t.TempDir()
-	badPath := filepath.Join(base, "[invalid")
-	if err := os.MkdirAll(badPath, 0o700); err != nil {
+	badPath := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(badPath, []byte("x"), 0o600); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 

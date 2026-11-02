@@ -4,6 +4,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -172,7 +174,79 @@ func (w *restoreUIWorkflowRun) preparePVEClusterRestore() (func(), error) {
 	if err := unmountEtcPVE(w.ctx, w.logger); err != nil {
 		w.logger.Warning("Could not unmount /etc/pve: %v", err)
 	}
+	if err := checkpointPVEClusterDB(w.ctx, w.logger); err != nil {
+		// Nothing was restored yet: the services come back on the database as it is.
+		w.restartStoppedPVEClusterServices()
+		return nil, err
+	}
+	if err := removePVEClusterDBSidecars(w.logger); err != nil {
+		// Still nothing restored: config.db is the checkpointed one.
+		w.restartStoppedPVEClusterServices()
+		return nil, err
+	}
 	return w.restartPVEClusterServicesCleanup(), nil
+}
+
+// pveClusterDB is the cluster database pmxcfs keeps in WAL mode.
+const pveClusterDB = "/var/lib/pve-cluster/config.db"
+
+// checkpointPVEClusterDB folds the WAL into config.db once pve-cluster is stopped.
+// pmxcfs does not close the database when its stop times out (measured on pve-test:
+// systemd SIGKILLs it), so its last commits live only in config.db-wal: removing the
+// WAL lost them whenever the restore ended before writing the archive's config.db
+// (cancelled, archive unreadable, no config.db in it). TRUNCATE leaves the WAL at 0
+// bytes, which SQLite ignores, so one that cannot be removed afterwards cannot overlay
+// the restored database either. sqlite3 is a dependency of pve-cluster. An absent
+// config.db has nothing to fold.
+func checkpointPVEClusterDB(ctx context.Context, logger *logging.Logger) error {
+	if _, err := restoreFS.Stat(pveClusterDB); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logger.Debug("Cluster database restore: %s absent, no checkpoint", pveClusterDB)
+			return nil
+		}
+		return fmt.Errorf("failed to checkpoint the cluster database (%s): %w", pveClusterDB, err)
+	}
+	output, err := restoreCmd.Run(ctx, "sqlite3", pveClusterDB, "PRAGMA wal_checkpoint(TRUNCATE);")
+	result := strings.TrimSpace(string(output))
+	logger.Debug("Cluster database restore: sqlite3 wal_checkpoint(TRUNCATE) on %s: output=%q err=%v", pveClusterDB, result, err)
+	if err != nil {
+		if result == "" {
+			return fmt.Errorf("failed to checkpoint the cluster database (%s): %w", pveClusterDB, err)
+		}
+		return fmt.Errorf("failed to checkpoint the cluster database (%s): %s", pveClusterDB, result)
+	}
+	// The pragma prints "busy|log|checkpointed"; busy is 0 only when the checkpoint
+	// completed.
+	if busy, _, _ := strings.Cut(result, "|"); busy != "0" {
+		return fmt.Errorf("failed to checkpoint the cluster database (%s): %s", pveClusterDB, result)
+	}
+	return nil
+}
+
+// pveClusterDBSidecars are the SQLite WAL files of the cluster database. pmxcfs runs
+// config.db in WAL mode; a WAL left by a pmxcfs that did not close the database is
+// replayed by SQLite onto whatever config.db sits beside it at the next open, so it
+// would overlay pages of the old database on the one the restore writes. The archive
+// never holds them (the collector ships a .backup snapshot), and the safety backup
+// taken before keeps the live ones.
+var pveClusterDBSidecars = []string{"/var/lib/pve-cluster/config.db-wal", "/var/lib/pve-cluster/config.db-shm"}
+
+// removePVEClusterDBSidecars removes them once pve-cluster is stopped and the WAL is
+// folded into config.db (checkpointPVEClusterDB), before the archive's config.db is
+// written. One that is there and cannot be removed stops the restore: left beside the
+// archive's config.db, it is opened with it.
+func removePVEClusterDBSidecars(logger *logging.Logger) error {
+	for _, path := range pveClusterDBSidecars {
+		err := restoreFS.Remove(path)
+		switch {
+		case err == nil:
+			logger.Debug("Cluster database restore: removed %s, the old database's WAL file", path)
+		case !errors.Is(err, os.ErrNotExist):
+			logger.Debug("Cluster database restore: cannot remove %s: %v", path, err)
+			return fmt.Errorf("failed to remove the old cluster database file (%s): %w", path, err)
+		}
+	}
+	return nil
 }
 
 // restartPVEClusterServicesCleanup is the deferred restart. It only does work when
@@ -229,21 +303,37 @@ func (w *restoreUIWorkflowRun) confirmContinueWithPBSServicesRunning(stopErr err
 	return nil, nil
 }
 
+// restartPBSServicesCleanup is the deferred restart. It only does work when the run
+// ends before restartStoppedPBSServices ran ahead of the verdict, i.e. on an error or
+// an abort while the services were down.
 func (w *restoreUIWorkflowRun) restartPBSServicesCleanup() func() {
-	return func() {
-		restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
-		defer cancel()
-		if err := startPBSServices(restartCtx, w.logger); err != nil {
-			w.logger.Warning("Failed to restart PBS services after restore: %v", err)
-			return
+	return w.restartStoppedPBSServices
+}
+
+// restartStoppedPBSServices starts, once, the PBS services preparePBSServices
+// stopped, then verifies and repairs the PBS notifications. The run calls it before
+// the verdict, so what it reports is counted there and the closing advice says which
+// units it left down.
+func (w *restoreUIWorkflowRun) restartStoppedPBSServices() {
+	if !w.pbsServicesStopped || w.pbsServicesRestarted {
+		return
+	}
+	w.pbsServicesRestarted = true
+	restartCtx, cancel := context.WithTimeout(context.Background(), 2*serviceStartTimeout+2*serviceVerifyTimeout+10*time.Second)
+	defer cancel()
+	if err := startPBSServices(restartCtx, w.logger); err != nil {
+		w.logger.Warning("Failed to restart PBS services after restore: %v", err)
+		if startErr, ok := errors.AsType[*pbsServicesStartError](err); ok {
+			w.pbsServicesNotRunning = startErr
 		}
-		// Also reached on an abort during staging: the restart stays, the repair from
-		// a partial stage does not.
-		if w.skipForIncompleteStage("PBS notifications verification/repair") {
-			return
-		}
-		if err := verifyAndRepairPBSNotificationsFunc(restartCtx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
-			w.logger.Warning("PBS notifications verification/repair: %v", err)
-		}
+		return
+	}
+	// Also reached on an abort during staging: the restart stays, the repair from a
+	// partial stage does not.
+	if w.skipForIncompleteStage("PBS notifications verification/repair") {
+		return
+	}
+	if err := verifyAndRepairPBSNotificationsFunc(restartCtx, w.logger, w.plan, w.stageRoot, w.cfg.DryRun); err != nil {
+		w.logger.Warning("PBS notifications verification/repair: %v", err)
 	}
 }

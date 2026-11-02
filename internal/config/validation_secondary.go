@@ -13,6 +13,13 @@ func ValidateRequiredSecondaryPath(path string) error {
 	return validateSecondaryLocalPath(path, "SECONDARY_PATH", true)
 }
 
+// ValidateRequiredSecondaryLogPath validates SECONDARY_LOG_PATH where the install
+// wizards ask for it: with the secondary enabled, an empty one made every run warn
+// and exit 1, although the wizards called it optional.
+func ValidateRequiredSecondaryLogPath(path string) error {
+	return validateSecondaryLocalPath(path, "SECONDARY_LOG_PATH", true)
+}
+
 // ValidateOptionalSecondaryLogPath validates SECONDARY_LOG_PATH when provided.
 func ValidateOptionalSecondaryLogPath(path string) error {
 	return validateSecondaryLocalPath(path, "SECONDARY_LOG_PATH", false)

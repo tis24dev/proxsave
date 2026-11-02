@@ -862,6 +862,8 @@ func TestCloudStorageStorePrimaryFailure(t *testing.T) {
 		t: t,
 		queue: []queuedResponse{
 			{name: "rclone", args: []string{"copyto", backupFile, "remote:pbs1-backup.tar.zst"}, err: errors.New("boom")},
+			// What the failed copy left at the final name is deleted.
+			{name: "rclone", args: []string{"deletefile", "remote:pbs1-backup.tar.zst"}},
 		},
 	}
 	cs.execCommand = queue.exec
@@ -988,14 +990,14 @@ func TestCloudStorageSkipsCloudLogsWhenPathMissing(t *testing.T) {
 	}
 	cs.execCommand = queue.exec
 
-	if got := cs.countLogFiles(context.Background()); got != -1 {
+	if got := cs.countLogFiles(context.Background(), nil); got != -1 {
 		t.Fatalf("countLogFiles() = %d; want -1", got)
 	}
 	if len(queue.calls) != 1 {
 		t.Fatalf("expected 1 rclone call, got %d", len(queue.calls))
 	}
 
-	if got := cs.countLogFiles(context.Background()); got != -1 {
+	if got := cs.countLogFiles(context.Background(), nil); got != -1 {
 		t.Fatalf("countLogFiles() second call = %d; want -1", got)
 	}
 	if len(queue.calls) != 1 {
@@ -1031,7 +1033,7 @@ func TestCloudStorageCountLogFiles_NormalizesPathOnlyCloudLogPath(t *testing.T) 
 	cs.hostname = "host" // the log in the listing is this host's
 	cs.execCommand = queue.exec
 
-	if got := cs.countLogFiles(context.Background()); got != 1 {
+	if got := cs.countLogFiles(context.Background(), nil); got != 1 {
 		t.Fatalf("countLogFiles() = %d; want 1", got)
 	}
 }
@@ -1057,14 +1059,14 @@ func TestCloudStorageSkipsCloudLogsWhenPathOnlyLogDirMissing(t *testing.T) {
 	}
 	cs.execCommand = queue.exec
 
-	if got := cs.countLogFiles(context.Background()); got != -1 {
+	if got := cs.countLogFiles(context.Background(), nil); got != -1 {
 		t.Fatalf("countLogFiles() = %d; want -1", got)
 	}
 	if len(queue.calls) != 1 {
 		t.Fatalf("expected 1 rclone call, got %d", len(queue.calls))
 	}
 
-	if got := cs.countLogFiles(context.Background()); got != -1 {
+	if got := cs.countLogFiles(context.Background(), nil); got != -1 {
 		t.Fatalf("countLogFiles() second call = %d; want -1", got)
 	}
 	if len(queue.calls) != 1 {
@@ -1757,7 +1759,7 @@ func TestCloudCountLogFilesWithoutALogFolderIsNoCount(t *testing.T) {
 			cs := newCloudStorageForTest(tc.cfg)
 			queue := &commandQueue{t: t}
 			cs.execCommand = queue.exec
-			if got := cs.countLogFiles(context.Background()); got != -1 {
+			if got := cs.countLogFiles(context.Background(), nil); got != -1 {
 				t.Fatalf("countLogFiles() = %d; want -1 (no count)", got)
 			}
 			if len(queue.calls) != 0 {
@@ -1787,7 +1789,7 @@ func TestCloudCountLogFilesCountsThisHostsRunLogsOnly(t *testing.T) {
 		}},
 	}
 	cs.execCommand = queue.exec
-	if got := cs.countLogFiles(context.Background()); got != 2 {
+	if got := cs.countLogFiles(context.Background(), nil); got != 2 {
 		t.Fatalf("countLogFiles() = %d; want 2", got)
 	}
 }
@@ -1809,7 +1811,7 @@ func TestCloudDeleteBatchedStopsOnACancelBeforeTheDelete(t *testing.T) {
 		{BackupFile: "node-backup-20240101-000000.tar.zst", Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
 		{BackupFile: "node-backup-20240102-000000.tar.zst", Timestamp: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
 	}
-	deleted, err := cs.deleteBatched(ctx, backups, 3)
+	deleted, err := cs.deleteBatched(ctx, backups, backups)
 	if deleted != 0 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("deleteBatched = %d, %v; want 0, context.Canceled", deleted, err)
 	}

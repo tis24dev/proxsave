@@ -94,12 +94,12 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	}
 	secondaryLog := &components.FormField{
 		Label:       "Secondary log path",
-		Description: "SECONDARY_LOG_PATH, optional: leave empty to skip.",
+		Description: "SECONDARY_LOG_PATH: filesystem path for the logs of the redundant copies.",
 		Kind:        components.FieldText,
 		Text:        prefill.SecondaryLogPath,
 		Active:      func() bool { return secondary.Bool },
 		Validate: func(v string) error {
-			return config.ValidateOptionalSecondaryLogPath(strings.TrimSpace(v))
+			return config.ValidateRequiredSecondaryLogPath(strings.TrimSpace(v))
 		},
 	}
 	cloud := &components.FormField{

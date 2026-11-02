@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -34,6 +35,33 @@ func isBackupSidecar(path string) bool {
 	return strings.HasSuffix(path, ".sha256") ||
 		strings.HasSuffix(path, ".metadata") ||
 		strings.HasSuffix(path, ".manifest.json")
+}
+
+// globBackupNames lists the entries of dir whose name matches namePattern, as
+// filepath.Glob(filepath.Join(dir, namePattern)) did, with dir taken literally: a
+// BACKUP_PATH or SECONDARY_PATH holding '[', '*', '?' or a backslash was read as a pattern,
+// so the listing came back empty (or failed on an unbalanced '[') on every run and
+// retention never deleted anything. An absent dir lists nothing; any other error
+// reading it is returned (Glob ignored it, so an unreadable folder looked empty).
+func globBackupNames(dir, namePattern string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var matches []string
+	for _, entry := range entries {
+		ok, err := filepath.Match(namePattern, entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			matches = append(matches, filepath.Join(dir, entry.Name()))
+		}
+	}
+	return matches, nil
 }
 
 // isBackupTempArtifact reports whether a candidate path is an in-flight temp or

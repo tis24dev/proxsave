@@ -357,7 +357,15 @@ func (w *restoreUIWorkflowRun) confirmRestorePlan() error {
 	}
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, w.plan.NormalCategories...)
 	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, w.plan.StagedCategories...)
-	restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, w.plan.ExportCategories...)
+	// Every export category goes to the export directory, including those moved there
+	// for this run (pve_cluster in SAFE mode, another product's categories) whose
+	// ExportOnly is false: flagged on copies, so the plan does not list their paths as
+	// restored over the live system. The plan's own categories keep the flag as it is,
+	// since applyClusterSafety moves pve_cluster back when SAFE is turned off.
+	for _, cat := range w.plan.ExportCategories {
+		cat.ExportOnly = true
+		restoreConfig.SelectedCategories = append(restoreConfig.SelectedCategories, cat)
+	}
 
 	if err := w.ui.ShowRestorePlan(w.ctx, restoreConfig); err != nil {
 		return err

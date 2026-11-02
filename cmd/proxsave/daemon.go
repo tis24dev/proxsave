@@ -1995,7 +1995,8 @@ func (d *daemon) updateTick(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	info := daemonEvaluateUpdate(ctx, quietUpdateLogger(), version.String())
+	current := version.String()
+	info := daemonEvaluateUpdate(ctx, quietUpdateLogger(), current)
 	available := info != nil && info.NewVersion
 	latest := ""
 	if info != nil {
@@ -2016,6 +2017,13 @@ func (d *daemon) updateTick(ctx context.Context) {
 		}
 		available = prev.Update.Available
 		latest = prev.Update.Latest
+		// The record does not say which version it was checked against: after an upgrade
+		// (or a downgrade) the previous binary's verdict is wrong for this one, so the
+		// last known latest is compared with the running version again.
+		if latest != "" && strings.TrimSpace(current) != "" {
+			available = isNewerVersion(current, latest)
+		}
+		logging.Debug("daemon: update check inconclusive; last known latest=%s, running %s: available=%t (recorded %t)", orUnknownVersion(latest), current, available, prev.Update.Available)
 	}
 
 	// Throttle: warn the first tick an update becomes available, stay quiet while it

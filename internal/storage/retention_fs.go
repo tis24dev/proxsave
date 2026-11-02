@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -37,9 +38,12 @@ type fsRetention struct {
 	// hostname and aliases are the names this host answers to, for the orphan-log pass.
 	hostname string
 	aliases  []string
-	tally    *retentionTally
-	lastRet  *RetentionSummary
-	text     fsRetentionText
+	// thisRun is the base name of the archive this run stored here, which retention
+	// never deletes (withoutRetentionProtected).
+	thisRun string
+	tally   *retentionTally
+	lastRet *RetentionSummary
+	text    fsRetentionText
 }
 
 // fsRetentionText is how one destination words its retention lines, and the names of
@@ -121,6 +125,10 @@ var secondaryRetentionText = fsRetentionText{
 	},
 }
 
+// retentionRemove removes one file of a backup the retention deletes; only tests
+// replace it.
+var retentionRemove = safefs.Remove
+
 // deleteBackup removes a backup file and its associated files.
 func (r fsRetention) deleteBackup(ctx context.Context, backupFile string) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -141,7 +149,10 @@ func (r fsRetention) deleteBackup(ctx context.Context, backupFile string) (bool,
 	// whose data remains on disk as deleted (PS-BH-001), and that backup keeps the
 	// .sha256 and .manifest.json the listing verifies it by, so it stays eligible
 	// and the next pass retries it instead of skipping it for "no manifest". A
-	// sidecar-only failure still counts as deleted (the data IS gone).
+	// data remove that timed out is the exception: its unlink can still complete
+	// after safefs stopped waiting, and nothing lists or removes a sidecar whose
+	// archive is gone, so its sidecars are removed too. A sidecar-only failure
+	// still counts as deleted (the data IS gone).
 	var dataFiles, sidecars []string
 	for _, f := range filesToDelete {
 		if f == "" {
@@ -155,9 +166,10 @@ func (r fsRetention) deleteBackup(ctx context.Context, backupFile string) (bool,
 	}
 	timeout := fsIoTimeout(r.config)
 	var failedFiles []string
+	timedOut := false
 	remove := func(f string) bool {
 		r.logger.Debug(r.text.removing, f)
-		err := safefs.Remove(ctx, f, timeout)
+		err := retentionRemove(ctx, f, timeout)
 		if err == nil {
 			return true
 		}
@@ -168,17 +180,25 @@ func (r fsRetention) deleteBackup(ctx context.Context, backupFile string) (bool,
 		r.text.removeFailed(r.logger, f, err)
 		logDeleteFailure(r.logger, f, safefs.SystemErrorText(err))
 		failedFiles = append(failedFiles, f)
+		timedOut = errors.Is(err, safefs.ErrTimeout)
 		return false
 	}
-	dataFailed := false
+	dataFailed, dataRefused := false, false
 	for _, f := range dataFiles {
 		if !remove(f) {
 			dataFailed = true
+			dataRefused = dataRefused || !timedOut
 		}
 	}
-	if dataFailed {
+	switch {
+	case dataRefused:
 		r.logger.Debug("%s: keeping the sidecars of %s, the backup was not deleted", r.text.storage, filepath.Base(backupFile))
-	} else {
+	case dataFailed:
+		r.logger.Debug("%s: removing the sidecars of %s, its data remove timed out and may still complete", r.text.storage, filepath.Base(backupFile))
+		for _, f := range sidecars {
+			remove(f)
+		}
+	default:
 		for _, f := range sidecars {
 			remove(f)
 		}
@@ -245,7 +265,7 @@ func (r fsRetention) deleteAssociatedLog(ctx context.Context, backupFile string)
 	return true
 }
 
-func (r fsRetention) countLogFiles(ctx context.Context) int {
+func (r fsRetention) countLogFiles(ctx context.Context, archives []*types.BackupMetadata) int {
 	logPath := ""
 	if r.config != nil {
 		logPath = strings.TrimSpace(r.logPath)
@@ -262,7 +282,7 @@ func (r fsRetention) countLogFiles(ctx context.Context) int {
 		r.logger.Debug("%s: failed to count log files: %v", r.text.logs, err)
 		return -1
 	}
-	return countOwnRunLogs(names, r.hostname, r.aliases)
+	return countOwnRunLogs(names, r.hostname, r.aliases, archives)
 }
 
 // pruneOrphanLogs runs the orphan-log pass (log_orphans.go) on the destination's log
@@ -304,7 +324,7 @@ func (r fsRetention) applyGFS(ctx context.Context, backups []*types.BackupMetada
 	r.logger.Debug("Applying GFS retention policy (daily=%d, weekly=%d, monthly=%d, yearly=%d)",
 		config.Daily, config.Weekly, config.Monthly, config.Yearly)
 
-	initialLogs := r.countLogFiles(ctx)
+	initialLogs := r.countLogFiles(ctx, backups)
 
 	// Classify backups according to GFS scheme
 	classification := ClassifyBackupsGFS(backups, config)
@@ -367,7 +387,7 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 	r.tally.planned = toDelete
 
 	// Delete oldest backups (already sorted newest first)
-	initialLogs := r.countLogFiles(ctx)
+	initialLogs := r.countLogFiles(ctx, backups)
 	oldest := make([]*types.BackupMetadata, 0, toDelete)
 	for i := totalBackups - 1; i >= maxBackups; i-- {
 		oldest = append(oldest, backups[i])
@@ -381,6 +401,8 @@ func (r fsRetention) applySimple(ctx context.Context, backups []*types.BackupMet
 // before the policy ran (-1: unknown). A cancelled context stops it before the next
 // deletion, without a summary.
 func (r fsRetention) deleteBackups(ctx context.Context, toDelete []*types.BackupMetadata, total int, initialLogs int) (int, error) {
+	toDelete = withoutRetentionProtected(r.logger, r.text.storage, toDelete, r.thisRun, time.Now())
+	r.tally.planned = len(toDelete)
 	logsDeleted := 0
 	deleted := 0
 	stopped := func(err error) (int, error) {

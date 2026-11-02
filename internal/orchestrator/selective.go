@@ -213,24 +213,20 @@ func ShowCategorySelectionMenuWithReader(ctx context.Context, reader *bufio.Read
 			// Deselect all
 			selected = make(map[int]bool)
 		case "c":
-			// Continue - check if at least one category is selected
-			selectedCount := 0
-			for range selected {
-				selectedCount++
-			}
-
-			if selectedCount == 0 {
-				fmt.Println()
-				fmt.Println("⚠ Warning: No categories selected. Please select at least one category.")
-				continue
-			}
-
-			// Build list of selected categories
+			// Continue with the categories selected now. A category turned off stays in
+			// the map as false, so the map's size is not the count: counted that way, an
+			// empty selection went through and the restore ran with zero categories. The
+			// minimum and its text are the TUI's (WithMinSelected(1)).
 			var selectedCategories []Category
 			for i, cat := range relevantCategories {
 				if selected[i] {
 					selectedCategories = append(selectedCategories, cat)
 				}
+			}
+			if len(selectedCategories) == 0 {
+				fmt.Println()
+				fmt.Println("Select at least 1 item(s); 0 selected")
+				continue
 			}
 
 			return selectedCategories, nil
