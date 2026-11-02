@@ -488,6 +488,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 	host := resolveRetentionHostname()
 	serverID := types.NormalizeServerID(cfg.ServerID)
 	logRetentionServerIdentity(logger, "Cloud storage", serverID)
+	registerRcloneFlagSecrets(logger, cfg.RcloneFlags)
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
@@ -509,6 +510,26 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		waitForRetry:   currentCloudRetryWait(),
 		sleep:          time.Sleep,
 	}, nil
+}
+
+// registerRcloneFlagSecrets masks the values of RCLONE_FLAGS in every later log line:
+// a flag there may carry a backend credential, and the rclone argv is logged at DEBUG,
+// and echoed by rclone itself into its stderr (so into errors) when the flags hold -vv.
+// A value is the text after '=' or a token that is not a flag; the logger skips values
+// under 6 characters, so the shipped flags (--checkers=4, --stats=0, ...) stay readable.
+func registerRcloneFlagSecrets(logger *logging.Logger, flags []string) {
+	if logger == nil {
+		return
+	}
+	for _, tok := range flags {
+		if strings.HasPrefix(tok, "-") {
+			if _, value, ok := strings.Cut(tok, "="); ok {
+				logger.RegisterSecret(value)
+			}
+			continue
+		}
+		logger.RegisterSecret(tok)
+	}
 }
 
 // Name returns the storage backend name
