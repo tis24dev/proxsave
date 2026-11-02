@@ -91,3 +91,52 @@ func TestWebhookFailureLinesNameTheStatusNotTheAnswer(t *testing.T) {
 		}
 	}
 }
+
+// The DEBUG excerpt masked the endpoint URL whole, but an error page echoes the
+// requested path alone, and a webhook URL often carries its token in a path segment;
+// query values and header values can be credentials too.
+func TestWebhookAnswerExcerptMasksTheEndpointCredentials(t *testing.T) {
+	const pathToken = "TokenSegmentAbcdef9"
+	const queryValue = "QueryValue12345"
+	const headerValue = "HeaderValue98765"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("The requested URL " + r.URL.Path + "?" + r.URL.RawQuery +
+			" was not found (X-Key: " + r.Header.Get("X-Key") + ")"))
+	}))
+	defer server.Close()
+
+	cfg := config.WebhookConfig{
+		Enabled:       true,
+		DefaultFormat: "generic",
+		Timeout:       30,
+		RetryDelay:    1,
+		Endpoints: []config.WebhookEndpoint{{
+			Name:    "ops",
+			URL:     server.URL + "/api/webhooks/123456/" + pathToken + "?key=" + queryValue,
+			Format:  "generic",
+			Method:  "POST",
+			Headers: map[string]string{"X-Key": headerValue},
+			Auth:    config.WebhookAuth{Type: "none"},
+		}},
+	}
+	var out bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&out)
+	notifier, err := NewWebhookNotifier(&cfg, logger)
+	if err != nil {
+		t.Fatalf("NewWebhookNotifier: %v", err)
+	}
+	if err := notifier.sendToEndpoint(context.Background(), cfg.Endpoints[0], createTestNotificationData()); err == nil {
+		t.Fatalf("nil error, want the 404")
+	}
+	log := out.String()
+	if !strings.Contains(log, "Response body (") {
+		t.Fatalf("no DEBUG line with the answer; log:\n%s", log)
+	}
+	for _, secret := range []string{pathToken, queryValue, headerValue} {
+		if strings.Contains(log, secret) {
+			t.Fatalf("endpoint credential %q in the log:\n%s", secret, log)
+		}
+	}
+}

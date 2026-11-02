@@ -23,11 +23,24 @@ import (
 const webhookMaxResponseBytes = 8 << 10
 
 // webhookBodyExcerpt is the endpoint's answer as the DEBUG line shows it: the endpoint's
-// own credentials masked first (a page can echo the URL, and the cut below could split
-// one so the logger would no longer recognise it), then printable characters only, on
-// one line, cut to 200.
+// own credentials masked first, then printable characters only, on one line, cut to
+// 200. Masked before the cut, which could split a credential so the logger would no
+// longer recognise it. Besides the auth values, the URL's path segments, query values
+// and header values are masked: a webhook URL often carries its token in the path, and
+// an error page can echo the requested path alone.
 func webhookBodyExcerpt(body []byte, endpoint config.WebhookEndpoint) string {
-	masked := logging.RedactSecrets(string(body), endpoint.URL, endpoint.Auth.Token, endpoint.Auth.Pass, endpoint.Auth.Secret)
+	secrets := []string{endpoint.URL, endpoint.Auth.Token, endpoint.Auth.Pass, endpoint.Auth.Secret}
+	if u, err := url.Parse(endpoint.URL); err == nil {
+		secrets = append(secrets, u.Path, u.RawQuery)
+		secrets = append(secrets, strings.Split(u.Path, "/")...)
+		for _, values := range u.Query() {
+			secrets = append(secrets, values...)
+		}
+	}
+	for _, value := range endpoint.Headers {
+		secrets = append(secrets, value)
+	}
+	masked := logging.RedactSecrets(string(body), secrets...)
 	return (&serverbot.Response{Body: []byte(masked)}).Snippet(200)
 }
 
