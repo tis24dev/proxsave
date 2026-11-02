@@ -544,6 +544,12 @@ func (s *installConfigSnapshot) restore(bootstrap *logging.BootstrapLogger) erro
 	}
 	root, err := os.OpenRoot(filepath.Dir(s.path))
 	if err != nil {
+		// No backup.env before the install and no directory now: the install never
+		// wrote the file, so there is nothing to put back.
+		if !s.existed && os.IsNotExist(err) {
+			debug("Install aborted: %s and its directory absent, as before the install", s.path)
+			return nil
+		}
 		debug("Install aborted: cannot open the directory of %s: %v", s.path, err)
 		return err
 	}

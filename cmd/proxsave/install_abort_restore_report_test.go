@@ -48,3 +48,19 @@ func TestAbortedInstallReportsARestoreThatFails(t *testing.T) {
 		t.Fatalf("missing the ERROR line %q; log:\n%s", line, out.String())
 	}
 }
+
+// An install aborted before the configuration directory exists has nothing to put
+// back: the restore found the directory missing and reported a failure (ERROR, exit 2).
+func TestAbortedInstallWithoutAConfigDirectoryRestoresNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "configs", "backup.env")
+	snap := takeInstallConfigSnapshot(path)
+	if snap == nil || snap.existed {
+		t.Fatalf("snapshot = %+v, want one that records backup.env as absent", snap)
+	}
+	if err := snap.restore(nil); err != nil {
+		t.Fatalf("restore: %v, want nil", err)
+	}
+	if code := finishAbortedInstall(snap, nil); code != types.ExitSuccess.Int() {
+		t.Fatalf("exit %d, want %d", code, types.ExitSuccess.Int())
+	}
+}
