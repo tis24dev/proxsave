@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -75,6 +76,8 @@ type CloudStorage struct {
 	parallelVerify bool
 	verifyChecksum bool
 	verifyDownload bool
+	// flagSecrets are the RCLONE_FLAGS values, masked in the log (rcloneFlagSecrets).
+	flagSecrets []string
 	// runCommand runs one rclone call (defaultRunCommand); execCommand, when set,
 	// replaces it with a test fake that answers on one stream, read as stdout.
 	runCommand   func(ctx context.Context, name string, args ...string) (rcloneOutput, error)
@@ -488,7 +491,12 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 	host := resolveRetentionHostname()
 	serverID := types.NormalizeServerID(cfg.ServerID)
 	logRetentionServerIdentity(logger, "Cloud storage", serverID)
-	registerRcloneFlagSecrets(logger, cfg.RcloneFlags)
+	flagSecrets := rcloneFlagSecrets(cfg.RcloneFlags)
+	if logger != nil {
+		for _, secret := range flagSecrets {
+			logger.RegisterSecret(secret)
+		}
+	}
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
@@ -505,6 +513,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		parallelVerify: cfg.CloudParallelVerify,
 		verifyChecksum: cfg.CloudVerifyChecksum,
 		verifyDownload: cfg.CloudVerifyDownload,
+		flagSecrets:    flagSecrets,
 		runCommand:     defaultRunCommand,
 		lookPath:       exec.LookPath,
 		waitForRetry:   currentCloudRetryWait(),
@@ -512,24 +521,30 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 	}, nil
 }
 
-// registerRcloneFlagSecrets masks the values of RCLONE_FLAGS in every later log line:
-// a flag there may carry a backend credential, and the rclone argv is logged at DEBUG,
+// rcloneFlagSecrets lists what NewCloudStorage masks in every later log line: a flag in
+// RCLONE_FLAGS may carry a backend credential, and the rclone argv is logged at DEBUG,
 // and echoed by rclone itself into its stderr (so into errors) when the flags hold -vv.
-// A value is the text after '=' or a token that is not a flag; the logger skips values
-// under 6 characters, so the shipped flags (--checkers=4, --stats=0, ...) stay readable.
-func registerRcloneFlagSecrets(logger *logging.Logger, flags []string) {
-	if logger == nil {
-		return
-	}
+// A value is the text after '=' in a --flag=value token, or any token that is not a
+// --flag, so "--webdav-pass -x..." is covered too. rclone echoes its argv with %q, so a
+// value holding a quote, a backslash or a control byte is listed in that form as well.
+// The logger skips values under 6 characters, so the shipped flags (--checkers=4,
+// --stats=0, ...) stay readable.
+func rcloneFlagSecrets(flags []string) []string {
+	var secrets []string
 	for _, tok := range flags {
-		if strings.HasPrefix(tok, "-") {
-			if _, value, ok := strings.Cut(tok, "="); ok {
-				logger.RegisterSecret(value)
+		value := tok
+		if strings.HasPrefix(tok, "--") {
+			var ok bool
+			if _, value, ok = strings.Cut(tok, "="); !ok {
+				continue
 			}
-			continue
 		}
-		logger.RegisterSecret(tok)
+		secrets = append(secrets, value)
+		if quoted := strconv.Quote(value); quoted[1:len(quoted)-1] != value {
+			secrets = append(secrets, quoted[1:len(quoted)-1])
+		}
 	}
+	return secrets
 }
 
 // Name returns the storage backend name
@@ -1691,7 +1706,9 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("rclone operation timeout")
 		}
-		transcript := output.transcript()
+		// Masked before the cut: the kept tail can start inside an RCLONE_FLAGS value
+		// echoed by rclone -vv, and the logger would not recognise the rest of it.
+		transcript := []byte(logging.RedactSecrets(string(output.transcript()), c.flagSecrets...))
 		return &rcloneCommandError{
 			msg:   fmt.Sprintf("rclone copy failed: %v: %s", err, strings.TrimSpace(string(truncateRcloneOutput(transcript)))),
 			short: rcloneCause(string(transcript), err),

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,6 +83,54 @@ func TestCloudStorageMasksRcloneFlagValuesInTheLog(t *testing.T) {
 	} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("log lacks %q; log:\n%s", want, log)
+		}
+	}
+}
+
+// Three forms the first masking missed: a separate value that starts with '-', a value
+// that rclone -vv echoes escaped (it prints its argv with %q), and a value cut in two by
+// the 4 KiB tail of a failed copy's output, whose rest the logger no longer recognises.
+func TestCloudStorageMasksRcloneFlagValuesInEveryForm(t *testing.T) {
+	const dashValue = "-Dash3dPassw0rdValue"
+	const quoteValue = `Qu0te"Back\slash9`
+	const passValue = "Sep4r4teT0kenPassw0rdXYZ"
+	cfg := &config.Config{
+		CloudEnabled:            true,
+		CloudRemote:             "s3remote:bucket",
+		CloudRemotePath:         "proxsave",
+		RcloneTimeoutConnection: 30,
+		RcloneFlags:             []string{"--ftp-pass", dashValue, "--sftp-pass=" + quoteValue, "--webdav-pass", passValue},
+	}
+
+	var out bytes.Buffer
+	logger := logging.New(types.LogLevelDebug, false)
+	logger.SetOutput(&out)
+	cs, err := NewCloudStorage(cfg, logger, "pve1")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+
+	echo := `DEBUG : rclone: Version "v1.60.1-DEV" starting with parameters ["rclone" "copyto" "--ftp-pass" "` + dashValue +
+		`" ` + strconv.Quote("--sftp-pass="+quoteValue) + ` "--webdav-pass" "` + passValue + `"]` + "\n"
+	logger.Warning("Cloud Storage: upload failed: %s", echo)
+
+	// The kept tail of the copy's output starts 6 characters into passValue.
+	cut := strings.Index(echo, passValue) + 6
+	transcript := echo + strings.Repeat("x", cut+4096-len(echo))
+	cs.lookPath = func(string) (string, error) { return "/usr/bin/rclone", nil }
+	cs.runCommand = func(_ context.Context, _ string, args ...string) (rcloneOutput, error) {
+		return rcloneOutput{stderr: []byte(transcript)}, errors.New("exit status 1")
+	}
+	copyErr := cs.rcloneCopy(context.Background(), "/var/lib/proxsave/backup/a.tar.zst", cs.remotePathFor("a.tar.zst"))
+	if copyErr == nil {
+		t.Fatalf("rcloneCopy: nil error, want the failed copy")
+	}
+	logger.Warning("Cloud Storage: upload failed: %v", copyErr)
+
+	log := out.String()
+	for _, leak := range []string{dashValue, quoteValue, strconv.Quote(quoteValue), `Qu0te\"Back\\slash9`, "Passw0rd"} {
+		if strings.Contains(log, leak) {
+			t.Fatalf("RCLONE_FLAGS value %q written in plain text; log:\n%s", leak, log)
 		}
 	}
 }
