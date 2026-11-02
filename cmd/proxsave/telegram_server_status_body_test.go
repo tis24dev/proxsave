@@ -20,7 +20,7 @@ func TestTelegramServerStatusKeepsTheServerBodyOutOfTheWarning(t *testing.T) {
 	page := "<html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n" +
 		"<center><h1>502 Bad Gateway</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n" +
 		strings.Repeat("<!-- a padding to disable MSIE and Chrome friendly error page -->\n", 80) +
-		"\x1b[2J\x1b[H‮FAKE"
+		"\x1b[2J\x1b[H\u202eFAKE"
 
 	for _, tc := range []struct {
 		status  int
@@ -63,7 +63,7 @@ func TestTelegramServerStatusKeepsTheServerBodyOutOfTheWarning(t *testing.T) {
 		if !strings.Contains(log, tc.warning) {
 			t.Fatalf("HTTP %d: no WARNING line %q; log:\n%s", tc.status, tc.warning, log)
 		}
-		for _, raw := range []string{"\x1b", "‮", "\r", "<head>\n", "<html>\r\n"} {
+		for _, raw := range []string{"\x1b", "\u202e", "\r", "<head>\n", "<html>\r\n"} {
 			if strings.Contains(log, raw) {
 				t.Fatalf("HTTP %d: raw server body (%q) in the log:\n%s", tc.status, raw, log)
 			}
