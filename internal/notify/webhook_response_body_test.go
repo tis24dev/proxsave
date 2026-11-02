@@ -107,12 +107,13 @@ func TestWebhookAnswerExcerptMasksTheEndpointCredentials(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("The requested URL " + r.URL.EscapedPath() + " (" + r.URL.Path + ")?" + r.URL.RawQuery +
-			" was not found (X-Key: " + r.Header.Get("X-Key") + ", Authorization: " + r.Header.Get("Authorization") + ")"))
+			" was not found (X-Key: " + r.Header.Get("X-Key") + ", Authorization: " + r.Header.Get("Authorization") +
+			", userinfo: " + base64.StdEncoding.EncodeToString([]byte("hookuser:"+urlPassword)) + ")"))
 	}))
 	defer server.Close()
 
 	endpointURL := strings.Replace(server.URL, "http://", "http://hookuser:"+urlPassword+"@", 1) +
-		"/api/webhooks/123456/" + pathToken + "?key=" + queryValue + "&raw=" + rawQueryValue
+		"/api/webhooks/123456/" + pathToken + "?key=" + queryValue + "&raw=" + rawQueryValue + "&BareQueryToken42"
 	cfg := config.WebhookConfig{
 		Enabled:       true,
 		DefaultFormat: "generic",
@@ -142,7 +143,9 @@ func TestWebhookAnswerExcerptMasksTheEndpointCredentials(t *testing.T) {
 		t.Fatalf("no DEBUG line with the answer; log:\n%s", log)
 	}
 	basic := base64.StdEncoding.EncodeToString([]byte("admin:" + basicPass))
-	for _, secret := range []string{pathToken, "TokAenSegment99", queryValue, rawQueryValue, "Raw+Value777", bearer, urlPassword, basicPass, basic} {
+	urlBasic := base64.StdEncoding.EncodeToString([]byte("hookuser:" + urlPassword))
+	for _, secret := range []string{pathToken, "TokAenSegment99", queryValue, rawQueryValue, "Raw+Value777", "BareQueryToken42",
+		bearer, urlPassword, basicPass, basic, urlBasic} {
 		if strings.Contains(log, secret) {
 			t.Fatalf("endpoint credential %q in the log:\n%s", secret, log)
 		}

@@ -25,11 +25,12 @@ const webhookMaxResponseBytes = 8 << 10
 // webhookBodyExcerpt is the endpoint's answer as the DEBUG line shows it: the endpoint's
 // own credentials masked first, then printable characters only, on one line, cut to
 // 200. Masked before the cut, which could split a credential so the logger would no
-// longer recognise it. Besides the auth values (and the basic-auth header they make),
-// the URL's userinfo, path segments (decoded and as sent), query values (decoded and
-// raw) and header values (whole and word by word, for "Bearer <token>") are masked: a
-// webhook URL often carries its token in the path, and an error page can echo the
-// requested path or a header alone. The logger never masks values under 6 characters.
+// longer recognise it. Besides the auth values, the forms an error page can echo are
+// masked: the basic-auth header made from AUTH_USER and AUTH_PASS or from the URL's
+// userinfo, the userinfo itself, the path segments (decoded and as sent; a webhook URL
+// often carries its token there), the query pairs (decoded and raw, key and value) and
+// the header values (whole and word by word, for "Bearer <token>"). The logger never
+// masks values under 6 characters.
 func webhookBodyExcerpt(body []byte, endpoint config.WebhookEndpoint) string {
 	auth := endpoint.Auth
 	secrets := []string{endpoint.URL, auth.Token, auth.Pass, auth.Secret}
@@ -39,7 +40,8 @@ func webhookBodyExcerpt(body []byte, endpoint config.WebhookEndpoint) string {
 	if u, err := url.Parse(endpoint.URL); err == nil {
 		if u.User != nil {
 			password, _ := u.User.Password()
-			secrets = append(secrets, u.User.Username(), password, u.User.String())
+			secrets = append(secrets, u.User.Username(), password, u.User.String(),
+				base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+password)))
 		}
 		secrets = append(secrets, u.Path, u.EscapedPath(), u.RawQuery)
 		secrets = append(secrets, strings.Split(u.Path, "/")...)
@@ -48,9 +50,8 @@ func webhookBodyExcerpt(body []byte, endpoint config.WebhookEndpoint) string {
 			secrets = append(secrets, values...)
 		}
 		for _, pair := range strings.FieldsFunc(u.RawQuery, func(r rune) bool { return r == '&' || r == ';' }) {
-			if _, value, ok := strings.Cut(pair, "="); ok {
-				secrets = append(secrets, value)
-			}
+			key, value, _ := strings.Cut(pair, "=")
+			secrets = append(secrets, pair, key, value)
 		}
 	}
 	for _, value := range endpoint.Headers {
