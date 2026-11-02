@@ -1081,8 +1081,11 @@ func (r *writeErrRecorder) Write(p []byte) (int, error) {
 // path is compared as written and with its symlinks resolved: /alias/run/etc with
 // /alias pointing at the staging tree's parent names a directory inside it under a
 // path that has nothing in common with tempDir, and the archive's own files were
-// copied into it again. It is called once per source; the walk below a source checks
-// each entry with isWithinStagingDirAsText and isStagingDirInfo.
+// copied into it again. It runs for every source and for every file the copy walk
+// hands to safeCopyFile, so under CUSTOM_BACKUP_PATHS each copied file costs one
+// EvalSymlinks: that is what skips a symlink file outside the staging tree whose target
+// is inside it. The walk checks each directory with isWithinStagingDirAsText and
+// isStagingDirInfo before descending.
 func (c *Collector) isWithinStagingDir(path string) bool {
 	if c.isWithinStagingDirAsText(path) {
 		return true
