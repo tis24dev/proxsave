@@ -3,6 +3,7 @@ package notify
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,19 +94,25 @@ func TestWebhookFailureLinesNameTheStatusNotTheAnswer(t *testing.T) {
 }
 
 // The DEBUG excerpt masked the endpoint URL whole, but an error page echoes the
-// requested path alone, and a webhook URL often carries its token in a path segment;
-// query values and header values can be credentials too.
+// requested path or a header alone, and a webhook URL often carries its token in a path
+// segment; query values, header values, the URL's userinfo and the basic-auth header
+// can be credentials too.
 func TestWebhookAnswerExcerptMasksTheEndpointCredentials(t *testing.T) {
-	const pathToken = "TokenSegmentAbcdef9"
+	const pathToken = "Tok%41enSegment99"
 	const queryValue = "QueryValue12345"
-	const headerValue = "HeaderValue98765"
+	const rawQueryValue = "Raw%2BValue777"
+	const bearer = "HeaderBearerTok1234"
+	const urlPassword = "UrlPassw0rd9"
+	const basicPass = "BasicPassw0rd8"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte("The requested URL " + r.URL.Path + "?" + r.URL.RawQuery +
-			" was not found (X-Key: " + r.Header.Get("X-Key") + ")"))
+		_, _ = w.Write([]byte("The requested URL " + r.URL.EscapedPath() + " (" + r.URL.Path + ")?" + r.URL.RawQuery +
+			" was not found (X-Key: " + r.Header.Get("X-Key") + ", Authorization: " + r.Header.Get("Authorization") + ")"))
 	}))
 	defer server.Close()
 
+	endpointURL := strings.Replace(server.URL, "http://", "http://hookuser:"+urlPassword+"@", 1) +
+		"/api/webhooks/123456/" + pathToken + "?key=" + queryValue + "&raw=" + rawQueryValue
 	cfg := config.WebhookConfig{
 		Enabled:       true,
 		DefaultFormat: "generic",
@@ -113,11 +120,11 @@ func TestWebhookAnswerExcerptMasksTheEndpointCredentials(t *testing.T) {
 		RetryDelay:    1,
 		Endpoints: []config.WebhookEndpoint{{
 			Name:    "ops",
-			URL:     server.URL + "/api/webhooks/123456/" + pathToken + "?key=" + queryValue,
+			URL:     endpointURL,
 			Format:  "generic",
 			Method:  "POST",
-			Headers: map[string]string{"X-Key": headerValue},
-			Auth:    config.WebhookAuth{Type: "none"},
+			Headers: map[string]string{"X-Key": "Bearer " + bearer},
+			Auth:    config.WebhookAuth{Type: "basic", User: "admin", Pass: basicPass},
 		}},
 	}
 	var out bytes.Buffer
@@ -134,7 +141,8 @@ func TestWebhookAnswerExcerptMasksTheEndpointCredentials(t *testing.T) {
 	if !strings.Contains(log, "Response body (") {
 		t.Fatalf("no DEBUG line with the answer; log:\n%s", log)
 	}
-	for _, secret := range []string{pathToken, queryValue, headerValue} {
+	basic := base64.StdEncoding.EncodeToString([]byte("admin:" + basicPass))
+	for _, secret := range []string{pathToken, "TokAenSegment99", queryValue, rawQueryValue, "Raw+Value777", bearer, urlPassword, basicPass, basic} {
 		if strings.Contains(log, secret) {
 			t.Fatalf("endpoint credential %q in the log:\n%s", secret, log)
 		}
