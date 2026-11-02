@@ -229,8 +229,7 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
 	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
-		var statusErr *githubStatusError
-		if errors.As(err, &statusErr) {
+		if statusErr, ok := errors.AsType[*githubStatusError](err); ok {
 			logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "latest release response body=%q", statusErr.excerpt)
 		}
 		// Four of fetchLatestRelease's five errors open with "failed to ...", so a

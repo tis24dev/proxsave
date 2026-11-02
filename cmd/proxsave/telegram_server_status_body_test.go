@@ -68,7 +68,7 @@ func TestTelegramServerStatusKeepsTheServerBodyOutOfTheWarning(t *testing.T) {
 				t.Fatalf("HTTP %d: raw server body (%q) in the log:\n%s", tc.status, raw, log)
 			}
 		}
-		for _, line := range strings.Split(strings.TrimSuffix(log, "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSuffix(log, "\n"), "\n") {
 			if !strings.HasPrefix(line, "[") {
 				t.Fatalf("HTTP %d: the body split a line, %q has no prefix; log:\n%s", tc.status, line, log)
 			}

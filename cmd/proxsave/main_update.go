@@ -80,8 +80,7 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 
 	latestTag, latestVersion, releaseBody, err := fetchLatestRelease(checkCtx)
 	if err != nil {
-		var statusErr *githubStatusError
-		if errors.As(err, &statusErr) {
+		if statusErr, ok := errors.AsType[*githubStatusError](err); ok {
 			logger.Debug("Update check: latest release response body=%q", statusErr.excerpt)
 		}
 		logger.Debug("Update check skipped: GitHub unreachable: %v", err)
