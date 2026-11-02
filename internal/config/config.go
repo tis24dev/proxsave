@@ -1307,8 +1307,15 @@ func newConfigVarExpander(raw map[string]string, baseDir string) *configVarExpan
 	}
 }
 
+// expand resolves $VAR and ${VAR} in s. "$$" is a literal "$": os.Expand has no escape
+// and hands it over as the shell name "$", and with no form of quoting able to protect a
+// "$", a credential that holds one (a webhook password, an HMAC secret) could not be
+// written at all.
 func (e *configVarExpander) expand(s string) string {
 	return os.Expand(s, func(key string) string {
+		if key == "$" {
+			return "$"
+		}
 		return e.resolve(key)
 	})
 }

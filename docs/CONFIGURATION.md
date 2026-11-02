@@ -313,10 +313,11 @@ arguments, pipes and redirections in the value are not interpreted. Two characte
 as in every other value in this file. An unquoted `#` truncates the value, so quote a path that
 contains one. A `$` is expanded and no form of quoting suppresses it, not double quotes, not
 single quotes, not a backslash: the name is looked up in this file first, then in the daemon's
-own environment, and a name neither defines is replaced by nothing, silently. `$$`, `$@`, `$*`,
-`$!`, `$?`, `$-`, `$0` to `$9` and a `${` with no closing brace are consumed the same way. Only
-a `$` at the end of the value, or one before a character that is neither a letter, a digit, an
-underscore nor one of those, survives. Rename the script rather than fighting the expansion.
+own environment, and a name neither defines is replaced by nothing, silently. `$$` is a literal
+`$`. `$@`, `$*`, `$!`, `$?`, `$-`, `$0` to `$9` and a `${` with no closing brace are consumed the
+same way as an unknown name. Only a `$` at the end of the value, or one before a character that
+is neither a letter, a digit, an underscore nor one of those, survives. Write `$$` where the path
+really contains a `$`.
 
 These scripts run only under the daemon, never under a manual `proxsave --backup` or
 a cron-mode run. Their output is discarded and their exit status does not change the
@@ -684,7 +685,7 @@ Retention deletes a run log together with its archive. A run log with no
 archive (a dry run, a failed run) is deleted once it is older than the oldest
 backup kept at that destination.
 
-**Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
+**Path resolution**: `${BASE_DIR}` expands automatically from the installed `proxsave` executable path. Scalar string values also support `$VAR` / `${VAR}` expansion (config keys first, then environment variables; `$$` is a literal `$`), but `BASE_DIR` itself is not configurable from `backup.env` or the parent environment.
 
 ---
 
@@ -1485,6 +1486,8 @@ WEBHOOK_DISCORD_ALERTS_AUTH_SECRET=    # HMAC secret key
 # Pushover-specific (only honored when FORMAT=pushover; default 0, range -2..1)
 WEBHOOK_DISCORD_ALERTS_PRIORITY=0
 ```
+
+A `$` in these values is expanded as in every other value of this file: write `$$` for a literal `$`, as in a password or secret that contains one.
 
 **Supported formats**:
 - **discord**: Discord webhook JSON format
