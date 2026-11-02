@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"bufio"
 	"cmp"
+	"errors"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -35,18 +37,14 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 	}
 	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
 	categoryMap := make(map[string]*notify.LogCategory)
 	errorCount = 0
 	warningCount = 0
 
-	for scanner.Scan() {
-		entryType, message := classifyLogLine(scanner.Text())
+	forEachLogLine(file, func(line string) {
+		entryType, message := classifyLogLine(line)
 		if entryType == "" || message == "" {
-			continue
+			return
 		}
 
 		switch entryType {
@@ -62,7 +60,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 
 		label, example := splitCategoryAndExample(message)
 		if label == "" {
-			continue
+			return
 		}
 
 		// A notify-error displays as ERROR even though it is counted separately.
@@ -85,7 +83,7 @@ func ParseLogCounts(logPath string, categoryLimit int) (categories []notify.LogC
 				Example: example,
 			}
 		}
-	}
+	})
 
 	if len(categoryMap) == 0 {
 		return nil, errorCount, warningCount, notifyCount
@@ -136,6 +134,34 @@ func logCategorySymbolRank(label string) int {
 		return 1
 	default:
 		return 2
+	}
+}
+
+// logLineClassifyBytes is how much of one physical line ParseLogCounts classifies: the
+// level and the start of the message are all it needs (messages are cut to 300 bytes,
+// labels and examples to 120), and the rest of a longer line is skipped, not held.
+const logLineClassifyBytes = 64 * 1024
+
+// forEachLogLine calls fn with the first logLineClassifyBytes of every line of r, of any
+// length, without its line ending. The bufio.Scanner it replaces stopped at its 1 MiB
+// token limit without a word: the long line and every line after it went uncounted, so
+// an ERROR logged after it left the exit code and the healthchecks ping at success. A
+// read error that is not the end of the file ends the walk, as it did before: what was
+// read so far is counted.
+func forEachLogLine(r io.Reader, fn func(line string)) {
+	reader := bufio.NewReaderSize(r, logLineClassifyBytes)
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		line := strings.TrimSuffix(strings.TrimSuffix(string(chunk), "\n"), "\r")
+		for errors.Is(err, bufio.ErrBufferFull) {
+			_, err = reader.ReadSlice('\n')
+		}
+		if len(chunk) > 0 {
+			fn(line)
+		}
+		if err != nil {
+			return
+		}
 	}
 }
 
