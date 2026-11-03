@@ -300,8 +300,8 @@ a key added by a newer release appears with its default instead of staying absen
 | `SET_BACKUP_PERMISSIONS` | `false` | when true, the run chowns the backup/log dirs to `BACKUP_USER:BACKUP_GROUP`, opens the backup files to that group (`0640`), and the preflight then skips the dirs' owner **and mode** checks |
 
 `SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
-`BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
-the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, sets directories to
+`BACKUP_PATH` and `LOG_PATH`, plus `SECONDARY_PATH` and `SECONDARY_LOG_PATH` when
+`SECONDARY_ENABLED=true`, **recursively, before the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, sets directories to
 `0750` and the files of a backup set (the archive or bundle and its `.sha256`, `.metadata`
 and `.manifest.json`) to `0640`; every other file, logs included, keeps its mode. The
 storage step of the same run then gives the backup it has just written on `BACKUP_PATH`

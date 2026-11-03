@@ -57,11 +57,14 @@ func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *log
 
 	timeout := fsIoTimeoutDuration(cfg)
 
+	// A disabled secondary keeps its configured paths, and walking them chowned a
+	// directory the backup no longer uses (the Bash version gated this on the flag).
+	secondaryPath, secondaryLogPath := cfg.ActiveSecondaryPaths()
 	dirs := []string{
 		strings.TrimSpace(cfg.BackupPath),
 		strings.TrimSpace(cfg.LogPath),
-		strings.TrimSpace(cfg.SecondaryPath),
-		strings.TrimSpace(cfg.SecondaryLogPath),
+		strings.TrimSpace(secondaryPath),
+		strings.TrimSpace(secondaryLogPath),
 	}
 
 	// Bounded + dry-run-aware detector (parity with the security preflight): a

@@ -1531,6 +1531,17 @@ func normalizeList(values []string) []string {
 }
 
 // BuildWebhookConfig constructs a complete webhook configuration with all endpoints
+// ActiveSecondaryPaths returns SECONDARY_PATH and SECONDARY_LOG_PATH when the secondary
+// is enabled, and two empty strings when it is not. The loader keeps both paths with
+// SECONDARY_ENABLED=false, so a pass that walks, chowns or creates them must ask here:
+// a disabled secondary is not the operator's to have ProxSave touch.
+func (c *Config) ActiveSecondaryPaths() (dataPath, logPath string) {
+	if c == nil || !c.SecondaryEnabled {
+		return "", ""
+	}
+	return c.SecondaryPath, c.SecondaryLogPath
+}
+
 func (c *Config) BuildWebhookConfig() *WebhookConfig {
 	endpoints := []WebhookEndpoint{}
 

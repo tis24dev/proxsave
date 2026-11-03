@@ -81,7 +81,7 @@ func TestApplyBackupPermissionsOpensPreviousBackupFilesToGroup(t *testing.T) {
 	}
 
 	cfg := &config.Config{BackupUser: usr, BackupGroup: grp, BackupPath: backupDir,
-		SecondaryPath: secondaryDir, LogPath: logDir, FsIoTimeoutSeconds: 30}
+		SecondaryEnabled: true, SecondaryPath: secondaryDir, LogPath: logDir, FsIoTimeoutSeconds: 30}
 	logger, _ := bufLogger()
 	if err := applyBackupPermissions(context.Background(), cfg, logger, false); err != nil {
 		t.Fatalf("applyBackupPermissions: %v", err)

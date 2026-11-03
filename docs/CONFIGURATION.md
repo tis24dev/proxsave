@@ -565,8 +565,8 @@ When `SET_BACKUP_PERMISSIONS=true`, the system applies Bash-compatible ownership
 - Recursively changes owner:group for:
   - `BACKUP_PATH` (primary backup directory)
   - `LOG_PATH` (primary log directory)
-  - `SECONDARY_PATH` (if configured)
-  - `SECONDARY_LOG_PATH` (if configured)
+  - `SECONDARY_PATH` (when `SECONDARY_ENABLED=true`)
+  - `SECONDARY_LOG_PATH` (when `SECONDARY_ENABLED=true`)
 - Uses `BACKUP_USER:BACKUP_GROUP` as the target owner
 - Does NOT touch binary files, config files, or system paths
 
