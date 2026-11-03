@@ -39,18 +39,35 @@ func fsIoTimeoutDuration(cfg *config.Config) time.Duration {
 //   - It only touches backup/log paths (not binaries/config files).
 //   - Failures are logged as warnings but do not abort the backup.
 func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *logging.Logger, dryRun bool) error {
+	applyBackupPermissionsOutcome(ctx, cfg, logger, dryRun)
+	return nil
+}
+
+// backupPermissionsOutcome is what the pass left undone. skipped names each backup path
+// it could not set, one reason per WARNING it logged; documentedSkip is true when a path
+// was left alone for a documented reason (no Unix ownership, missing directory). The
+// install and upgrade footers read it: the pass returns no error, and the footer said
+// "normalized correctly (including backup paths)" over every skip.
+type backupPermissionsOutcome struct {
+	skipped        []string
+	documentedSkip bool
+}
+
+func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logger *logging.Logger, dryRun bool) (outcome backupPermissionsOutcome) {
 	backupUser := strings.TrimSpace(cfg.BackupUser)
 	backupGroup := strings.TrimSpace(cfg.BackupGroup)
 	if backupUser == "" || backupGroup == "" {
 		logger.Warning("SET_BACKUP_PERMISSIONS=true but BACKUP_USER/BACKUP_GROUP are empty; skipping permission adjustments")
-		return nil
+		outcome.skipped = append(outcome.skipped, "BACKUP_USER/BACKUP_GROUP are empty")
+		return outcome
 	}
 
 	uid, gid, err := resolveUserGroupIDs(backupUser, backupGroup)
 	if err != nil {
 		// Log and skip rather than aborting
 		logger.Warning("Failed to resolve BACKUP_USER/BACKUP_GROUP (%s:%s): %v", backupUser, backupGroup, err)
-		return nil
+		outcome.skipped = append(outcome.skipped, "BACKUP_USER/BACKUP_GROUP cannot be resolved")
+		return outcome
 	}
 
 	logger.Info("Applying backup permissions (SET_BACKUP_PERMISSIONS=true) for user:group %s:%s", backupUser, backupGroup)
@@ -82,6 +99,7 @@ func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *log
 		}
 		if strings.Contains(dir, ":") && !isLocalPath(dir) {
 			logger.Info("Permissions: skipping remote cloud path (ownership unsupported): %s", dir)
+			outcome.documentedSkip = true
 			continue
 		}
 
@@ -90,15 +108,19 @@ func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *log
 			switch {
 			case errors.Is(err, safefs.ErrTimeout):
 				logger.Warning("Permissions: stat of %s timed out after %s; skipping (dead/stale mount?)", dir, timeout)
+				outcome.skipped = append(outcome.skipped, dir+" could not be read")
 			case os.IsNotExist(err):
 				logger.Skip("Permissions: directory does not exist: %s", dir)
+				outcome.documentedSkip = true
 			default:
 				logger.Warning("Permissions: failed to stat %s (skipping): %v", dir, err)
+				outcome.skipped = append(outcome.skipped, dir+" could not be read")
 			}
 			continue
 		}
 		if !info.IsDir() {
 			logger.Skip("Permissions: path is not a directory, skipping: %s", dir)
+			outcome.documentedSkip = true
 			continue
 		}
 
@@ -109,19 +131,22 @@ func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *log
 			} else {
 				logger.Warning("Permissions: failed to detect filesystem for %s; skipping chown/chmod: %v", dir, err)
 			}
+			outcome.skipped = append(outcome.skipped, "the filesystem of "+dir+" could not be detected")
 			continue
 		}
 		if fsInfo.Type.ShouldAutoExclude() || !fsInfo.SupportsOwnership {
 			logger.Info("Permissions: skipping chown/chmod for %s (filesystem %s does not support Unix ownership)", dir, fsInfo.Type)
+			outcome.documentedSkip = true
 			continue
 		}
 
 		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", dir, uid, gid)
 		if err := applyDirOwnershipRecursive(ctx, dir, uid, gid, timeout, dryRun, logger); err != nil {
 			logger.Warning("Failed to apply permissions on %s: %v", dir, err)
+			outcome.skipped = append(outcome.skipped, dir+" could not be changed")
 		}
 	}
-	return nil
+	return outcome
 }
 
 func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
@@ -289,16 +314,17 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 			bootstrap.Info("Finalizing installation: applying backup directory permissions")
 		}
 		// Install/upgrade finalization always mutates (dryRun=false); it exists to
-		// leave the environment consistent and has no dry-run mode of its own.
-		if err := applyBackupPermissions(ctx, cfg, logger, false); err != nil {
-			if bootstrap != nil {
-				bootstrap.Warning("Post-install: backup permission adjustment failed (ignored): %v", err)
-			}
+		// leave the environment consistent and has no dry-run mode of its own. The
+		// reasons go in the line itself: the TUI does not show the pass's WARNINGs.
+		outcome := applyBackupPermissionsOutcome(ctx, cfg, logger, false)
+		logger.Debug("Post-install: backup permissions skipped=%q documentedSkip=%v", outcome.skipped, outcome.documentedSkip)
+		switch {
+		case len(outcome.skipped) > 0:
 			if status != "error" {
 				status = "warning"
-				message = "permissions normalized with warnings for backup paths (non-blocking, see log)"
+				message = "permissions and ownership normalized; backup paths skipped: " + strings.Join(outcome.skipped, "; ")
 			}
-		} else if status == "ok" {
+		case status == "ok" && !outcome.documentedSkip:
 			message = "permissions and ownership normalized correctly (including backup paths)"
 		}
 	}
