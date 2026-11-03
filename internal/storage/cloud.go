@@ -243,7 +243,9 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsIn
 		return false, nil
 	}
 	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s, detected at storage init)", logFile, fsInfo.Type)
-	if err := safefs.Chmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
+	// Lchmod: the directory can be a share other hosts write to, and a symlink swapped
+	// in for the log must not redirect a root chmod to another file.
+	if err := safefs.Lchmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
 		c.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", logFile, err)
 		return false, err
 	}
@@ -251,7 +253,9 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsIn
 }
 
 // setLocalModesFromSource gives each file of the backup set copied to destFile the mode
-// of the same file next to sourceFile. A failure stays at DEBUG, as on the Secondary.
+// of the same file next to sourceFile, 0600 when that mode cannot be read, so a copy is
+// never left at rclone's 0644. The chmod refuses a symlink: the directory can be a share
+// other hosts write to. A failure stays at DEBUG, as on the Secondary.
 func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, destFile string) {
 	timeout := c.fsIoTimeout()
 	for _, dest := range buildBackupCandidatePaths(destFile, true) {
@@ -259,14 +263,14 @@ func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, 
 			continue
 		}
 		src := filepath.Join(filepath.Dir(sourceFile), filepath.Base(dest))
-		srcInfo, err := safefs.Stat(ctx, src, timeout)
-		if err != nil {
-			c.logger.Debug("Cloud Storage: permissions - no source mode for %s: %v", filepath.Base(dest), err)
-			continue
+		mode := os.FileMode(0o600)
+		if srcInfo, err := safefs.Stat(ctx, src, timeout); err == nil {
+			mode = srcInfo.Mode().Perm()
+		} else {
+			c.logger.Debug("Cloud Storage: permissions - no source mode for %s, using %o: %v", filepath.Base(dest), mode, err)
 		}
-		mode := srcInfo.Mode().Perm()
 		c.logger.Debug("Cloud Storage: permissions - owner left as is for %s (filesystem without ownership), mode %o from the source", filepath.Base(dest), mode)
-		if err := safefs.Chmod(ctx, dest, mode, timeout); err != nil {
+		if err := safefs.Lchmod(ctx, dest, mode, timeout); err != nil {
 			c.logger.Debug("Cloud Storage: permissions - cannot set the mode of %s: %v", filepath.Base(dest), err)
 		}
 	}
