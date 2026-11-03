@@ -50,6 +50,8 @@ type FilesystemInfo struct {
 	IsNetworkFS       bool
 	MountPoint        string
 	Device            string
+	// LinkTarget is where Path resolves when a symlink is on the way, "" otherwise.
+	LinkTarget string
 }
 
 // BackupLocation represents a location where backups are stored

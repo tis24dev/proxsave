@@ -415,7 +415,12 @@ func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	mount := info.MountPoint
 	mount = cmp.Or(mount, "unknown")
 
-	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
+	link := ""
+	if info.LinkTarget != "" {
+		link = " [link to: " + info.LinkTarget + "]"
+	}
+
+	return fmt.Sprintf("%s (%s)%s [mount: %s]%s", info.Type, ownership, network, mount, link)
 }
 
 // logStoragePath opens a storage-init block: the path line, then the configuration

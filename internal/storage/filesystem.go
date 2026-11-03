@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
@@ -77,17 +78,17 @@ func NewFilesystemDetector(logger *logging.Logger, opts ...DetectorOption) *File
 // This function logs the detected filesystem type in real-time
 func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) (*FilesystemInfo, error) {
 	// Ensure path exists. Bounded so a dead/stale mount does not wedge here.
-	if _, err := safefs.Stat(ctx, path, d.ioTimeout); err != nil {
+	pathInfo, err := safefs.Stat(ctx, path, d.ioTimeout)
+	if err != nil {
 		return nil, fmt.Errorf("path does not exist: %s: %w", path, err)
 	}
 
 	// Get mount point for this path
-	var mountPoint string
-	var err error
+	var mountPoint, linkTarget string
 	if d.mountPointLookup != nil {
 		mountPoint, err = d.mountPointLookup(path)
 	} else {
-		mountPoint, err = d.getMountPoint(path)
+		mountPoint, linkTarget, err = d.getMountPoint(ctx, path, pathInfo)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get mount point for %s: %w", path, err)
@@ -112,6 +113,7 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 		IsNetworkFS:       fsType.IsNetworkFilesystem(),
 		MountPoint:        mountPoint,
 		Device:            device,
+		LinkTarget:        linkTarget,
 	}
 
 	// Log the detected filesystem in real-time (live output)
@@ -158,30 +160,94 @@ func (d *FilesystemDetector) logFilesystemInfo(info *FilesystemInfo) {
 		network = " [network]"
 	}
 
+	link := ""
+	if info.LinkTarget != "" {
+		link = " [link to: " + info.LinkTarget + "]"
+	}
+
 	// Log in format: "Path: /path/to/backup -> Filesystem: ext4 (supports ownership)" (debug-level, detailed summary printed elsewhere)
-	d.logger.Debug("Path: %s -> Filesystem: %s (%s)%s [mount: %s]",
+	d.logger.Debug("Path: %s -> Filesystem: %s (%s)%s [mount: %s]%s",
 		info.Path,
 		info.Type,
 		ownership,
 		network,
 		info.MountPoint,
+		link,
 	)
 }
 
-// getMountPoint finds the mount point for a given path
-func (d *FilesystemDetector) getMountPoint(path string) (string, error) {
-	// Read /proc/mounts to find mount points
-	data, err := os.ReadFile("/proc/mounts")
-	if err != nil {
-		return "", err
-	}
-
+// getMountPoint finds the mount point that holds path, and where path resolves when a
+// symlink is on the way ("" when none is). The mount is found by device: the st_dev of
+// path (the stat follows links) against /proc/self/mountinfo. Matching the path string
+// against /proc/mounts gave a BACKUP_PATH that is a link into an NFS share the type of
+// the filesystem holding the link: ext4 with ownership, so the security check tried to
+// chown the root_squash share and the run stopped with exit 14. A device no mountinfo
+// entry carries (btrfs subvolumes report their own) falls back to the deepest mount
+// whose path holds the resolved path.
+func (d *FilesystemDetector) getMountPoint(ctx context.Context, path string, pathInfo os.FileInfo) (mountPoint, linkTarget string, err error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		absPath = path
 	}
+	resolved, rerr := safefs.Run(ctx, "resolve symlinks", absPath, d.ioTimeout, func() (string, error) {
+		return filepath.EvalSymlinks(absPath)
+	})
+	if rerr != nil {
+		d.logger.Debug("Filesystem detection: cannot resolve %s: %v; matching it as written", absPath, rerr)
+		resolved = absPath
+	}
+	if resolved != absPath {
+		linkTarget = resolved
+	}
 
-	return bestMountPointFor(strings.Split(string(data), "\n"), absPath), nil
+	if st, ok := pathInfo.Sys().(*syscall.Stat_t); ok {
+		if data, merr := os.ReadFile("/proc/self/mountinfo"); merr == nil {
+			devID := deviceID(uint64(st.Dev))
+			if mp, found := mountPointForDevice(strings.Split(string(data), "\n"), devID, resolved); found {
+				d.logger.Debug("Filesystem detection: %s is on device %s, mounted at %s", path, devID, mp)
+				return mp, linkTarget, nil
+			}
+			d.logger.Debug("Filesystem detection: no mountinfo entry for device %s of %s; matching %s by path", devID, path, resolved)
+		} else {
+			d.logger.Debug("Filesystem detection: cannot read /proc/self/mountinfo: %v; matching %s by path", merr, resolved)
+		}
+	}
+
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return "", "", err
+	}
+	return bestMountPointFor(strings.Split(string(data), "\n"), resolved), linkTarget, nil
+}
+
+// deviceID renders a device number as mountinfo's "major:minor", with glibc's
+// major()/minor() split of the Linux dev_t.
+func deviceID(dev uint64) string {
+	major := (dev>>8)&0xfff | (dev>>32)&^uint64(0xfff)
+	minor := dev&0xff | (dev>>12)&^uint64(0xff)
+	return fmt.Sprintf("%d:%d", major, minor)
+}
+
+// mountPointForDevice picks, among the /proc/self/mountinfo lines of device devID, the
+// deepest mount point that holds resolved; when none does (a bind mount reached through
+// another path), the last entry of the device. found is false when no line has devID.
+func mountPointForDevice(lines []string, devID, resolved string) (mountPoint string, found bool) {
+	best, last := "", ""
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[2] != devID {
+			continue
+		}
+		mp := unescapeOctal(fields[4])
+		last = mp
+		if (mp == "/" || resolved == mp || strings.HasPrefix(resolved, mp+"/")) && len(mp) > len(best) {
+			best = mp
+		}
+	}
+	if best != "" {
+		return best, true
+	}
+	return last, last != ""
 }
 
 // bestMountPointFor picks the deepest mount point owning absPath from /proc/mounts
