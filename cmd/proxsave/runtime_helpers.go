@@ -1241,23 +1241,29 @@ func cronCommandToken(line string) string {
 	}
 
 	if strings.HasPrefix(first, "@") {
-		if len(fields) >= 2 {
-			return cronCommandWord(fields[1:])
-		}
-		return ""
+		return cronCommandWordAt(fields, 1)
 	}
+	return cronCommandWordAt(fields, 5)
+}
 
-	if len(fields) <= 5 {
+// cronCommandWordAt is the command word of a crontab line whose command starts at
+// field n: 5 in the user format (1 after an @nickname), 6 in the system format (2), one
+// later for its USER field. Both extractors go through it: the system one took the field
+// as it was, so "root TZ=UTC /usr/local/bin/proxsave" in /etc/cron.d was invisible to the
+// duplicate-schedule checks while the same job in the root crontab was seen.
+func cronCommandWordAt(fields []string, n int) string {
+	if len(fields) <= n {
 		return ""
 	}
-	return cronCommandWord(fields[5:])
+	return cronCommandWord(fields[n:])
 }
 
 // cronCommandWord picks the token to judge out of the words that follow the schedule.
-// cron accepts VAR=value in front of a job's command, and an operator writes one there
-// more often than it looks: cron does not read /etc/timezone, so "TZ=" in front of a
-// backup job is the ordinary way to pin its hour. Without this the whole line was
-// invisible - to the detector, to the removal, and to the schedule adoption alike.
+// cron accepts VAR=value in front of a job's command (TZ=, PATH=, LANG=): the shell runs
+// it as an assignment for that job only. It does not move the job's hour - cron(8) fires
+// every job in its own single timezone, from /etc/timezone - but it hides the command
+// behind it. Without this the whole line was invisible - to the detector, to the
+// removal, and to the schedule adoption alike.
 //
 // It is deliberately ADDITIVE, because four of this function's callers WRITE the root
 // crontab and a token invented here is a line ProxSave deletes. Every line that answers
