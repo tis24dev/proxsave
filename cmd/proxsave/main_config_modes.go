@@ -158,7 +158,8 @@ func reportConfigFindingsTheMergeLeaves(bootstrap *logging.BootstrapLogger, conf
 }
 
 func runUpgradeConfigDryMode(_ context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, _ string) (int, bool) {
-	if !args.UpgradeConfigDry {
+	// --upgrade-config --dry-run is this preview: the merge itself never read the flag.
+	if !args.UpgradeConfigDry && (!args.UpgradeConfig || !args.DryRun) {
 		return types.ExitSuccess.Int(), false
 	}
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=upgrade-config-dry")
