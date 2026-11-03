@@ -26,6 +26,7 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
 	"github.com/tis24dev/proxsave/internal/serverbot"
@@ -236,8 +237,14 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 		// wrapper repeated the verb. The fifth, "empty tag_name in latest release
 		// response", does not name the operation: on that shape the cause stands
 		// bare. Known cost.
+		if ctx.Err() != nil {
+			// Ctrl+C or SIGTERM during the check: an interrupted run, not a
+			// configuration error (exit 2 said "Invalid or missing configuration").
+			return "", "", exitCodeInterrupted, true, err
+		}
 		bootstrap.Error("%v", err)
-		return "", "", types.ExitConfigError.Int(), true, err
+		// GitHub not answering is a failed run, like a failed download (exit 1).
+		return "", "", types.ExitGenericError.Int(), true, err
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "current=%s latest=%s", currentVersion, latestVersion)
@@ -259,6 +266,16 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 		reader := bufio.NewReader(os.Stdin)
 		confirmed, promptErr := promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
 		if promptErr != nil {
+			switch {
+			case ctx.Err() != nil:
+				// Ctrl+C or SIGTERM at the prompt: exit 130, as backup and restore.
+				return "", "", exitCodeInterrupted, true, promptErr
+			case errors.Is(promptErr, input.ErrInputAborted):
+				// End of input or the idle timeout: nothing was chosen, nothing changed.
+				logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "prompt ended without an answer: %v", promptErr)
+				bootstrap.Println("Upgrade cancelled by user; no changes were made.")
+				return "", "", types.ExitSuccess.Int(), true, nil
+			}
 			bootstrap.Error("%v", promptErr)
 			return "", "", types.ExitConfigError.Int(), true, promptErr
 		}
