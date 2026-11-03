@@ -779,8 +779,8 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 		}
 	}
 	// rclone writes the log 0644. In a local CLOUD_REMOTE directory it gets the mode the
-	// Secondary log copy creates (copyFile, 0640), owner unchanged, on a filesystem that
-	// takes ownership; the log is there either way.
+	// Secondary log copy creates (copyFile, 0640), owner unchanged; the log is there
+	// either way.
 	if _, err := client.SetLocalLogMode(ctx, destPath, o.cloudFilesystemInfo()); err != nil {
 		return &logPermissionsError{err: err, checksumNotVerified: checksumNotVerified}
 	}

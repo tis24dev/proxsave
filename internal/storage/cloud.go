@@ -228,17 +228,18 @@ func (c *CloudStorage) ensureLocalDir(ctx context.Context) error {
 }
 
 // SetLocalLogMode gives a log rclone copied into a local CLOUD_REMOTE directory the mode
-// the Secondary log copy creates (0640, owner unchanged), on a filesystem that takes
-// ownership, like the backups. fsInfo is what the storage initialization detected for
+// the Secondary log copy creates (0640, owner unchanged), on a filesystem without
+// ownership too: the chmod needs no ownership, and rclone's 0644 left the log readable
+// by every user while the Secondary copy on the same mount was 0640. fsInfo is what the storage initialization detected for
 // the CLOUD_REMOTE directory: it is reused, nothing is detected (or probed) again here.
 // applied is false when there is nothing to set (the remote form, a remote destination,
-// no detection, or a filesystem without ownership).
+// or no detection).
 func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsInfo *FilesystemInfo) (applied bool, err error) {
 	if c == nil || c.localDir == "" || !filepath.IsAbs(logFile) {
 		return false, nil
 	}
-	if fsInfo == nil || !fsInfo.SupportsOwnership {
-		c.logger.Debug("Cloud log copy: mode of %s left as written (ownership not supported or filesystem unknown at storage init: %+v)", logFile, fsInfo)
+	if fsInfo == nil {
+		c.logger.Debug("Cloud log copy: mode of %s left as written (filesystem unknown at storage init)", logFile)
 		return false, nil
 	}
 	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s, detected at storage init)", logFile, fsInfo.Type)
@@ -247,6 +248,28 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsIn
 		return false, err
 	}
 	return true, nil
+}
+
+// setLocalModesFromSource gives each file of the backup set copied to destFile the mode
+// of the same file next to sourceFile. A failure stays at DEBUG, as on the Secondary.
+func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, destFile string) {
+	timeout := c.fsIoTimeout()
+	for _, dest := range buildBackupCandidatePaths(destFile, true) {
+		if _, err := safefs.Stat(ctx, dest, timeout); err != nil {
+			continue
+		}
+		src := filepath.Join(filepath.Dir(sourceFile), filepath.Base(dest))
+		srcInfo, err := safefs.Stat(ctx, src, timeout)
+		if err != nil {
+			c.logger.Debug("Cloud Storage: permissions - no source mode for %s: %v", filepath.Base(dest), err)
+			continue
+		}
+		mode := srcInfo.Mode().Perm()
+		c.logger.Debug("Cloud Storage: permissions - owner left as is for %s (filesystem without ownership), mode %o from the source", filepath.Base(dest), mode)
+		if err := safefs.Chmod(ctx, dest, mode, timeout); err != nil {
+			c.logger.Debug("Cloud Storage: permissions - cannot set the mode of %s: %v", filepath.Base(dest), err)
+		}
+	}
 }
 
 // DetectionFailure is why the last detection of the local directory fell back to an
@@ -266,12 +289,15 @@ func (c *CloudStorage) NotCheckedInDryRun() bool {
 // CLOUD_REMOTE directory the owner and mode the Secondary gives its copies
 // (setBackupSetPermissions: 0600 root:root, or 0640 BACKUP_USER:BACKUP_GROUP with
 // SET_BACKUP_PERMISSIONS). rclone writes them 0644. Nothing happens for the remote
-// form, or on a filesystem without ownership.
-func (c *CloudStorage) setLocalPermissions(ctx context.Context, destFile string, issues *storeIssueRecorder) {
-	if c.localDir == "" || c.localFS == nil || !c.localFS.SupportsOwnership {
-		if c.localDir != "" {
-			c.logger.Debug("Cloud Storage: permissions - skipped for %s (filesystem without ownership)", filepath.Base(destFile))
-		}
+// form. On a filesystem without ownership the owner is left alone but each file still
+// takes its source file's mode, as the Secondary's copy does there: the 0644 left an
+// archive, unencrypted by default, readable by every user of the share.
+func (c *CloudStorage) setLocalPermissions(ctx context.Context, sourceFile, destFile string, issues *storeIssueRecorder) {
+	if c.localDir == "" || c.localFS == nil {
+		return
+	}
+	if !c.localFS.SupportsOwnership {
+		c.setLocalModesFromSource(ctx, sourceFile, destFile)
 		return
 	}
 	detector := c.fsDetector
@@ -1229,7 +1255,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 			// The archive is in the local directory: like the Secondary, the sidecar
 			// failure comes first, then owner and mode of what was copied.
 			issues.add(StoreIssueSidecarNotSaved)
-			c.setLocalPermissions(ctx, remoteFile, issues)
+			c.setLocalPermissions(ctx, backupFile, remoteFile, issues)
 		}
 		if primaryFailed && !errors.As(err, &verifyErr) {
 			c.removeFailedUpload(ctx, filename, remoteFile)
@@ -1247,7 +1273,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	c.logger.Debug("Cloud storage: upload and verification completed for %s", filename)
 	c.logger.Debug("✓ Cloud Storage: File uploaded")
-	c.setLocalPermissions(ctx, remoteFile, issues)
+	c.setLocalPermissions(ctx, backupFile, remoteFile, issues)
 
 	if count := c.countBackups(ctx); count >= 0 {
 		c.logger.Debug("Cloud storage: current backups detected after upload: %d", count)

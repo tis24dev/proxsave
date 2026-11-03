@@ -604,7 +604,8 @@ func registerCloudInitFS(o *Orchestrator, info *storage.FilesystemInfo) {
 }
 
 // Step [8], local directory: the log mode follows the detection made at storage init.
-// A filesystem without ownership, or no cloud target detected, leaves rclone's 0644.
+// With or without ownership the log gets the Secondary log's 0640; no cloud target
+// detected leaves rclone's 0644.
 func TestDispatchLogFileCloudLocalLogModeReusesInitDetection(t *testing.T) {
 	script := "#!/bin/sh\n" +
 		"case \"$1\" in\n" +
@@ -617,7 +618,7 @@ func TestDispatchLogFileCloudLocalLogModeReusesInitDetection(t *testing.T) {
 		mode os.FileMode
 	}{
 		{"ownership", &storage.FilesystemInfo{Type: storage.FilesystemExt4, SupportsOwnership: true}, 0o640},
-		{"no ownership", &storage.FilesystemInfo{Type: storage.FilesystemFAT32}, 0o644},
+		{"no ownership", &storage.FilesystemInfo{Type: storage.FilesystemFAT32}, 0o640},
 		{"no cloud target", nil, 0o644},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
