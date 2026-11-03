@@ -268,16 +268,14 @@ func SendEmail(ctx context.Context, cfg *config.Config, logger *logging.Logger, 
 	}
 
 	adapter := orchestrator.NewNotificationAdapter(emailNotifier, logger)
-	if err := adapter.Notify(ctx, stats); err != nil {
-		logging.Critical("Support mode: FAILED to send support email: %v", err)
-		fmt.Println("\033[33m⚠️  CRITICAL: Support email failed to send!\033[0m")
-		return
-	}
-
-	// Notify keeps delivery failures non-fatal and records the actual outcome in
-	// NotifyResults. A nil error alone does not confirm an MTA handoff.
+	// Notify keeps delivery failures non-fatal (it returns nil for them) and records the
+	// actual outcome in NotifyResults. The adapter's own WARNING names only the Email
+	// channel, so the failure of the support email gets its own line after it.
+	notifyErr := adapter.Notify(ctx, stats)
 	outcome := stats.NotifyResults[emailNotifier.Name()]
-	if outcome != "ok" && outcome != "warning" {
+	if notifyErr != nil || (outcome != "ok" && outcome != "warning") {
+		logging.Debug("Support mode: support email outcome=%q err=%v", outcome, notifyErr)
+		logging.Warning("Support mode: FAILED to send support email to %s", recipient)
 		return
 	}
 
