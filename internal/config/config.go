@@ -574,11 +574,10 @@ func (c *Config) parseGeneralSettings() {
 	c.ProfilingEnabled = c.getBool("PROFILING_ENABLED", true)
 	c.DebugLevel = c.getLogLevel("DEBUG_LEVEL", types.LogLevelInfo)
 
-	if disableColors, ok := c.raw["DISABLE_COLORS"]; ok {
-		c.UseColor = !utils.ParseBool(disableColors)
-	} else {
-		c.UseColor = c.getBool("USE_COLOR", true)
-	}
+	// DISABLE_COLORS, the Bash-era name, is no longer read: 935fcc51 dropped the legacy
+	// names from the loader and missed this one, so the integrity check called it unknown
+	// and ignored while it still overrode USE_COLOR, from the file and the environment.
+	c.UseColor = c.getBool("USE_COLOR", true)
 	c.ColorizeStepLogs = c.getBool("COLORIZE_STEP_LOGS", true) && c.UseColor
 }
 
