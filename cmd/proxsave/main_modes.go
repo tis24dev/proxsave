@@ -425,7 +425,7 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 	}
 	decryptCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=decrypt cli=%v", decryptCLI)
-	if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
+	if err := runDecryptWorkflowOnly(ctx, args, bootstrap, toolVersion, decryptCLI); err != nil {
 		if errors.Is(err, orchestrator.ErrDecryptAborted) {
 			bootstrap.Info("Decrypt workflow aborted by user")
 			return types.ExitSuccess.Int(), true

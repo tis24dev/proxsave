@@ -6,13 +6,18 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/orchestrator"
 )
 
 // runDecryptWorkflowOnly executes the decrypt workflow without initializing the backup orchestrator.
-func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *logging.BootstrapLogger, version string, useCLI bool) error {
+// decryptStdinCheck is ensureInteractiveStdin, a seam for tests.
+var decryptStdinCheck = ensureInteractiveStdin
+
+func runDecryptWorkflowOnly(ctx context.Context, args *cli.Args, bootstrap *logging.BootstrapLogger, version string, useCLI bool) error {
+	configPath := args.ConfigPath
 	// Print version/banner header (mirrored later into the decrypt log via bootstrap.Flush).
 	bootstrap.Println("===========================================")
 	bootstrap.Println("  ProxSave")
@@ -27,7 +32,7 @@ func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *l
 		return err
 	}
 
-	if err := ensureInteractiveStdin(); err != nil {
+	if err := decryptStdinCheck(); err != nil {
 		return err
 	}
 
@@ -39,7 +44,9 @@ func runDecryptWorkflowOnly(ctx context.Context, configPath string, bootstrap *l
 
 	_ = os.Setenv("BASE_DIR", cfg.BaseDir)
 
-	logLevel := cfg.DebugLevel
+	// The backup and restore rule: DEBUG_LEVEL is the base and --log-level overrides it.
+	// Decrypt read DEBUG_LEVEL only, so --log-level was ignored here alone.
+	logLevel := resolveRunLogLevel(args, cfg, bootstrap)
 	logger, sessionLogPath, closeSessionLog, err := logging.StartSessionLogger("decrypt", logLevel, cfg.UseColor)
 	if err != nil {
 		logger = logging.New(logLevel, cfg.UseColor)
