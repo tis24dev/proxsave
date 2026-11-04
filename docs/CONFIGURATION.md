@@ -317,7 +317,7 @@ own environment, and a name neither defines is replaced by nothing, silently. `$
 `$`. `$@`, `$*`, `$!`, `$?`, `$-`, `$0` to `$9` and a `${` with no closing brace are consumed the
 same way as an unknown name. Only a `$` at the end of the value, or one before a character that
 is neither a letter, a digit, an underscore nor one of those, survives. Write `$$` where the path
-really contains a `$`.
+really contains a `$`. An interpreted script sees its own name as `/proc/self/fd/3`, not as the configured path: `$0`, `BASH_SOURCE`, Python's `__file__` and Perl's `$FindBin::Bin` all carry it, so `dirname "$0"` points at `/proc/self/fd`. To find files next to the script, resolve it first: `readlink -f "$0"`, `os.path.realpath(__file__)` or `$FindBin::RealBin`.
 
 These scripts run only under the daemon, never under a manual `proxsave --backup` or
 a cron-mode run. Their output is discarded and their exit status does not change the
