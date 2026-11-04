@@ -45,6 +45,25 @@ type OptimizationConfig struct {
 	EnableDeduplication       bool
 	EnablePrefilter           bool
 	PrefilterMaxFileSizeBytes int64
+	// ExcludePatterns are the run's archive exclusions (see dedupManifestExcluded).
+	ExcludePatterns []string
+}
+
+// dedupManifestExcluded returns the exclusion pattern that would keep the dedup
+// manifest, or a directory above it, out of the archive, "" when none does. The
+// archiver drops a matching path silently, so an operator pattern such as *.json or
+// /var/lib/** shipped the dedup symlinks without the manifest that turns them back
+// into files on restore: the duplicates came back as links, or dangling ones.
+func dedupManifestExcluded(root string, patterns []string) string {
+	if len(patterns) == 0 {
+		return ""
+	}
+	for rel := DedupManifestRelPath; rel != "." && rel != "/"; rel = filepath.Dir(rel) {
+		if excluded, pattern := FindExcludeMatch(patterns, filepath.Join(root, rel), root, ""); excluded {
+			return pattern
+		}
+	}
+	return ""
 }
 
 // Enabled returns true if at least one optimization is active.
@@ -73,6 +92,12 @@ func ApplyOptimizations(ctx context.Context, logger *logging.Logger, root string
 	logger.Info("Running backup optimizations (dedup=%v prefilter=%v)",
 		cfg.EnableDeduplication, cfg.EnablePrefilter)
 
+	if cfg.EnableDeduplication {
+		if pattern := dedupManifestExcluded(root, cfg.ExcludePatterns); pattern != "" {
+			logger.Info("Deduplication skipped: the dedup manifest %s matches exclusion pattern %s", DedupManifestRelPath, pattern)
+			cfg.EnableDeduplication = false
+		}
+	}
 	if cfg.EnableDeduplication {
 		logger.Debug("Starting deduplication stage")
 		dups, reclaimed, err := deduplicateFiles(ctx, logger, root)
