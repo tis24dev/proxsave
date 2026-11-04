@@ -628,9 +628,11 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 		// defence schedulerEngineDefault / healthcheckModeDefault / cronTimeDefault
 		// already apply to their keys; this one was missed.
 		//
-		// CLOUD_LOG_PATH is deliberately NOT cleared: "/proxsave/log" is a real path
-		// inside whatever remote is chosen, listed by the template's own comment as an
-		// accepted form, so it is a usable default rather than a stand-in.
+		// CLOUD_LOG_PATH is deliberately NOT cleared: the template's "proxsave/log" is a
+		// real path inside whatever remote is chosen, so it is a usable default rather
+		// than a stand-in. It has no leading "/": unlike CLOUD_REMOTE_PATH that one is
+		// kept, and on sftp/ftp it put the logs at the server root, away from the backups
+		// in the login home.
 		prefill.CloudRemote = ""
 	}
 
