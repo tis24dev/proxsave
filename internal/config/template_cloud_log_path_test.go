@@ -11,7 +11,7 @@ import (
 // sftp or ftp remote the logs went to the server root, away from the backups, and a
 // non-root login could not write there. The default is now relative.
 func TestTemplateCloudLogPathIsRelative(t *testing.T) {
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		if value, ok := strings.CutPrefix(line, "CLOUD_LOG_PATH="); ok {
 			value = strings.TrimSpace(strings.SplitN(value, "#", 2)[0])
 			if value != "proxsave/log" {
