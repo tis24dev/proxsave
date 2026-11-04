@@ -597,7 +597,7 @@ When `SET_BACKUP_PERMISSIONS=true`, the system applies Bash-compatible ownership
 - Migration from legacy Bash version
 - Multi-user environments requiring specific ownership
 - Shared backup storage with group access
-- POSIX-capable NFS mounts requiring specific ownership
+- POSIX-capable NFS and CephFS mounts requiring specific ownership
 
 **Example**:
 ```bash

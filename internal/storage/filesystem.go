@@ -393,6 +393,13 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 // parseFilesystemType converts a filesystem type string to FilesystemType
 func parseFilesystemType(fsTypeStr string) FilesystemType {
 	fsTypeStr = strings.ToLower(fsTypeStr)
+	// CephFS had no case: the kernel client ("ceph") fell to unknown and ceph-fuse to
+	// the FUSE rule, both "no ownership", so backup permissions were never applied on a
+	// common PVE destination that takes POSIX ownership.
+	switch fsTypeStr {
+	case "ceph", "fuse.ceph-fuse", "fuse.ceph":
+		return FilesystemCeph
+	}
 	if strings.HasPrefix(fsTypeStr, "fuse.") {
 		return FilesystemFUSE
 	}
