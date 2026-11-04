@@ -854,7 +854,7 @@ ProxSave supports both "new style" (path-only) and "legacy style" (`remote:path`
 - `CLOUD_REMOTE_PATH` should be a **path inside the remote** (no remote prefix). Use **no trailing slash**. A leading `/` is accepted
   and dropped: the path is always relative to the remote's root, which for an `sftp` remote is the login user's home directory.
   For a folder on this host, set `CLOUD_REMOTE` to its absolute path instead (for example `CLOUD_REMOTE=/mnt/backup`).
-- `CLOUD_LOG_PATH` should be a **folder path** for logs. When logs are stored on the **same remote**, prefer **path-only** here too (no remote prefix). Use `otherremote:/path` only if logs must go to a different remote than `CLOUD_REMOTE`.
+- `CLOUD_LOG_PATH` should be a **folder path** for logs. When logs are stored on the **same remote**, prefer **path-only** here too (no remote prefix). Use `otherremote:/path` only if logs must go to a different remote than `CLOUD_REMOTE`. Unlike `CLOUD_REMOTE_PATH`, a leading `/` is kept: on an `sftp` or `ftp` remote `/proxsave/log` is an absolute path on the server, not under the login user's home directory.
 
 **Examples (same remote):**
 ```bash

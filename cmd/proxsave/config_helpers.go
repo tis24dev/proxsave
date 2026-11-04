@@ -39,7 +39,7 @@ func ensureConfigExists(path string, logger configStatusLogger) error {
 
 	// No automatic migration or template creation: require explicit user action.
 	logger.Warning("Configuration file not found: %s", path)
-	logger.Warning("Run 'proxsave --install' (alias: proxmox-backup --install) to create a new configuration")
+	logger.Warning("Run 'proxsave --install' to create a new configuration")
 	return fmt.Errorf("configuration file is required to continue")
 }
 

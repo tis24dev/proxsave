@@ -109,6 +109,7 @@ const (
 	scheduleAdoptedOutcome      = theme.SymbolSuccess + " Backup schedule: adopted from cron entry"
 	scheduleWriteFailedOutcome  = theme.SymbolWarning + " Backup schedule: not adopted from cron entry"
 	scheduleWriteFailedWhy      = "backup.env could not be written"
+	scheduleReadFailedWhy       = "backup.env could not be read"
 	cronRemovalHeader           = "Removing proxsave cron entry..."
 	cronRemovedOutcome          = theme.SymbolSuccess + " Proxsave cron entry: removed"
 	cronNotRemovedOutcome       = theme.SymbolWarning + " Proxsave cron entry: not removed, remove it by hand to avoid a double backup"
@@ -756,9 +757,17 @@ func adoptSchedulerTimeForDaemon(configPath string, lines []string, bootstrap *l
 	if !reading.Found {
 		return
 	}
-	data, err := safefs.ReadFileUnderRoot(configPath)
+	data, err := safefs.ReadFileUnderRoot(resolveConfigFileLink(configPath))
 	if err != nil {
-		logBootstrapDebug(bootstrap, "schedule adopt: config unreadable file=%s error=%v, nothing adopted", configPath, err)
+		// The cron line is removed after this either way, so a schedule that cannot be
+		// adopted is the same WARNING as one that cannot be written.
+		logScheduleLines(bootstrap, scheduleBlock{
+			Header:  scheduleAdoptHeader,
+			Debug:   append(reading.debugLines(), fmt.Sprintf("schedule adopt: config unreadable file=%s error=%v, nothing adopted", configPath, err)),
+			Why:     scheduleReadFailedWhy,
+			Outcome: scheduleWriteFailedOutcome,
+			Warn:    true,
+		}.lines())
 		return
 	}
 	prefill := installer.DeriveInstallWizardPrefill(string(data))

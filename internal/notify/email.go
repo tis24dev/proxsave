@@ -615,12 +615,16 @@ func (e *EmailNotifier) detectRecipientPBS(ctx context.Context, targetUserID str
 		e.logger.Debug("Recipient auto-detection: resolved via proxmox-backup-manager for %s", targetUserID)
 		return email, nil
 	}
+	if errors.Is(err, errRecipientWithoutEmail) {
+		// The CLI read the user: the file holds no email either.
+		return "", fmt.Errorf("recipient auto-detection failed for %s (pbs): proxmox-backup-manager: %w", targetUserID, err)
+	}
 	if err != nil {
 		failures = append(failures, fmt.Sprintf("proxmox-backup-manager: %v", err))
 	}
 
 	// Last resort: parse /etc/proxmox-backup/user.cfg directly.
-	email, err = e.detectRecipientViaUserCfg(pbsUserCfgPath, targetUserID)
+	email, err = e.detectRecipientViaPBSUserCfg(pbsUserCfgPath, targetUserID)
 	if err == nil && strings.TrimSpace(email) != "" {
 		e.logger.Debug("Recipient auto-detection: resolved via user.cfg for %s (path=%s)", targetUserID, pbsUserCfgPath)
 		return email, nil
@@ -689,13 +693,51 @@ func (e *EmailNotifier) detectRecipientViaUserListCLI(ctx context.Context, cmdNa
 		}
 		email := strings.TrimSpace(u.Email)
 		if email == "" {
-			return "", fmt.Errorf("%s user exists but has no email configured (%s)", targetUserID, cmdName)
+			return "", fmt.Errorf("%s %w (%s)", targetUserID, errRecipientWithoutEmail, cmdName)
 		}
 		e.logger.Debug("Recipient auto-detection: %s returned an email for %s: %s", cmdName, targetUserID, redactEmail(email))
 		return email, nil
 	}
 
 	return "", fmt.Errorf("%s user not found in Proxmox configuration (%s)", targetUserID, cmdName)
+}
+
+// errRecipientWithoutEmail is a user that exists with no email address set.
+var errRecipientWithoutEmail = errors.New("user exists but has no email configured")
+
+// detectRecipientViaPBSUserCfg reads PBS's user.cfg, which is section-config, not PVE's
+// colon lines: a "user: <userid>" header, then indented "<key> <value>" lines. Read as
+// colon lines it never matched, so the email was never found there.
+func (e *EmailNotifier) detectRecipientViaPBSUserCfg(cfgPath string, targetUserID string) (string, error) {
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read %s: %w", cfgPath, err)
+	}
+	inTarget, found := false, false
+	for line := range strings.SplitSeq(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			kind, id, ok := strings.Cut(trimmed, ":")
+			inTarget = ok && strings.TrimSpace(kind) == "user" && strings.TrimSpace(id) == targetUserID
+			found = found || inTarget
+			continue
+		}
+		if !inTarget {
+			continue
+		}
+		if key, value, ok := strings.Cut(trimmed, " "); ok && key == "email" && strings.TrimSpace(value) != "" {
+			email := strings.TrimSpace(value)
+			e.logger.Debug("Recipient auto-detection: user.cfg contains an email for %s: %s", targetUserID, redactEmail(email))
+			return email, nil
+		}
+	}
+	if found {
+		return "", fmt.Errorf("%s %w (user.cfg)", targetUserID, errRecipientWithoutEmail)
+	}
+	return "", fmt.Errorf("%s user not found in %s", targetUserID, cfgPath)
 }
 
 func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID string) (string, error) {

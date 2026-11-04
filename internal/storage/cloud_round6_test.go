@@ -74,9 +74,10 @@ func TestCloudLocalStoreRecreatesTheDirectory(t *testing.T) {
 	}
 }
 
-// The log copied into a local directory gets 0640 only on a filesystem that takes
-// ownership (as for the backups), judged on the detection made at storage init: no
-// second detection, no ownership probe in the log directory.
+// The log copied into a local directory gets 0640, the Secondary log's mode, on a
+// filesystem with or without ownership (rclone's 0644 was left on one without), judged
+// on the detection made at storage init: no second detection, no ownership probe in
+// the log directory.
 func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cloud")
 	logDir := filepath.Join(dir, "proxsave", "log")
@@ -91,7 +92,7 @@ func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 		mode    os.FileMode
 	}{
 		{"ownership", &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}, true, 0o640},
-		{"no ownership", &FilesystemInfo{Type: FilesystemFAT32}, false, 0o644},
+		{"no ownership", &FilesystemInfo{Type: FilesystemFAT32}, true, 0o640},
 		{"no detection", nil, false, 0o644},
 	} {
 		if err := os.WriteFile(logFile, []byte("log"), 0o644); err != nil {

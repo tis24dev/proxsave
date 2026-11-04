@@ -17,7 +17,7 @@ const bootstrapTimeFormat = "2006-01-02 15:04:05"
 
 // consoleUseColor decides whether the bootstrap console prefix carries ANSI
 // color for the given target stream. The main Logger's color is config-driven
-// (USE_COLOR/DISABLE_COLORS), but the bootstrap runs before config is loaded,
+// (USE_COLOR), but the bootstrap runs before config is loaded,
 // so it falls back to the conventional rule: color only on a real terminal and
 // only when NO_COLOR is unset.
 func consoleUseColor(f *os.File) bool {

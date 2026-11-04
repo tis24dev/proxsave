@@ -91,9 +91,18 @@ func CollectPostInstallDisableSuggestions(ctx context.Context, execPath, configP
 	auditCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	output, _, err := postInstallAuditRunner(auditCtx, execPath, configPath)
+	output, exitCode, err := postInstallAuditRunner(auditCtx, execPath, configPath)
 	if err != nil {
 		return nil, err
+	}
+	// The runner swallows every exit status, so a dry-run killed by a cancel or by the
+	// 90 s bound, or one that stopped early (exit 16: a backup already running), read as
+	// a clean "no unused components". Exit 1 is the warnings the hints are parsed from.
+	if ctxErr := auditCtx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("post-install audit dry-run failed: %w", ctxErr)
+	}
+	if exitCode != 0 && exitCode != 1 {
+		return nil, fmt.Errorf("post-install audit dry-run failed: exit code %d", exitCode)
 	}
 
 	issueLines := extractIssueLinesFromProxsaveOutput(output)

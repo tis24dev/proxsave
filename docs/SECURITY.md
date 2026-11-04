@@ -217,7 +217,9 @@ ever widening.
 `identity/.server_identity`, the AGE recipient file, every `secure_account/*.json`, and
 the PBS token files when they exist: `secure_account/pbs_token`,
 `secure_account/pbs_api_token` and `/root/.pbs-token`),
-directories at `0700`/`0755`, all owned `root:root`. The exception is `BACKUP_PATH`,
+directories at `0700`/`0755`, all owned `root:root`. `SECONDARY_PATH` and
+`SECONDARY_LOG_PATH` are checked, and created when missing, only when
+`SECONDARY_ENABLED=true`. The exception is `BACKUP_PATH`,
 `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH`: their owner **and** mode checks are
 skipped entirely when `SET_BACKUP_PERMISSIONS=true` (see below) or when the path sits on a
 filesystem without Unix ownership. With `AUTO_FIX_PERMISSIONS`
@@ -300,8 +302,8 @@ a key added by a newer release appears with its default instead of staying absen
 | `SET_BACKUP_PERMISSIONS` | `false` | when true, the run chowns the backup/log dirs to `BACKUP_USER:BACKUP_GROUP`, opens the backup files to that group (`0640`), and the preflight then skips the dirs' owner **and mode** checks |
 
 `SET_BACKUP_PERMISSIONS` is not a passive opt-out. When it is true, every run walks
-`BACKUP_PATH`, `LOG_PATH`, `SECONDARY_PATH` and `SECONDARY_LOG_PATH` **recursively, before
-the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, sets directories to
+`BACKUP_PATH` and `LOG_PATH`, plus `SECONDARY_PATH` and `SECONDARY_LOG_PATH` when
+`SECONDARY_ENABLED=true`, **recursively, before the preflight**, sets every entry to `BACKUP_USER:BACKUP_GROUP`, sets directories to
 `0750` and the files of a backup set (the archive or bundle and its `.sha256`, `.metadata`
 and `.manifest.json`) to `0640`; every other file, logs included, keeps its mode. The
 storage step of the same run then gives the backup it has just written on `BACKUP_PATH`

@@ -14,8 +14,53 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/types"
 )
+
+// webhookMaxResponseBytes bounds the read of an endpoint's answer: only a DEBUG excerpt
+// of it is ever shown, and a proxy page or a misbehaving endpoint can be megabytes.
+const webhookMaxResponseBytes = 8 << 10
+
+// webhookBodyExcerpt is the endpoint's answer as the DEBUG line shows it: the endpoint's
+// own credentials masked first, then printable characters only, on one line, cut to
+// 200. Masked before the cut, which could split a credential so the logger would no
+// longer recognise it. Besides the auth values, the forms an error page can echo are
+// masked: the basic-auth header made from AUTH_USER and AUTH_PASS or from the URL's
+// userinfo, the userinfo itself, the path segments (decoded and as sent; a webhook URL
+// often carries its token there), the query pairs (decoded and raw, key and value) and
+// the header values (whole and word by word, for "Bearer <token>"). The logger never
+// masks values under 6 characters.
+func webhookBodyExcerpt(body []byte, endpoint config.WebhookEndpoint) string {
+	auth := endpoint.Auth
+	secrets := []string{endpoint.URL, auth.Token, auth.Pass, auth.Secret}
+	if auth.Pass != "" {
+		secrets = append(secrets, base64.StdEncoding.EncodeToString([]byte(auth.User+":"+auth.Pass)))
+	}
+	if u, err := url.Parse(endpoint.URL); err == nil {
+		if u.User != nil {
+			password, _ := u.User.Password()
+			secrets = append(secrets, u.User.Username(), password, u.User.String(),
+				base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+password)))
+		}
+		secrets = append(secrets, u.Path, u.EscapedPath(), u.RawQuery)
+		secrets = append(secrets, strings.Split(u.Path, "/")...)
+		secrets = append(secrets, strings.Split(u.EscapedPath(), "/")...)
+		for _, values := range u.Query() {
+			secrets = append(secrets, values...)
+		}
+		for _, pair := range strings.FieldsFunc(u.RawQuery, func(r rune) bool { return r == '&' || r == ';' }) {
+			key, value, _ := strings.Cut(pair, "=")
+			secrets = append(secrets, pair, key, value)
+		}
+	}
+	for _, value := range endpoint.Headers {
+		secrets = append(secrets, value)
+		secrets = append(secrets, strings.Fields(value)...)
+	}
+	masked := logging.RedactSecrets(string(body), secrets...)
+	return (&serverbot.Response{Body: []byte(masked)}).Snippet(200)
+}
 
 // WebhookNotifier sends notifications to configured webhook endpoints
 type WebhookNotifier struct {
@@ -390,7 +435,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 		// Read response body
 		w.logger.Debug("Reading response body...")
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, webhookMaxResponseBytes))
 		closeErr := resp.Body.Close()
 
 		if err != nil {
@@ -409,11 +454,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 		w.logger.Debug("Received HTTP %d in %dms", resp.StatusCode, requestDuration.Milliseconds())
 		if len(body) > 0 {
-			if len(body) > 500 {
-				w.logger.Debug("Response body (%d bytes, truncated): %s...", len(body), string(body[:500]))
-			} else {
-				w.logger.Debug("Response body (%d bytes): %s", len(body), string(body))
-			}
+			w.logger.Debug("Response body (%d bytes read): %s", len(body), webhookBodyExcerpt(body, endpoint))
 		} else {
 			w.logger.Debug("Response body: empty")
 		}
@@ -428,8 +469,8 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 		case resp.StatusCode == 400:
 			// Bad request - don't retry
-			w.logger.Error("❌ Bad request (HTTP 400): %s", string(body))
-			return fmt.Errorf("bad request (HTTP 400): %s", string(body))
+			w.logger.Error("❌ Bad request (HTTP 400)")
+			return fmt.Errorf("bad request (HTTP 400)")
 
 		case resp.StatusCode == 401:
 			// Authentication failed - don't retry
@@ -438,8 +479,8 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 		case resp.StatusCode == 403:
 			// Forbidden - don't retry
-			w.logger.Error("❌ Forbidden (HTTP 403): %s", string(body))
-			return fmt.Errorf("forbidden (HTTP 403): %s", string(body))
+			w.logger.Error("❌ Forbidden (HTTP 403)")
+			return fmt.Errorf("forbidden (HTTP 403)")
 
 		case resp.StatusCode == 404:
 			// Not found - don't retry
@@ -448,7 +489,7 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 		case resp.StatusCode == 429:
 			// Rate limit - retry with longer delay
-			w.logger.Warning("⚠️ Rate limited (HTTP 429): %s", string(body))
+			w.logger.Warning("⚠️ Rate limited (HTTP 429), attempt %d/%d", attempt+1, maxRetries+1)
 			if attempt < maxRetries {
 				w.logger.Debug("Waiting 10 seconds before retry due to rate limiting...")
 				if err := sleepWithContext(ctx, 10*time.Second); err != nil {
@@ -460,14 +501,14 @@ func (w *WebhookNotifier) sendToEndpoint(ctx context.Context, endpoint config.We
 
 		case resp.StatusCode >= 500:
 			// Server error - retry
-			w.logger.Warning("⚠️ Server error (HTTP %d), will retry: %s", resp.StatusCode, string(body))
-			lastErr = fmt.Errorf("server error (HTTP %d): %s", resp.StatusCode, string(body))
+			w.logger.Warning("⚠️ Server error (HTTP %d), attempt %d/%d", resp.StatusCode, attempt+1, maxRetries+1)
+			lastErr = fmt.Errorf("server error (HTTP %d)", resp.StatusCode)
 			continue
 
 		default:
 			// Unexpected status - retry
-			w.logger.Warning("⚠️ Unexpected status (HTTP %d): %s", resp.StatusCode, string(body))
-			lastErr = fmt.Errorf("unexpected status (HTTP %d): %s", resp.StatusCode, string(body))
+			w.logger.Warning("⚠️ Unexpected status (HTTP %d), attempt %d/%d", resp.StatusCode, attempt+1, maxRetries+1)
+			lastErr = fmt.Errorf("unexpected status (HTTP %d)", resp.StatusCode)
 			continue
 		}
 	}

@@ -135,7 +135,11 @@ func TestFilesystemDetectorGetMountPoint_PicksProcForProcPaths(t *testing.T) {
 		t.Skip("this test depends on /proc mounts")
 	}
 	detector := NewFilesystemDetector(newTestLogger())
-	mp, err := detector.getMountPoint("/proc/self")
+	fi, err := os.Stat("/proc/self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, _, err := detector.getMountPoint(context.Background(), "/proc/self", fi)
 	if err != nil {
 		t.Fatalf("getMountPoint error: %v", err)
 	}

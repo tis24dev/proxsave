@@ -300,7 +300,7 @@ func (o *Orchestrator) collectBackupData(run *backupRunContext, workspace *backu
 		return err
 	}
 
-	optResult, err := o.applyBackupOptimizations(run.ctx, workspace.tempDir)
+	optResult, err := o.applyBackupOptimizations(run.ctx, workspace.tempDir, run.collectorConfig.ExcludePatterns)
 	if err != nil {
 		return err
 	}

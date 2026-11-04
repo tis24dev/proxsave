@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -720,11 +722,35 @@ func maybeAutoMigrateDaemon(ctx context.Context, configPath, baseDir, execToken 
 	logBootstrapInfo(bootstrap, "Daemon mode enabled: %s is active. %s", daemonUnitName, cronRemovalClause(cronOutcome))
 }
 
+// resolveConfigFileLink returns the file a symlinked backup.env points at, or path
+// itself. The confined read and the atomic write root at the parent directory and refuse
+// a final component that is an absolute or escaping symlink ("path escapes from
+// parent"), while the loader and the upgrade merge follow it: on such a link the daemon
+// switch removed the cron line and recorded nothing. Rooting at the target's parent
+// keeps the confinement, as resolveSystemCronPath does for /etc/cron.d. A path that is
+// not a symlink, or whose target is not a regular file, is returned unchanged.
+func resolveConfigFileLink(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	if target, err := os.Stat(resolved); err != nil || !target.Mode().IsRegular() {
+		return path
+	}
+	return resolved
+}
+
 // setBackupEnvKeys reads backup.env, applies the given key=value edits (replacing
 // or appending each), and writes it back atomically. utils.SetEnvValue preserves
 // inline comments and ordering.
 func setBackupEnvKeys(configPath string, kv map[string]string) error {
-	// Operator-configured path (same trust level as the install/upgrade writers).
+	// Operator-configured path (same trust level as the install/upgrade writers, which
+	// follow a symlinked backup.env too).
+	configPath = resolveConfigFileLink(configPath)
 	data, err := safefs.ReadFileUnderRoot(configPath)
 	if err != nil {
 		return err

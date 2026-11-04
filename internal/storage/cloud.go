@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -75,6 +76,8 @@ type CloudStorage struct {
 	parallelVerify bool
 	verifyChecksum bool
 	verifyDownload bool
+	// flagSecrets are the RCLONE_FLAGS values, masked in the log (rcloneFlagSecrets).
+	flagSecrets []string
 	// runCommand runs one rclone call (defaultRunCommand); execCommand, when set,
 	// replaces it with a test fake that answers on one stream, read as stdout.
 	runCommand   func(ctx context.Context, name string, args ...string) (rcloneOutput, error)
@@ -225,25 +228,52 @@ func (c *CloudStorage) ensureLocalDir(ctx context.Context) error {
 }
 
 // SetLocalLogMode gives a log rclone copied into a local CLOUD_REMOTE directory the mode
-// the Secondary log copy creates (0640, owner unchanged), on a filesystem that takes
-// ownership, like the backups. fsInfo is what the storage initialization detected for
+// the Secondary log copy creates (0640, owner unchanged), on a filesystem without
+// ownership too: the chmod needs no ownership, and rclone's 0644 left the log readable
+// by every user while the Secondary copy on the same mount was 0640. fsInfo is what the storage initialization detected for
 // the CLOUD_REMOTE directory: it is reused, nothing is detected (or probed) again here.
 // applied is false when there is nothing to set (the remote form, a remote destination,
-// no detection, or a filesystem without ownership).
+// or no detection).
 func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsInfo *FilesystemInfo) (applied bool, err error) {
 	if c == nil || c.localDir == "" || !filepath.IsAbs(logFile) {
 		return false, nil
 	}
-	if fsInfo == nil || !fsInfo.SupportsOwnership {
-		c.logger.Debug("Cloud log copy: mode of %s left as written (ownership not supported or filesystem unknown at storage init: %+v)", logFile, fsInfo)
+	if fsInfo == nil {
+		c.logger.Debug("Cloud log copy: mode of %s left as written (filesystem unknown at storage init)", logFile)
 		return false, nil
 	}
 	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s, detected at storage init)", logFile, fsInfo.Type)
-	if err := safefs.Chmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
+	// Lchmod: the directory can be a share other hosts write to, and a symlink swapped
+	// in for the log must not redirect a root chmod to another file.
+	if err := safefs.Lchmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
 		c.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", logFile, err)
 		return false, err
 	}
 	return true, nil
+}
+
+// setLocalModesFromSource gives each file of the backup set copied to destFile the mode
+// of the same file next to sourceFile, 0600 when that mode cannot be read, so a copy is
+// never left at rclone's 0644. The chmod refuses a symlink: the directory can be a share
+// other hosts write to. A failure stays at DEBUG, as on the Secondary.
+func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, destFile string) {
+	timeout := c.fsIoTimeout()
+	for _, dest := range buildBackupCandidatePaths(destFile, true) {
+		if _, err := safefs.Stat(ctx, dest, timeout); err != nil {
+			continue
+		}
+		src := filepath.Join(filepath.Dir(sourceFile), filepath.Base(dest))
+		mode := os.FileMode(0o600)
+		if srcInfo, err := safefs.Stat(ctx, src, timeout); err == nil {
+			mode = srcInfo.Mode().Perm()
+		} else {
+			c.logger.Debug("Cloud Storage: permissions - no source mode for %s, using %o: %v", filepath.Base(dest), mode, err)
+		}
+		c.logger.Debug("Cloud Storage: permissions - owner left as is for %s (filesystem without ownership), mode %o from the source", filepath.Base(dest), mode)
+		if err := safefs.Lchmod(ctx, dest, mode, timeout); err != nil {
+			c.logger.Debug("Cloud Storage: permissions - cannot set the mode of %s: %v", filepath.Base(dest), err)
+		}
+	}
 }
 
 // DetectionFailure is why the last detection of the local directory fell back to an
@@ -263,12 +293,15 @@ func (c *CloudStorage) NotCheckedInDryRun() bool {
 // CLOUD_REMOTE directory the owner and mode the Secondary gives its copies
 // (setBackupSetPermissions: 0600 root:root, or 0640 BACKUP_USER:BACKUP_GROUP with
 // SET_BACKUP_PERMISSIONS). rclone writes them 0644. Nothing happens for the remote
-// form, or on a filesystem without ownership.
-func (c *CloudStorage) setLocalPermissions(ctx context.Context, destFile string, issues *storeIssueRecorder) {
-	if c.localDir == "" || c.localFS == nil || !c.localFS.SupportsOwnership {
-		if c.localDir != "" {
-			c.logger.Debug("Cloud Storage: permissions - skipped for %s (filesystem without ownership)", filepath.Base(destFile))
-		}
+// form. On a filesystem without ownership the owner is left alone but each file still
+// takes its source file's mode, as the Secondary's copy does there: the 0644 left an
+// archive, unencrypted by default, readable by every user of the share.
+func (c *CloudStorage) setLocalPermissions(ctx context.Context, sourceFile, destFile string, issues *storeIssueRecorder) {
+	if c.localDir == "" || c.localFS == nil {
+		return
+	}
+	if !c.localFS.SupportsOwnership {
+		c.setLocalModesFromSource(ctx, sourceFile, destFile)
 		return
 	}
 	detector := c.fsDetector
@@ -488,6 +521,12 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 	host := resolveRetentionHostname()
 	serverID := types.NormalizeServerID(cfg.ServerID)
 	logRetentionServerIdentity(logger, "Cloud storage", serverID)
+	flagSecrets := rcloneFlagSecrets(cfg.RcloneFlags)
+	if logger != nil {
+		for _, secret := range flagSecrets {
+			logger.RegisterSecret(secret)
+		}
+	}
 	return &CloudStorage{
 		config:         cfg,
 		logger:         logger,
@@ -504,11 +543,38 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		parallelVerify: cfg.CloudParallelVerify,
 		verifyChecksum: cfg.CloudVerifyChecksum,
 		verifyDownload: cfg.CloudVerifyDownload,
+		flagSecrets:    flagSecrets,
 		runCommand:     defaultRunCommand,
 		lookPath:       exec.LookPath,
 		waitForRetry:   currentCloudRetryWait(),
 		sleep:          time.Sleep,
 	}, nil
+}
+
+// rcloneFlagSecrets lists what NewCloudStorage masks in every later log line: a flag in
+// RCLONE_FLAGS may carry a backend credential, and the rclone argv is logged at DEBUG,
+// and echoed by rclone itself into its stderr (so into errors) when the flags hold -vv.
+// A value is the text after '=' in a --flag=value token, or any token that is not a
+// --flag, so "--webdav-pass -x..." is covered too. rclone echoes its argv with %q, so a
+// value holding a quote, a backslash or a control byte is listed in that form as well.
+// The logger skips values under 6 characters, so the shipped flags (--checkers=4,
+// --stats=0, ...) stay readable.
+func rcloneFlagSecrets(flags []string) []string {
+	var secrets []string
+	for _, tok := range flags {
+		value := tok
+		if strings.HasPrefix(tok, "--") {
+			var ok bool
+			if _, value, ok = strings.Cut(tok, "="); !ok {
+				continue
+			}
+		}
+		secrets = append(secrets, value)
+		if quoted := strconv.Quote(value); quoted[1:len(quoted)-1] != value {
+			secrets = append(secrets, quoted[1:len(quoted)-1])
+		}
+	}
+	return secrets
 }
 
 // Name returns the storage backend name
@@ -1193,7 +1259,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 			// The archive is in the local directory: like the Secondary, the sidecar
 			// failure comes first, then owner and mode of what was copied.
 			issues.add(StoreIssueSidecarNotSaved)
-			c.setLocalPermissions(ctx, remoteFile, issues)
+			c.setLocalPermissions(ctx, backupFile, remoteFile, issues)
 		}
 		if primaryFailed && !errors.As(err, &verifyErr) {
 			c.removeFailedUpload(ctx, filename, remoteFile)
@@ -1211,7 +1277,7 @@ func (c *CloudStorage) Store(ctx context.Context, backupFile string, metadata *t
 
 	c.logger.Debug("Cloud storage: upload and verification completed for %s", filename)
 	c.logger.Debug("✓ Cloud Storage: File uploaded")
-	c.setLocalPermissions(ctx, remoteFile, issues)
+	c.setLocalPermissions(ctx, backupFile, remoteFile, issues)
 
 	if count := c.countBackups(ctx); count >= 0 {
 		c.logger.Debug("Cloud storage: current backups detected after upload: %d", count)
@@ -1670,7 +1736,9 @@ func (c *CloudStorage) rcloneCopy(ctx context.Context, localFile, remoteFile str
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("rclone operation timeout")
 		}
-		transcript := output.transcript()
+		// Masked before the cut: the kept tail can start inside an RCLONE_FLAGS value
+		// echoed by rclone -vv, and the logger would not recognise the rest of it.
+		transcript := []byte(logging.RedactSecrets(string(output.transcript()), c.flagSecrets...))
 		return &rcloneCommandError{
 			msg:   fmt.Sprintf("rclone copy failed: %v: %s", err, strings.TrimSpace(string(truncateRcloneOutput(transcript)))),
 			short: rcloneCause(string(transcript), err),

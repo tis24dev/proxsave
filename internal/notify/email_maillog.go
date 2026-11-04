@@ -199,19 +199,28 @@ type mailQueueEntry struct {
 	line string
 }
 
-// parseMailQueue reads mailq output: the count checkMailQueue reports (lines with an
-// "@", the header and footer left out) and the entries with a line that names the
-// recipient, in queue order, each once.
+// parseMailQueue reads mailq output: the count checkMailQueue reports and the entries
+// with a line that names the recipient, in queue order, each once. The count is one per
+// queue-ID line, the start of each message: counting every line with an "@" counted the
+// sender and each recipient, about twice the real number on postfix. Output with no
+// queue-ID line (exim prints the age first) keeps that line count.
 func parseMailQueue(output, recipient string) (count int, entries []mailQueueEntry) {
 	if strings.Contains(output, "Mail queue is empty") {
 		return 0, nil
 	}
 	lowerRecipient := strings.ToLower(strings.TrimSpace(recipient))
 	var currentID string
+	idLines, addressLines := 0, 0
 	seen := map[string]bool{}
+	defer func() {
+		count = addressLines
+		if idLines > 0 {
+			count = idLines
+		}
+	}()
 	for line := range strings.SplitSeq(output, "\n") {
 		if len(line) > 10 && strings.Contains(line, "@") && !strings.Contains(line, "Mail queue") && !strings.Contains(line, "Total requests") {
-			count++
+			addressLines++
 		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
@@ -220,6 +229,7 @@ func parseMailQueue(output, recipient string) (count int, entries []mailQueueEnt
 		fields := strings.Fields(trimmed)
 		if len(fields) > 0 && mailQueueIDLineRegex.MatchString(fields[0]) {
 			currentID = strings.TrimSuffix(strings.TrimSuffix(fields[0], "*"), "!")
+			idLines++
 			continue
 		}
 		if currentID != "" && lowerRecipient != "" && !seen[currentID] && strings.Contains(strings.ToLower(trimmed), lowerRecipient) {

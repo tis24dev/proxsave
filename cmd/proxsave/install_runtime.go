@@ -96,6 +96,18 @@ func newInstallRuntimePreparation(configPath, baseDir string, execInfo ExecInfo,
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			// The cron write reports its failures only as WARNINGs, so the crontab is read
+			// back: removing the daemon over a cron line that is not there left the host
+			// with no scheduler at all, under "Installation completed".
+			present, verified := canonicalCronLinePresent(ctx)
+			logging.Debug("install: cron entry after the write: present=%v verified=%v", present, verified)
+			if !present || !verified {
+				if daemonUnitInstalled() {
+					logging.Warning("daemon: the cron entry could not be written, so the daemon service was left in place and keeps scheduling the backup.")
+					return errors.New("the cron entry could not be written")
+				}
+				return errors.New("the cron entry could not be written, so no scheduler is installed")
+			}
 			if daemonUnitInstalled() {
 				if err := removeDaemonService(ctx, bootstrap); err != nil {
 					logging.Warning("daemon: a previous daemon unit could not be removed (possible double execution): %v", err)

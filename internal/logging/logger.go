@@ -54,8 +54,14 @@ type Logger struct {
 	// only after logSinkTimeoutStrikes strikes so a single transient stall does not
 	// permanently truncate the on-disk log. A successful write resets it. Guarded by mu.
 	consecutiveLogTimeouts int
-	warningCount           int64
-	errorCount             int64
+	// fileWriteGap counts the lines lost to write errors since the last one that landed,
+	// fileWriteGapCause is the error that opened the gap, fileIncomplete stays true once
+	// any line of the run missed the file (see writeOnceLocked). Guarded by mu.
+	fileWriteGap      int
+	fileWriteGapCause error
+	fileIncomplete    bool
+	warningCount      int64
+	errorCount        int64
 	// notifyCount tracks NOTIFY-ERR lines: notification/communication failures that
 	// display as errors but are warning-weight for the run status (never escalate the
 	// exit code / gauge to error). Kept separate from errorCount so a notify failure
@@ -192,6 +198,7 @@ func (l *Logger) OpenLogFile(logPath string) error {
 
 	l.logFile = file
 	l.fileSinkDisabled = false
+	l.fileWriteGap, l.fileWriteGapCause, l.fileIncomplete = 0, nil, false
 	// A fresh mount must start with a clean strike count: OpenLogFile is the only
 	// re-enable path, so any stale count from a prior disable would otherwise let
 	// a single new timeout re-latch the sink and defeat the N-strike protection.
@@ -220,24 +227,71 @@ func (l *Logger) openFileBounded(logPath string) (*os.File, error) {
 // non-timeout outcome resets the streak. Caller MUST hold l.mu and have checked
 // logFile != nil && !fileSinkDisabled.
 func (l *Logger) writeFileLocked(line string) {
-	f := l.logFile // local: a disable nils l.logFile, the abandoned goroutine keeps f
-	if l.ioTimeout <= 0 {
-		_, _ = fileWrite(f, line) // opt-out / legacy: unbounded
-		return
+	if l.fileWriteGap > 0 {
+		// The first line that lands after lost ones says how many are missing above it.
+		marker := fmt.Sprintf("[%s] %-8s log file writes failed (%v); %d lines missing from the on-disk log here\n",
+			time.Now().Format(l.timeFormat), types.LogLevelWarning.String(), l.fileWriteGapCause, l.fileWriteGap)
+		if !l.writeOnceLocked(marker) {
+			l.fileWriteGap++ // this line is lost too
+			return
+		}
+		l.fileWriteGap = 0
 	}
-	wt := min(l.ioTimeout, logWriteTimeoutCap)
-	_, err := safefs.Run(context.Background(), "logwrite", f.Name(), wt, func() (int, error) {
-		return fileWrite(f, line)
-	})
+	if !l.writeOnceLocked(line) {
+		l.fileWriteGap++
+	}
+}
+
+// writeOnceLocked writes s to the log file and reports whether it landed. A timeout is a
+// strike (see writeFileLocked) and is not a gap: the third one disables the sink with its
+// own marker. Any other error (disk full, EIO, a read-only remount) was dropped without a
+// word, so the run log - copied to the secondary and the cloud, attached to the email -
+// lost its WARNING and ERROR lines and the exit code computed from it read clean. The
+// first one of a series now says so on stdout, counted as a warning.
+func (l *Logger) writeOnceLocked(s string) bool {
+	f := l.logFile // local: a disable nils l.logFile, the abandoned goroutine keeps f
+	var err error
+	if l.ioTimeout <= 0 {
+		_, err = fileWrite(f, s) // opt-out / legacy: unbounded
+	} else {
+		wt := min(l.ioTimeout, logWriteTimeoutCap)
+		_, err = safefs.Run(context.Background(), "logwrite", f.Name(), wt, func() (int, error) {
+			return fileWrite(f, s)
+		})
+	}
 	if err != nil && errors.Is(err, safefs.ErrTimeout) {
 		l.consecutiveLogTimeouts++
+		l.fileIncomplete = true
 		if l.consecutiveLogTimeouts >= logSinkTimeoutStrikes {
 			l.disableFileSinkLocked(err)
 		}
-		return
+		return true // not a gap: the strikes and the disable marker account for it
 	}
 	// Any non-timeout outcome (a clean write or a non-timeout error) breaks the streak.
 	l.consecutiveLogTimeouts = 0
+	if err == nil {
+		return true
+	}
+	l.fileIncomplete = true
+	if l.fileWriteGap == 0 {
+		l.fileWriteGapCause = err
+		timestamp := time.Now().Format(l.timeFormat)
+		warn := fmt.Sprintf("log file write failed (%v); continuing on stdout, lines are missing from the on-disk log", err)
+		// stdout only - never route this back through the failing file sink.
+		_, _ = fmt.Fprintf(l.output, "[%s] %-8s %s\n", timestamp, types.LogLevelWarning.String(), warn)
+		l.warningCount++
+		l.issueLines = append(l.issueLines, fmt.Sprintf("[%s] %-8s %s", timestamp, types.LogLevelWarning.String(), warn))
+	}
+	return false
+}
+
+// FileIncomplete reports whether lines of this run never reached the log file (a write
+// error, a write timeout, or the sink disabled): the counts parsed back from that file
+// then miss them.
+func (l *Logger) FileIncomplete() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fileIncomplete || l.fileSinkDisabled
 }
 
 // disableFileSinkLocked turns the file sink off after a timed-out write so every

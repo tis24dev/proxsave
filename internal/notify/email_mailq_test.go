@@ -48,8 +48,9 @@ DEF456!  4321 Mon Jan  1 00:00:01 sender2@example.com
 	if err != nil {
 		t.Fatalf("checkMailQueue() error=%v", err)
 	}
-	if count != 4 {
-		t.Fatalf("checkMailQueue()=%d want 4", count)
+	// Two messages ("in 2 Requests"): one per queue-ID line, not per address line.
+	if count != 2 {
+		t.Fatalf("checkMailQueue()=%d want 2", count)
 	}
 }
 
@@ -72,8 +73,8 @@ DEF456!  4321 Mon Jan  1 00:00:01 sender2@example.com
 	if err != nil {
 		t.Fatalf("checkMailQueueFor() error=%v", err)
 	}
-	if count != 4 || len(entries) != 1 || entries[0].id != "ABC123" || entries[0].line != "admin@example.com" {
-		t.Fatalf("checkMailQueueFor() = %d, %+v; want 4 and ABC123 for admin@example.com", count, entries)
+	if count != 2 || len(entries) != 1 || entries[0].id != "ABC123" || entries[0].line != "admin@example.com" {
+		t.Fatalf("checkMailQueueFor() = %d, %+v; want 2 and ABC123 for admin@example.com", count, entries)
 	}
 }
 

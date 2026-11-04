@@ -44,7 +44,7 @@ type Config struct {
 	// same data the tview ScreenSpec carried. Optional.
 	ConfigPath string
 	BuildSig   string
-	// UseColor mirrors the USE_COLOR/DISABLE_COLORS config knobs. When
+	// UseColor mirrors the USE_COLOR config knob. When
 	// false the program renders monochrome (layout preserved).
 	UseColor bool
 

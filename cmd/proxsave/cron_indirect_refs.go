@@ -2076,8 +2076,9 @@ func resolveSystemCronPath(path string) string {
 //	MM HH DOM MON DOW USER COMMAND    ->  field 7 is the command
 //	@daily        USER COMMAND        ->  field 3 is the command
 //
-// Comments and environment assignments are rejected exactly as in the user format, so
-// a line like "MAILTO=root" is never mistaken for a command.
+// Comments and environment assignment lines are rejected exactly as in the user format,
+// so a line like "MAILTO=root" is never mistaken for a command, and an assignment in front
+// of the command is stepped over as there (cronCommandWordAt).
 func systemCronCommandToken(line string) string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -2088,15 +2089,9 @@ func systemCronCommandToken(line string) string {
 		return ""
 	}
 	if strings.HasPrefix(fields[0], "@") {
-		if len(fields) >= 3 {
-			return fields[2]
-		}
-		return ""
+		return cronCommandWordAt(fields, 2)
 	}
-	if len(fields) <= 6 {
-		return ""
-	}
-	return fields[6]
+	return cronCommandWordAt(fields, 6)
 }
 
 // warnIndirectProxsaveCronOnDaemonInstall reports, without touching anything, every

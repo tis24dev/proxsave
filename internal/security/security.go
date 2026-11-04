@@ -631,6 +631,10 @@ func (c *Checker) verifySecureAccountFiles(ctx context.Context) {
 }
 
 func (c *Checker) verifyDirectories(ctx context.Context) {
+	// A disabled secondary keeps its configured paths: checking them created the
+	// directories (on the root filesystem when the mount was absent) and chowned them
+	// root:root 0755 for a destination the backup does not use.
+	secondaryPath, secondaryLogPath := c.cfg.ActiveSecondaryPaths()
 	dirs := []struct {
 		path        string
 		perm        os.FileMode
@@ -638,8 +642,8 @@ func (c *Checker) verifyDirectories(ctx context.Context) {
 	}{
 		{c.cfg.BackupPath, 0o755, true},
 		{c.cfg.LogPath, 0o755, true},
-		{c.cfg.SecondaryPath, 0o755, true},
-		{c.cfg.SecondaryLogPath, 0o755, true},
+		{secondaryPath, 0o755, true},
+		{secondaryLogPath, 0o755, true},
 		{c.cfg.LockPath, 0o755, false},
 		{c.cfg.SecureAccount, 0o700, false},
 		{filepath.Join(c.cfg.BaseDir, "identity"), 0o700, false},
@@ -1009,11 +1013,12 @@ func (c *Checker) shouldSkipOwnershipChecks(path string) bool {
 	}
 
 	target := filepath.Clean(path)
+	secondaryPath, secondaryLogPath := c.cfg.ActiveSecondaryPaths()
 	paths := []string{
 		c.cfg.BackupPath,
 		c.cfg.LogPath,
-		c.cfg.SecondaryPath,
-		c.cfg.SecondaryLogPath,
+		secondaryPath,
+		secondaryLogPath,
 	}
 
 	for _, candidate := range paths {

@@ -35,6 +35,9 @@ const (
 	// Network filesystems (need testing)
 	FilesystemNFS  FilesystemType = "nfs"
 	FilesystemNFS4 FilesystemType = "nfs4"
+	// FilesystemCeph is CephFS, kernel client or ceph-fuse: POSIX ownership unless the
+	// client cap carries root_squash, so the network probe decides.
+	FilesystemCeph FilesystemType = "ceph"
 	FilesystemCIFS FilesystemType = "cifs"
 	FilesystemSMB  FilesystemType = "smb"
 
@@ -50,6 +53,8 @@ type FilesystemInfo struct {
 	IsNetworkFS       bool
 	MountPoint        string
 	Device            string
+	// LinkTarget is where Path resolves when a symlink is on the way, "" otherwise.
+	LinkTarget string
 }
 
 // BackupLocation represents a location where backups are stored
@@ -318,7 +323,7 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 	case FilesystemFAT32, FilesystemFAT, FilesystemExFAT,
 		FilesystemNTFS, FilesystemFUSE:
 		return false
-	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB:
+	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph:
 		// Network filesystems need runtime testing
 		return false
 	default:
@@ -329,7 +334,7 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 // IsNetworkFilesystem returns true if the filesystem is network-based
 func (f FilesystemType) IsNetworkFilesystem() bool {
 	switch f {
-	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB:
+	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph:
 		return true
 	default:
 		return false

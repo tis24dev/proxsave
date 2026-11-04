@@ -57,3 +57,17 @@ func abortInstallOnOptionalStep(ctx context.Context, bootstrap *logging.Bootstra
 	logBootstrapWarning(bootstrap, "%s aborted (interrupted); stopping the install before finalization", step)
 	return wrapInstallError(errInteractiveAborted)
 }
+
+// closedSessionIsAbort turns a step result into shell.ErrClosed when the session is
+// already closed, which on the TUI install means the operator pressed Ctrl+C: a step
+// that maps Ctrl+C to "skipped" (or to its task's context.Canceled) would otherwise let
+// the install run its finalization on a dead session.
+func closedSessionIsAbort(done <-chan struct{}, stepErr error, bootstrap *logging.BootstrapLogger) error {
+	select {
+	case <-done:
+		logging.DebugStepBootstrap(bootstrap, "install workflow (tui)", "session closed during the step (step err=%v)", stepErr)
+		return shell.ErrClosed
+	default:
+		return stepErr
+	}
+}

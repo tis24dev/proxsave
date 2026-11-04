@@ -31,6 +31,13 @@ func truncateTelegramRegistrationBody(body []byte, max int) string {
 	return text
 }
 
+// telegramRegistrationBodyError carries the server's answer into the status error,
+// which is logged at DEBUG: quoted and cut, because a proxy page in front of the bot
+// server can be kilobytes of HTML with control bytes that would split the line.
+func telegramRegistrationBodyError(body []byte) error {
+	return fmt.Errorf("%q", truncateTelegramRegistrationBody(body, 200))
+}
+
 // TelegramRegistrationStatus represents the result of the handshake with the centralized Telegram server.
 type TelegramRegistrationStatus struct {
 	Code    int
@@ -261,25 +268,25 @@ func checkTelegramRegistrationWithSecret(ctx context.Context, serverAPIHost, ser
 		return TelegramRegistrationStatus{Code: 200, Message: "200 - Relay provisioned (no Telegram chat)", LinkState: TelegramLinkStateRelayOnly}, secret
 	case 403:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 403 (bot not started / first contact)")
-		return TelegramRegistrationStatus{Code: 403, Message: "403 - Start the bot and send the Server ID", Error: fmt.Errorf("%s", body)}, ""
+		return TelegramRegistrationStatus{Code: 403, Message: "403 - Start the bot and send the Server ID", Error: telegramRegistrationBodyError(body)}, ""
 	case 409:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 409 (missing registration)")
-		return TelegramRegistrationStatus{Code: 409, Message: "409 - Registration missing on the bot", Error: fmt.Errorf("%s", body)}, ""
+		return TelegramRegistrationStatus{Code: 409, Message: "409 - Registration missing on the bot", Error: telegramRegistrationBodyError(body)}, ""
 	case 422:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 422 (invalid server ID)")
-		return TelegramRegistrationStatus{Code: 422, Message: "422 - Invalid Server ID", Error: fmt.Errorf("%s", body)}, ""
+		return TelegramRegistrationStatus{Code: 422, Message: "422 - Invalid Server ID", Error: telegramRegistrationBodyError(body)}, ""
 	case 426:
 		logTelegramRegistrationDebug(logger, "Telegram registration: status 426 (upgrade required)")
 		return TelegramRegistrationStatus{
 			Code:    426,
 			Message: "426 - Upgrade ProxSave to v0.28.0 or later to complete pairing",
-			Error:   fmt.Errorf("%s", body),
+			Error:   telegramRegistrationBodyError(body),
 		}, ""
 	default:
 		logTelegramRegistrationDebug(logger, "Telegram registration: unexpected status %d", resp.Status)
 		return TelegramRegistrationStatus{
 			Code:    resp.Status,
-			Message: fmt.Sprintf("%d - Unexpected response: %s", resp.Status, string(body)),
+			Message: fmt.Sprintf("%d - Unexpected response", resp.Status),
 			Error:   fmt.Errorf("unexpected status %d", resp.Status),
 		}, ""
 	}

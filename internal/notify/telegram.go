@@ -371,7 +371,8 @@ func (t *TelegramNotifier) fetchCentralizedCredentials(ctx context.Context) (str
 	case 422:
 		return "", "", fmt.Errorf("invalid SERVER_ID (HTTP 422)")
 	default:
-		return "", "", fmt.Errorf("unexpected status %d: %s", resp.Status, string(body))
+		t.logger.Debug("Telegram: get-chat-id answer (HTTP %d): %s", resp.Status, resp.Snippet(200))
+		return "", "", fmt.Errorf("unexpected status %d", resp.Status)
 	}
 }
 
@@ -627,8 +628,12 @@ func (t *TelegramNotifier) sendToTelegram(ctx context.Context, botToken, chatID,
 
 	// Check response
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("telegram api returned status %d: %s", resp.StatusCode, string(body))
+		// The answer goes to a DEBUG line only, read up to 8 KiB, token masked before
+		// the cut: a proxy page can be megabytes of multi-line HTML, and can echo the URL.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		masked := logging.RedactSecrets(string(body), botToken)
+		t.logger.Debug("Telegram: api answer (HTTP %d): %s", resp.StatusCode, (&serverbot.Response{Body: []byte(masked)}).Snippet(200))
+		return fmt.Errorf("telegram api returned status %d", resp.StatusCode)
 	}
 
 	return nil
