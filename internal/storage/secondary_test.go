@@ -1165,6 +1165,7 @@ func TestSecondaryStorage_Store_ModeSkippedOnFAT(t *testing.T) {
 	}{
 		{FilesystemFAT32, true},
 		{FilesystemFAT, true},
+		{FilesystemMSDOS, true},
 		{FilesystemExFAT, true},
 		{FilesystemCIFS, false},
 		{FilesystemNTFS, false},

@@ -109,6 +109,7 @@ func TestCloudLocalModesSkippedOnFAT(t *testing.T) {
 	}{
 		{FilesystemFAT32, true, 0o644},
 		{FilesystemFAT, true, 0o644},
+		{FilesystemMSDOS, true, 0o644},
 		{FilesystemExFAT, true, 0o644},
 		{FilesystemCIFS, false, 0o600},
 		{FilesystemNTFS, false, 0o600},

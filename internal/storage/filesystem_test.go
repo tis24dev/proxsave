@@ -54,8 +54,8 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 		{"fat32", FilesystemFAT32},
 		{"fat", FilesystemFAT},
 		{"fat16", FilesystemFAT},
-		{"msdos", FilesystemFAT},
-		{"MSDOS", FilesystemFAT},
+		{"msdos", FilesystemMSDOS},
+		{"MSDOS", FilesystemMSDOS},
 		{"exfat", FilesystemExFAT},
 		{"ntfs", FilesystemNTFS},
 		{"ntfs-3g", FilesystemNTFS},
@@ -78,18 +78,29 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 	}
 }
 
-// An msdos mount is FAT-family for every user of the type: no ownership, excluded
-// from chown/chmod, and no mode set on the Cloud and Secondary copies.
-func TestMsdosIsFATFamily(t *testing.T) {
-	fs := parseFilesystemType("msdos")
-	if !fs.hasNoUnixModes() {
-		t.Fatalf("msdos (%q) hasNoUnixModes() = false, want true", fs)
+// An msdos mount has its own type and behaves like fat for every user of the type: no
+// ownership, excluded from chown/chmod, and no mode set on the Cloud and Secondary copies.
+// vfat keeps its own type with the same behaviour.
+func TestMsdosBehavesLikeFAT(t *testing.T) {
+	if got := parseFilesystemType("msdos"); got != FilesystemMSDOS || string(got) != "msdos" {
+		t.Fatalf("parseFilesystemType(msdos) = %q, want %q", got, "msdos")
 	}
-	if !fs.ShouldAutoExclude() {
-		t.Fatalf("msdos (%q) ShouldAutoExclude() = false, want true", fs)
+	if got := parseFilesystemType("vfat"); got != FilesystemFAT32 || string(got) != "vfat" {
+		t.Fatalf("parseFilesystemType(vfat) = %q, want %q", got, "vfat")
 	}
-	if fs.SupportsUnixOwnership() || fs.IsNetworkFilesystem() {
-		t.Fatalf("msdos (%q): ownership=%v network=%v, want false false", fs, fs.SupportsUnixOwnership(), fs.IsNetworkFilesystem())
+	for _, fs := range []FilesystemType{FilesystemMSDOS, FilesystemFAT32} {
+		if got, want := fs.hasNoUnixModes(), FilesystemFAT.hasNoUnixModes(); got != want || !got {
+			t.Fatalf("%q hasNoUnixModes() = %v, want %v (as fat)", fs, got, want)
+		}
+		if got, want := fs.ShouldAutoExclude(), FilesystemFAT.ShouldAutoExclude(); got != want || !got {
+			t.Fatalf("%q ShouldAutoExclude() = %v, want %v (as fat)", fs, got, want)
+		}
+		if got, want := fs.SupportsUnixOwnership(), FilesystemFAT.SupportsUnixOwnership(); got != want || got {
+			t.Fatalf("%q SupportsUnixOwnership() = %v, want %v (as fat)", fs, got, want)
+		}
+		if got, want := fs.IsNetworkFilesystem(), FilesystemFAT.IsNetworkFilesystem(); got != want || got {
+			t.Fatalf("%q IsNetworkFilesystem() = %v, want %v (as fat)", fs, got, want)
+		}
 	}
 }
 
