@@ -260,12 +260,16 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsIn
 // setLocalModesFromSource gives each file of the backup set copied to destFile the mode
 // of the same file next to sourceFile, 0600 when that mode cannot be read, so a copy is
 // never left at rclone's 0644. The chmod refuses a symlink and stays inside the CLOUD_REMOTE
-// directory: the directory can be a share other hosts write to. A failure stays at DEBUG,
-// as on the Secondary.
-func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, destFile string) {
+// directory: the directory can be a share other hosts write to. A mode that cannot be set
+// is reported as the ownership branch reports it (logPermissionsFailure, then
+// StoreIssuePermissionsNotSet in issues).
+func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, destFile string, issues *storeIssueRecorder) {
 	timeout := c.fsIoTimeout()
 	for _, dest := range buildBackupCandidatePaths(destFile, true) {
 		if _, err := safefs.Stat(ctx, dest, timeout); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				c.logger.Debug("Cloud Storage: permissions - cannot read %s, mode not set: %v", filepath.Base(dest), err)
+			}
 			continue
 		}
 		src := filepath.Join(filepath.Dir(sourceFile), filepath.Base(dest))
@@ -278,6 +282,8 @@ func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, 
 		c.logger.Debug("Cloud Storage: permissions - owner left as is for %s (filesystem without ownership), mode %o from the source", filepath.Base(dest), mode)
 		if err := safefs.LchmodInRoot(ctx, c.localModeRoot(), dest, mode, timeout); err != nil {
 			c.logger.Debug("Cloud Storage: permissions - cannot set the mode of %s: %v", filepath.Base(dest), err)
+			logPermissionsFailure(c.logger, dest, err)
+			issues.add(StoreIssuePermissionsNotSet)
 		}
 	}
 }
@@ -316,7 +322,7 @@ func (c *CloudStorage) setLocalPermissions(ctx context.Context, sourceFile, dest
 		return
 	}
 	if !c.localFS.SupportsOwnership {
-		c.setLocalModesFromSource(ctx, sourceFile, destFile)
+		c.setLocalModesFromSource(ctx, sourceFile, destFile, issues)
 		return
 	}
 	detector := c.fsDetector

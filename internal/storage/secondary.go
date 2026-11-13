@@ -211,7 +211,17 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 	s.logger.Debug("Secondary Storage: Start copy...")
 	s.logger.Debug("Copying backup to secondary storage: %s -> %s", filepath.Base(sourceFile), s.basePath)
 
-	if err := s.copyFile(ctx, sourceFile, destFile); err != nil {
+	// Without ownership the mode copyFile mirrors from the source is the one each copy keeps:
+	// a copy whose mode could not be set is reported below, where the ownership branch
+	// reports its own.
+	type modeFailure struct {
+		path string
+		err  error
+	}
+	var modeFailures []modeFailure
+	modeFailed := func(path string, err error) { modeFailures = append(modeFailures, modeFailure{path, err}) }
+
+	if err := s.copyFile(ctx, sourceFile, destFile, modeFailed); err != nil {
 		s.logger.Debug("Secondary Storage: copy - failed for %s: %v", filepath.Base(sourceFile), err)
 		s.logger.Info("  Copy failed: %s", safefs.SystemErrorText(err))
 		return &StorageError{
@@ -239,7 +249,7 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 			}
 
 			destAssocFile := filepath.Join(s.basePath, filepath.Base(srcFile))
-			if err := s.copyFile(ctx, srcFile, destAssocFile); err != nil {
+			if err := s.copyFile(ctx, srcFile, destAssocFile, modeFailed); err != nil {
 				s.logger.Debug("Secondary Storage: copy - failed for an associated file: %v", err)
 				s.logger.Info("  Sidecar failed: %s: %s", filepath.Base(srcFile), safefs.SystemErrorText(err))
 				issues.add(StoreIssueSidecarNotSaved)
@@ -262,6 +272,11 @@ func (s *SecondaryStorage) Store(ctx context.Context, backupFile string, metadat
 			logPermissionsFailure(s.logger, path, err)
 			issues.add(StoreIssuePermissionsNotSet)
 		})
+	} else if s.fsInfo != nil {
+		for _, f := range modeFailures {
+			logPermissionsFailure(s.logger, f.path, f.err)
+			issues.add(StoreIssuePermissionsNotSet)
+		}
 	}
 
 	s.logger.Debug("✓ Secondary Storage: File copied")
@@ -302,8 +317,13 @@ func (s *SecondaryStorage) countBackups(ctx context.Context) int {
 // cleanup and never turns a committed copy into a reported failure.
 var secondaryCloseSourceFile = func(f *os.File) error { return f.Close() }
 
-// copyFile copies a file using Go's io.Copy
-func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err error) {
+// secondaryChmod is the chmod copyFile mirrors the source mode with; a seam so a test can
+// make it fail.
+var secondaryChmod = safefs.Chmod
+
+// copyFile copies a file using Go's io.Copy. modeFailed, when not nil, is told about a
+// copy that was committed without the source mode (the chmod failed).
+func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string, modeFailed func(path string, err error)) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -393,8 +413,9 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		return fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
 	}
 
-	if err := safefs.Chmod(ctx, tempName, sourceInfo.Mode(), to); err != nil {
-		s.logger.Debug("Secondary storage: unable to mirror permissions on %s: %v", tempName, err)
+	modeErr := secondaryChmod(ctx, tempName, sourceInfo.Mode(), to)
+	if modeErr != nil {
+		s.logger.Debug("Secondary storage: unable to mirror permissions on %s: %v", tempName, modeErr)
 	}
 	if _, err := safefs.Run(ctx, "secondary-chtimes", tempName, to, func() (struct{}, error) {
 		return struct{}{}, os.Chtimes(tempName, sourceInfo.ModTime(), sourceInfo.ModTime())
@@ -406,6 +427,9 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string) (err 
 		return fmt.Errorf("failed to finalize copy to %s: %w", dest, err)
 	}
 	tempName = ""
+	if modeErr != nil && modeFailed != nil {
+		modeFailed(dest, modeErr)
+	}
 
 	elapsed := time.Since(start)
 	var rateStr string

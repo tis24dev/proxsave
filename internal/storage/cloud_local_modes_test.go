@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tis24dev/proxsave/internal/config"
@@ -11,9 +12,23 @@ import (
 
 // Without ownership the local cloud copies take their source's mode; a copy whose
 // source mode cannot be read gets 0600, never rclone's 0644, and a symlink in the
-// destination (a share other hosts write to) is not followed by the root chmod.
+// destination (a share other hosts write to) is not followed by the root chmod. The mode
+// not set on it is reported as the ownership branch reports its own; a clean set records
+// nothing.
 func TestCloudLocalModesFailClosedAndRefuseSymlinks(t *testing.T) {
-	cs, _, archive, root := newLocalFormStore(t, "", false)
+	clean, cleanLog, cleanArchive, cleanRoot := newLocalFormStore(t, "", false)
+	for _, suffix := range []string{"", ".sha256", ".metadata"} {
+		if err := os.WriteFile(filepath.Join(cleanRoot, filepath.Base(cleanArchive)+suffix), []byte("copy"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanIssues := &storeIssueRecorder{}
+	clean.setLocalModesFromSource(context.Background(), cleanArchive, filepath.Join(cleanRoot, filepath.Base(cleanArchive)), cleanIssues)
+	if got := cleanIssues.list(); len(got) != 0 || strings.Contains(cleanLog.String(), "Permissions failed") {
+		t.Fatalf("clean set: issues %v, log:\n%s", got, cleanLog.String())
+	}
+
+	cs, buf, archive, root := newLocalFormStore(t, "", false)
 	dest := filepath.Join(root, filepath.Base(archive))
 	if err := os.WriteFile(dest, []byte("copy"), 0o644); err != nil {
 		t.Fatal(err)
@@ -29,13 +44,20 @@ func TestCloudLocalModesFailClosedAndRefuseSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cs.setLocalModesFromSource(context.Background(), archive, dest)
+	issues := &storeIssueRecorder{}
+	cs.setLocalModesFromSource(context.Background(), archive, dest, issues)
 
 	if st, err := os.Stat(dest); err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("archive copy mode = %v (%v), want 0600 when the source mode is unknown", st.Mode().Perm(), err)
 	}
 	if st, err := os.Stat(outside); err != nil || st.Mode().Perm() != 0o644 {
 		t.Fatalf("symlink target mode = %v (%v), want 0644 untouched", st.Mode().Perm(), err)
+	}
+	if got := issues.list(); len(got) != 1 || got[0] != StoreIssuePermissionsNotSet {
+		t.Fatalf("issues = %v, want permissions not set", got)
+	}
+	if want := "  Permissions failed: " + filepath.Base(dest) + ".sha256: "; !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, buf.String())
 	}
 }
 
@@ -65,9 +87,13 @@ func TestCloudLocalModesStayInsideTheCloudDirectory(t *testing.T) {
 		t.Fatalf("NewCloudStorage: %v", err)
 	}
 
-	cs.setLocalModesFromSource(context.Background(), archive, filepath.Join(root, "sub", filepath.Base(archive)))
+	issues := &storeIssueRecorder{}
+	cs.setLocalModesFromSource(context.Background(), archive, filepath.Join(root, "sub", filepath.Base(archive)), issues)
 
 	if st, err := os.Stat(victim); err != nil || st.Mode().Perm() != 0o644 {
 		t.Fatalf("file outside the cloud directory: mode %v (%v), want 0644 untouched", st.Mode().Perm(), err)
+	}
+	if got := issues.list(); len(got) != 1 || got[0] != StoreIssuePermissionsNotSet {
+		t.Fatalf("issues = %v, want permissions not set", got)
 	}
 }

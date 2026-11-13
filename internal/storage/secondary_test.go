@@ -436,7 +436,7 @@ func TestSecondaryStorage_CopyFile_SourceCloseErrorAfterCommitStillSucceeds(t *t
 	}
 	dest := filepath.Join(t.TempDir(), "node-backup.tar.zst")
 
-	if err := s.copyFile(context.Background(), src, dest); err != nil {
+	if err := s.copyFile(context.Background(), src, dest, nil); err != nil {
 		t.Fatalf("copyFile must succeed despite a source-close error after a durable rename; got %v", err)
 	}
 
@@ -456,12 +456,12 @@ func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := storage.copyFile(ctx, "a", "b"); !errors.Is(err, context.Canceled) {
+	if err := storage.copyFile(ctx, "a", "b", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("copyFile canceled err=%v want context.Canceled", err)
 	}
 
 	// Missing source -> stat error.
-	if err := storage.copyFile(context.Background(), filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "dest")); err == nil {
+	if err := storage.copyFile(context.Background(), filepath.Join(t.TempDir(), "missing"), filepath.Join(t.TempDir(), "dest"), nil); err == nil {
 		t.Fatalf("expected error for missing source")
 	}
 
@@ -475,7 +475,7 @@ func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 	if err := os.WriteFile(src, []byte("data"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := storage.copyFile(context.Background(), src, filepath.Join(destDirFile, "out")); err == nil {
+	if err := storage.copyFile(context.Background(), src, filepath.Join(destDirFile, "out"), nil); err == nil {
 		t.Fatalf("expected error for invalid destination directory")
 	}
 
@@ -484,7 +484,7 @@ func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 	if err := os.MkdirAll(srcDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := storage.copyFile(context.Background(), srcDir, filepath.Join(t.TempDir(), "out")); err == nil {
+	if err := storage.copyFile(context.Background(), srcDir, filepath.Join(t.TempDir(), "out"), nil); err == nil {
 		t.Fatalf("expected error when reading from directory source")
 	}
 
@@ -494,7 +494,7 @@ func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 	if err := os.MkdirAll(renameDest, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := storage.copyFile(context.Background(), src, renameDest); err == nil {
+	if err := storage.copyFile(context.Background(), src, renameDest, nil); err == nil {
 		t.Fatalf("expected error when renaming over existing directory")
 	}
 
@@ -510,7 +510,7 @@ func TestSecondaryStorage_CopyFile_CoversErrorBranches(t *testing.T) {
 		if err := os.WriteFile(srcFile, []byte("data"), 0o600); err != nil {
 			t.Fatalf("WriteFile: %v", err)
 		}
-		if err := storage.copyFile(context.Background(), srcFile, filepath.Join(unwritable, "out")); err == nil {
+		if err := storage.copyFile(context.Background(), srcFile, filepath.Join(unwritable, "out"), nil); err == nil {
 			t.Fatalf("expected error when CreateTemp cannot write to dest dir")
 		}
 	}
@@ -1093,7 +1093,7 @@ func TestSecondaryStorage_CopyFile_RespectsSourcePermissionsAndChtimesBestEffort
 	}
 	dest := filepath.Join(t.TempDir(), "dest")
 
-	if err := storage.copyFile(context.Background(), src, dest); err != nil {
+	if err := storage.copyFile(context.Background(), src, dest, nil); err != nil {
 		t.Fatalf("copyFile error: %v", err)
 	}
 	st, err := os.Stat(dest)
@@ -1102,5 +1102,55 @@ func TestSecondaryStorage_CopyFile_RespectsSourcePermissionsAndChtimesBestEffort
 	}
 	if st.Mode().Perm() != fs.FileMode(0o640) {
 		t.Fatalf("dest perm=%#o want %#o", st.Mode().Perm(), 0o640)
+	}
+}
+
+// Without ownership the mode copyFile mirrors from the source is the one the copy keeps: a
+// chmod that failed there is reported as the ownership branch reports its own (the fact
+// line, then StoreIssuePermissionsNotSet); a clean copy records nothing.
+func TestSecondaryStorage_Store_ModeNotSetWithoutOwnershipIsReported(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		chmodErr error
+	}{
+		{"clean", nil},
+		{"chmod failed", &os.PathError{Op: "chmod", Path: "x", Err: fs.ErrPermission}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.chmodErr != nil {
+				prev := secondaryChmod
+				secondaryChmod = func(context.Context, string, os.FileMode, time.Duration) error { return tc.chmodErr }
+				t.Cleanup(func() { secondaryChmod = prev })
+			}
+			var buf strings.Builder
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&buf)
+			destDir := t.TempDir()
+			storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: destDir}, logger, "")
+			storage.fsInfo = &FilesystemInfo{Type: FilesystemCIFS, SupportsOwnership: false}
+			backupFile := filepath.Join(t.TempDir(), "node-backup-20240102-030405.tar.zst")
+			if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			if err := storage.Store(context.Background(), backupFile, &types.BackupMetadata{}); err != nil {
+				t.Fatalf("Store error: %v", err)
+			}
+
+			issues := storage.LastStoreIssues()
+			line := "  Permissions failed: " + filepath.Base(backupFile) + ": permission denied\n"
+			if tc.chmodErr == nil {
+				if len(issues) != 0 || strings.Contains(buf.String(), "Permissions failed") {
+					t.Fatalf("clean copy: issues %v, log:\n%s", issues, buf.String())
+				}
+				return
+			}
+			if len(issues) != 1 || issues[0] != StoreIssuePermissionsNotSet {
+				t.Fatalf("issues = %v, want permissions not set", issues)
+			}
+			if !strings.Contains(buf.String(), line) {
+				t.Fatalf("missing %q in:\n%s", line, buf.String())
+			}
+		})
 	}
 }
