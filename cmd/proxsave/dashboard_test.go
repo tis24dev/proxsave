@@ -1584,17 +1584,6 @@ func TestCronRevertScreenOnAFailedTeardown(t *testing.T) {
 			wantSilent: []string{"while no daemon is installed"},
 		},
 		{
-			name:        "the cron entry was not written either",
-			revert:      cronRevertReport{ModeRecorded: true},
-			err:         teardown,
-			wantLevel:   orchestrator.HealthcheckSetupLevelError,
-			wantKeyword: "DAEMON NOT REMOVED",
-			wantSays:    []string{"Daemon service: NOT removed, may still be running.", "Cron entry: NOT written."},
-			// The old wording closed with "the daemon that is still there may be the only thing
-			// still scheduling the backup", which denies whatever the advisories below list.
-			wantSilent: []string{"nothing is scheduling the backup", "may run twice", "only thing still scheduling"},
-		},
-		{
 			name:        "both habitats still have to be listed",
 			revert:      cronRevertReport{CronScheduled: true, ModeRecorded: true, UnmanagedAdvisory: unmanaged, SystemCronAdvisory: etc},
 			err:         teardown,

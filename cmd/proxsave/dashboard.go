@@ -835,9 +835,10 @@ func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestr
 
 	// A FAILED TEARDOWN. removeDaemonServiceFn is the last thing applyCronMode does, so
 	// everything the report carries was established before it and none of it is invalidated by
-	// it: the cron line was read back from the crontab, the wrapper lines were read from the
-	// crontab ProxSave never edits, the config write already returned, and the /etc scan runs
-	// after the teardown by design. What the failure DOES kill is the claim that the service was
+	// it: the cron line was read back from the crontab (applyCronMode reaches the teardown only
+	// after that read-back succeeded, so the line is always there), the wrapper lines were read
+	// from the crontab ProxSave never edits, the config write already returned, and the /etc scan
+	// runs after the teardown by design. What the failure DOES kill is the claim that the service was
 	// removed, and that is the only line this arm rewrites.
 	//
 	// The host is left with a unit file still on disk (os.Remove failed) or deleted but not
@@ -848,18 +849,15 @@ func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestr
 	// class this area keeps producing. See backup_notifications.go on a failed teardown leaving a
 	// live, transmitting daemon on a host whose config already reads cron.
 	if teardownErr != nil {
+		// Two schedulers at the same minute: the daemon runs at SCHEDULER_TIME and that is the
+		// time the cron line carries. The per-run lock makes the loser exit 16, i.e. a failed
+		// backup reported every night - the third duplicate source in issue #298. The duplicate
+		// takes the keyword because it is what changes tonight. There is no "cron entry not
+		// written" variant here: a revert whose line was not read back stops at the cron gate
+		// above and never reaches the teardown.
 		level := orchestrator.HealthcheckSetupLevelError
-		keyword := "DAEMON NOT REMOVED"
-		if revert.CronScheduled {
-			// Two schedulers at the same minute: the daemon runs at SCHEDULER_TIME and that is
-			// the time the cron line carries. The per-run lock makes the loser exit 16, i.e. a
-			// failed backup reported every night - the third duplicate source in issue #298.
-			// The duplicate takes the keyword because it is what changes tonight.
-			keyword = "DAEMON NOT REMOVED - DUPLICATE SCHEDULE"
-			cron = "Cron entry: in the crontab, so the backup may run twice."
-		} else {
-			cron = "Cron entry: NOT written."
-		}
+		keyword := "DAEMON NOT REMOVED - DUPLICATE SCHEDULE"
+		cron = "Cron entry: in the crontab, so the backup may run twice."
 		lines = append(lines,
 			"Daemon service: NOT removed, may still be running.",
 			// Indented on its own line: it is an external tool's message, not a sentence of ours,
