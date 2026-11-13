@@ -308,7 +308,8 @@ ProxSave shows you how to reach it in three places:
 What it shows depends on whether you have given yourself a portal password yet.
 
 **Before you have a password**, you get a **single-use login link**, valid for about an
-hour. Open it and **set a password**. That is what turns the link into an account you
+hour. Open it to reach the portal. To set a password, first give the portal your email
+(see below). That is what turns the link into an account you
 can log into later, and it is the point at which you can configure alert channels,
 email and the rest, so the monitor can reach you when a check goes down. Until then the
 server mints a fresh link every time, so a link that expired is never a problem: just
@@ -317,6 +318,17 @@ open the dashboard check again.
 **Once you have a password**, the link stops being minted and its place is taken by the
 portal's own address plus the identity you sign in with. That identity is an **email
 address**, not a username. Sign in there with the password you chose.
+
+**Your email.** The account the server makes for a host has an address that receives no
+mail, and the portal mails a code before it lets you set a password or change the email.
+Set `HEALTHCHECK_ACCOUNT_INITIAL_EMAIL` in `backup.env` to your address: the daemon sends
+it to the server, which mails a confirmation link to it, valid 15 minutes. Press Confirm
+on that page and this host's checks move into the portal account of that address, made
+then if you have none. Hosts with the same address share one account, one project each.
+From then on you sign in with your email, by password or with "Email Me a Link", and
+change the address from the portal: the variable is not used again for this host. The
+server sends at most three mails for one address; after that only a different address
+starts again.
 
 The exact wording differs a little per surface. The log epilogue uses
 `Healthchecks Portal:` for both states, the link and the sign-in address alike, and

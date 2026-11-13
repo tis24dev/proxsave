@@ -353,6 +353,7 @@ running a backup. The keys are:
 ```bash
 HEALTHCHECK_ENABLED=false      # true with the daemon (--daemon-setup / --upgrade); back to false by --daemon-remove
 HEALTHCHECK_MODE=centralized   # centralized (fetch URLs from the server) | self
+HEALTHCHECK_ACCOUNT_INITIAL_EMAIL=   # centralized: your email for the monitoring portal, applied once after you confirm the mail
 HEALTHCHECK_HEARTBEAT_INTERVAL=5m
 HEALTHCHECK_UPDATE_INTERVAL=5m
 HEALTHCHECK_SEND_LOG=true

@@ -263,16 +263,20 @@ type Config struct {
 	PersonalScriptPostRun string
 
 	// Healthchecks connector (dead-man switch + backup outcome), used by the daemon.
-	HealthcheckEnabled           bool
-	HealthcheckMode              string // "centralized" (fetch ping-urls from the server) | "self"
-	HealthcheckHeartbeatInterval time.Duration
-	HealthcheckSendLog           bool
-	HealthcheckAliveURL          string // centralized cache (auto-filled from the server)
-	HealthcheckBackupURL         string // centralized cache (auto-filled from the server)
-	HealthcheckPingEndpoint      string // self mode: ping base
-	HealthcheckPingKey           string // self mode: optional ping key for slug URLs
-	HealthcheckAliveID           string // self mode: UUID or slug of the service-alive check
-	HealthcheckBackupID          string // self mode: UUID or slug of the backup-outcome check
+	HealthcheckEnabled bool
+	HealthcheckMode    string // "centralized" (fetch ping-urls from the server) | "self"
+	// HealthcheckAccountInitialEmail is the operator's address for the monitoring portal
+	// (centralized only, issue 347): sent to the relay until it is applied or refused, then
+	// changed from the portal. Empty sends nothing.
+	HealthcheckAccountInitialEmail string
+	HealthcheckHeartbeatInterval   time.Duration
+	HealthcheckSendLog             bool
+	HealthcheckAliveURL            string // centralized cache (auto-filled from the server)
+	HealthcheckBackupURL           string // centralized cache (auto-filled from the server)
+	HealthcheckPingEndpoint        string // self mode: ping base
+	HealthcheckPingKey             string // self mode: optional ping key for slug URLs
+	HealthcheckAliveID             string // self mode: UUID or slug of the service-alive check
+	HealthcheckBackupID            string // self mode: UUID or slug of the backup-outcome check
 	// Fase 1 updates sensor (daemon): whether a newer release is available.
 	HealthcheckUpdatesURL     string        // self mode: full updates check ping URL (optional)
 	HealthcheckUpdatesID      string        // self mode: UUID or slug of the updates check
@@ -953,6 +957,7 @@ func (c *Config) parsePersonalScriptSettings() {
 func (c *Config) parseHealthcheckSettings() {
 	c.HealthcheckEnabled = c.getBool("HEALTHCHECK_ENABLED", false)
 	c.HealthcheckMode = normalizeHealthcheckMode(c.getString("HEALTHCHECK_MODE", HealthcheckModeCentralized))
+	c.HealthcheckAccountInitialEmail = strings.TrimSpace(c.getString("HEALTHCHECK_ACCOUNT_INITIAL_EMAIL", ""))
 	c.HealthcheckHeartbeatInterval = c.getDuration("HEALTHCHECK_HEARTBEAT_INTERVAL", 5*time.Minute)
 	c.HealthcheckSendLog = c.getBool("HEALTHCHECK_SEND_LOG", true)
 	c.HealthcheckAliveURL = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_URL", ""))

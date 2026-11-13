@@ -13,15 +13,19 @@ import (
 // Client adds no endpoint knowledge. Secret == "" omits X-Server-Auth (the pre-auth
 // get-chat-id call). Provision and NotifyID are caller-gated and never defaulted on.
 type Request struct {
-	Method    string        // http.MethodGet / http.MethodPost ("" -> GET)
-	Path      string        // "/api/notify", "/api/get-chat-id", ... (leading slash, no host)
-	Query     url.Values    // .Encode() escapes every value; caller sets server_id etc.
-	Secret    string        // != "" -> X-Server-Auth; "" -> header omitted
-	Provision bool          // true -> X-Proxsave-Provision:"1"
-	NotifyID  string        // != "" -> X-Notify-Id (serverbot never mints one)
-	Body      any           // != nil -> json.Marshal + Content-Type: application/json
-	Timeout   time.Duration // per-request ctx cap; 0 -> 5s
-	MaxBytes  int64         // response read cap; 0 -> 8192
+	Method    string     // http.MethodGet / http.MethodPost ("" -> GET)
+	Path      string     // "/api/notify", "/api/get-chat-id", ... (leading slash, no host)
+	Query     url.Values // .Encode() escapes every value; caller sets server_id etc.
+	Secret    string     // != "" -> X-Server-Auth; "" -> header omitted
+	Provision bool       // true -> X-Proxsave-Provision:"1"
+	NotifyID  string     // != "" -> X-Notify-Id (serverbot never mints one)
+	// AccountInitialEmail != "" -> X-Proxsave-Account-Initial-Email: the operator's address for
+	// the monitoring portal (issue 347). A header, never the query: the relay's access log
+	// records the query. Never logged here either.
+	AccountInitialEmail string
+	Body                any           // != nil -> json.Marshal + Content-Type: application/json
+	Timeout             time.Duration // per-request ctx cap; 0 -> 5s
+	MaxBytes            int64         // response read cap; 0 -> 8192
 	// LogOperation is the DEBUG operation the call's transport stages are logged under, e.g.
 	// "notifications init"; "" -> "serverbot". Only read when the Client has a logger.
 	LogOperation string

@@ -22,6 +22,8 @@ const (
 	serverAuthHeader = "X-Server-Auth"
 	provisionHeader  = "X-Proxsave-Provision"
 	notifyIDHeader   = "X-Notify-Id"
+	// initialEmailHeader carries HEALTHCHECK_ACCOUNT_INITIAL_EMAIL to the relay (issue 347).
+	initialEmailHeader = "X-Proxsave-Account-Initial-Email"
 
 	defaultTimeout  = 5 * time.Second
 	defaultMaxBytes = 8192
@@ -134,6 +136,9 @@ func (c *Client) Do(ctx context.Context, req Request) (*Response, error) {
 	}
 	if req.NotifyID != "" {
 		httpReq.Header.Set(notifyIDHeader, req.NotifyID)
+	}
+	if req.AccountInitialEmail != "" {
+		httpReq.Header.Set(initialEmailHeader, req.AccountInitialEmail)
 	}
 	if req.Body != nil {
 		httpReq.Header.Set("Content-Type", "application/json")

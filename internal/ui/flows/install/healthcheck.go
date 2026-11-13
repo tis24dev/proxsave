@@ -89,6 +89,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 	statusExplanation := "Choose Check to verify the monitoring connection."
 	statusLevel := orchestrator.HealthcheckSetupLevelNeutral // pre-check: yellow, no symbol
 	magicLink := ""
+	linkPortalPage, linkPasswordSet := false, false
 	portalURL, portalLogin := "", ""
 	var sensors []health.SensorRow          // per-sensor rows, populated after each Check
 	var notifyBlock *healthcheckNotifyBlock // NOTIFY_ON lines, populated after each Check
@@ -152,9 +153,11 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 					// and already prefers the portal for the current check.
 					if link := strings.TrimSpace(st.LoginURL); link != "" {
 						magicLink = link
+						linkPortalPage, linkPasswordSet = st.LoginIsPortalPage, st.LoginPasswordSet
 						result.MagicLinkSeen = true
 					} else if portal := strings.TrimSpace(st.PortalURL); portal != "" {
 						magicLink = ""
+						linkPortalPage, linkPasswordSet = false, false
 						portalURL = portal
 						portalLogin = strings.TrimSpace(st.PortalLogin)
 					}
@@ -174,7 +177,7 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 				}
 			}
 		}
-		prompt := buildHealthcheckPrompt(selfMode, magicLink, portalURL, portalLogin, statusKeyword, statusExplanation, statusLevel, sensors, notifyBlock)
+		prompt := buildHealthcheckPrompt(selfMode, magicLink, portalURL, portalLogin, statusKeyword, statusExplanation, statusLevel, sensors, notifyBlock, portalLinkCopy{portalPage: linkPortalPage, passwordSet: linkPasswordSet})
 
 		items := make([]components.SelectorItem[healthcheckAction], 0, 3)
 		if !result.LastFatal && (result.Verified || result.CheckAttempts < orchestrator.HealthcheckSetupMaxVerificationAttempts) {
@@ -233,7 +236,14 @@ func RunHealthcheckSetup(ctx context.Context, session *shell.Session, baseDir, c
 // click. portalURL/portalLogin are the fallback the server sends instead once the user
 // has their own password. Every value is already sanitized upstream
 // (serverbot.TrustedLoginURL / SanitizePortalLogin).
-func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow, notify *healthcheckNotifyBlock) string {
+// portalLinkCopy says how the box presents magicLink: the zero value is a single-use magic-link;
+// portalPage is the portal's sign-in page for an operator who owns the project (issue 347).
+type portalLinkCopy struct {
+	portalPage  bool
+	passwordSet bool
+}
+
+func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, keyword, explanation string, level orchestrator.HealthcheckSetupLevel, sensors []health.SensorRow, notify *healthcheckNotifyBlock, linkCopy portalLinkCopy) string {
 	var b strings.Builder
 	b.WriteString(theme.Text.Render("Backup monitoring (healthchecks) is enabled for this host."))
 	b.WriteString("\n")
@@ -248,7 +258,18 @@ func buildHealthcheckPrompt(selfMode bool, magicLink, portalURL, portalLogin, ke
 	}
 	b.WriteString("\n\n")
 
-	if magicLink != "" {
+	if magicLink != "" && linkCopy.portalPage {
+		box := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(theme.Orange).
+			Padding(0, 1).
+			Render(theme.Subtle.Render("Your monitoring portal:") +
+				"\n" + theme.Emphasis.Render(magicLink))
+		b.WriteString(box)
+		b.WriteString("\n")
+		b.WriteString(theme.Subtle.Render(orchestrator.HealthcheckPortalPageSignIn(linkCopy.passwordSet)))
+		b.WriteString("\n\n")
+	} else if magicLink != "" {
 		box := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(theme.Orange).

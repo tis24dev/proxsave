@@ -252,3 +252,30 @@ func TestDoLoggerNeverEmitsBodyOrSecret(t *testing.T) {
 		t.Errorf("expected a debug line naming the path, got: %s", out)
 	}
 }
+
+// The portal's initial email (issue 347) rides its header only when set, and is never logged.
+func TestDoInitialEmailHeaderOnlyWhenSetAndNeverLogged(t *testing.T) {
+	var got []string
+	var buf bytes.Buffer
+	lg := logging.New(types.LogLevelDebug, false)
+	lg.SetOutput(&buf)
+	c := New("https://bot.example", &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		got = append(got, r.Header.Get("X-Proxsave-Account-Initial-Email"))
+		if strings.Contains(r.URL.String(), "example.org") {
+			t.Errorf("the address is in the URL: %s", r.URL)
+		}
+		return stubResp(200, "{}"), nil
+	})}, lg)
+	for _, email := range []string{"operator@example.org", ""} {
+		if _, err := c.Do(context.Background(), Request{Path: "/api/healthcheck/config", Secret: "s",
+			AccountInitialEmail: email, LogOperation: "poll", LogURLDetail: "frequency=daily"}); err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+	}
+	if len(got) != 2 || got[0] != "operator@example.org" || got[1] != "" {
+		t.Fatalf("headers = %q", got)
+	}
+	if strings.Contains(buf.String(), "example.org") {
+		t.Fatalf("the address reached the log:\n%s", buf.String())
+	}
+}

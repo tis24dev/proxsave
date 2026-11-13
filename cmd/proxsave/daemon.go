@@ -145,6 +145,11 @@ type daemon struct {
 	notifyWant    *notifyPolicy
 	notifyApplied *notifyPolicy
 	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
+	// initialEmailWant is HEALTHCHECK_ACCOUNT_INITIAL_EMAIL as last read by refreshNotifyPolicy
+	// (nil: d.cfg's). initialEmailDone is the address the relay gave a final answer for
+	// (applied or rejected): it is not sent again while the variable holds it. Both guarded by mu.
+	initialEmailWant *string
+	initialEmailDone string
 	// pollMu makes the daemon send one /api/healthcheck/config poll at a time (pollCentralized
 	// holds it across the request and its resends). The relay provisions under a per-server
 	// lock it does not wait on: a second poll that arrives while the first is provisioning
@@ -2113,7 +2118,9 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	// centralized
 	p := d.pollCentralized(ctx, "", "")
 	d.afterFailedPoll(p)
-	return d.reporterFromPoll(p, false)
+	r := d.reporterFromPoll(p, false)
+	d.logInitialEmailOutcome(p)
+	return r
 }
 
 // afterFailedPoll clears the relay secret a poll was refused with. A DEFINITIVE rejection means
@@ -2200,6 +2207,9 @@ type configPoll struct {
 	secret    string         // the exact secret sent, the comparand of a rejected-secret clear
 	frequency cron.Frequency // the schedule frequency sent
 	notify    notifyPolicy   // the notify policy whose ack cfg carries
+	// initialEmailSent says the poll carried HEALTHCHECK_ACCOUNT_INITIAL_EMAIL; cfg then holds the
+	// relay's answer in AccountInitialEmail. The address itself is never kept here.
+	initialEmailSent bool
 }
 
 // relaySecret is the relay secret on disk or, when there is none yet, one from a THROTTLED,
@@ -2245,6 +2255,12 @@ func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, 
 	// checks back to daily on a poll with channels and no frequency.
 	want := d.wantedNotifyPolicy()
 	freq := d.wantedFrequency()
+	// The portal's initial email rides the start poll and the poll before each run, the two that
+	// report it (logInitialEmailOutcome); the schedule negotiation's polls do not carry it.
+	initialEmail := ""
+	if op != "schedule" {
+		initialEmail = d.wantedInitialEmail()
+	}
 	fetch := func(want notifyPolicy) (health.CentralizedConfig, int, error) {
 		plog := health.PollLog{}
 		if op != "" {
@@ -2252,13 +2268,15 @@ func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, 
 				URLDetail: fmt.Sprintf("frequency=%s notify_on=%s channels=%s", freq, want.notifyOn, want.channelList())}
 		}
 		return health.FetchCentralizedConfigPoll(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret,
-			want.channels, want.notifyOn, string(freq), plog)
+			want.channels, want.notifyOn, string(freq), initialEmail, plog)
 	}
 	cfg, status, err := fetch(want)
-	p := configPoll{sent: true, status: status, cfg: cfg, err: err, secret: secret, frequency: freq, notify: want}
+	p := configPoll{sent: true, status: status, cfg: cfg, err: err, secret: secret, frequency: freq, notify: want,
+		initialEmailSent: initialEmail != ""}
 	if err != nil {
 		return p
 	}
+	d.recordInitialEmailAck(initialEmail, p.cfg.AccountInitialEmail)
 	// A poll that sent a policy no longer wanted may have reached the relay after a newer one
 	// and put the old policy back there: send the wanted one again, so the relay's last word is
 	// always the policy wanted now. Every answer is recorded, the last resend's included: the

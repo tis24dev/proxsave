@@ -89,19 +89,26 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 		return
 	}
 	want := notifyPolicy{notifyOn: negotiatedNotifyOn(fresh), channels: enabledNotifyChannels(fresh)}
+	d.setInitialEmailWant(fresh.HealthcheckAccountInitialEmail)
 	d.mu.Lock()
 	d.notifyWant = &want
 	applied := d.notifyApplied != nil && d.notifyApplied.equal(want)
 	d.mu.Unlock()
 	logger := logging.GetDefaultLogger()
-	if applied {
+	// A confirmed policy needs no request, unless the portal's initial email is still to be sent:
+	// that poll then goes out without the notify level block.
+	emailDue := d.wantedInitialEmail() != ""
+	if applied && !emailDue {
 		logging.DebugStep(logger, "notify policy", "before run notify_on=%s channels=%s already confirmed, not sent",
 			want.notifyOn, want.channelList())
 		return
 	}
 
-	block := true
-	if secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir); strings.TrimSpace(secret) == "" {
+	block := !applied
+	if !block {
+		logging.DebugStep(logger, "notify policy", "before run notify_on=%s channels=%s already confirmed, sent for the initial email",
+			want.notifyOn, want.channelList())
+	} else if secret, _ := identity.LoadNotifySecret(d.cfg.BaseDir); strings.TrimSpace(secret) == "" {
 		block = false
 		logging.DebugStep(logger, "notify policy", "before run notify_on=%s channels=%s, no relay secret on disk",
 			want.notifyOn, want.channelList())
@@ -143,16 +150,19 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	case <-timer.C:
 	case <-ctx.Done():
 	}
-	if !block {
-		return
-	}
 	if !answered {
-		logging.DebugStep(logger, "notify policy", "no answer within %s", wait)
-		d.logNotifyLevelOutcome(fresh.NotifyOn, want, reachNone)
+		if block {
+			logging.DebugStep(logger, "notify policy", "no answer within %s", wait)
+			d.logNotifyLevelOutcome(fresh.NotifyOn, want, reachNone)
+		}
 		return
 	}
-	d.logNotifyPolicyAnswer(result)
-	d.logNotifyLevelOutcome(fresh.NotifyOn, want, result.answer())
+	if block {
+		d.logNotifyPolicyAnswer(result)
+		d.logNotifyLevelOutcome(fresh.NotifyOn, want, result.answer())
+	}
+	// After the notify level block, never inside it.
+	d.logInitialEmailOutcome(result)
 }
 
 // logNotifyPolicyRead is the DEBUG evidence of what the notify level block sends: NOTIFY_ON as

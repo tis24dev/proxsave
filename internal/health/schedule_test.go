@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +39,7 @@ func TestFetchCentralizedConfigPollSendsFrequencyAndReturnsTheStatus(t *testing.
 	}))
 	defer srv.Close()
 
-	cfg, st, err := FetchCentralizedConfigPoll(context.Background(), nil, srv.URL, "1", "s", []string{"email"}, "warning", "weekly", PollLog{})
+	cfg, st, err := FetchCentralizedConfigPoll(context.Background(), nil, srv.URL, "1", "s", []string{"email"}, "warning", "weekly", "", PollLog{})
 	if err != nil || st != http.StatusOK || gotFreq != "weekly" || gotContract != "1" {
 		t.Fatalf("poll = %v, status %d, frequency=%q hc_contract=%q", err, st, gotFreq, gotContract)
 	}
@@ -47,7 +48,7 @@ func TestFetchCentralizedConfigPollSendsFrequencyAndReturnsTheStatus(t *testing.
 	}
 
 	status = http.StatusServiceUnavailable
-	if _, st, err := FetchCentralizedConfigPoll(context.Background(), nil, srv.URL, "1", "s", nil, "warning", "weekly", PollLog{}); err == nil || st != http.StatusServiceUnavailable {
+	if _, st, err := FetchCentralizedConfigPoll(context.Background(), nil, srv.URL, "1", "s", nil, "warning", "weekly", "", PollLog{}); err == nil || st != http.StatusServiceUnavailable {
 		t.Fatalf("503 poll = %v, status %d; want an error and 503", err, st)
 	}
 }
@@ -77,5 +78,46 @@ func TestScheduleStateRoundTripIsRootOnly(t *testing.T) {
 	}
 	if _, _, err := ReadScheduleState(base); err == nil {
 		t.Fatal("a corrupt state read without error")
+	}
+}
+
+// The portal's initial email (issue 347): its header only when set, never in the query, and the
+// relay's answer and login_kind parsed.
+func TestFetchCentralizedConfigPollCarriesTheInitialEmail(t *testing.T) {
+	var header, query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header, query = r.Header.Get("X-Proxsave-Account-Initial-Email"), r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"alive_ping_url":"a","backup_ping_url":"b","login_kind":"portal",` +
+			`"account_initial_email":{"state":"rejected","reason":"unconfirmed"}}`))
+	}))
+	defer srv.Close()
+	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), nil, srv.URL, "1", "s", nil, "warning", "", "operator@example.org", PollLog{})
+	if err != nil || header != "operator@example.org" || strings.Contains(query, "example.org") {
+		t.Fatalf("err=%v header=%q query=%q", err, header, query)
+	}
+	ack := cfg.AccountInitialEmail
+	if ack == nil || ack.State != "rejected" || ack.Reason != "unconfirmed" || !ack.Final() || cfg.LoginKind != LoginKindPortal {
+		t.Fatalf("ack=%+v login_kind=%q", ack, cfg.LoginKind)
+	}
+	if _, _, err := FetchCentralizedConfigPoll(context.Background(), nil, srv.URL, "1", "s", nil, "warning", "", "", PollLog{}); err != nil || header != "" {
+		t.Fatalf("without the address: err=%v header=%q", err, header)
+	}
+}
+
+func TestAccountInitialEmailAckFinal(t *testing.T) {
+	for _, c := range []struct {
+		ack  *AccountInitialEmailAck
+		want bool
+	}{
+		{nil, false},
+		{&AccountInitialEmailAck{State: "pending"}, false},
+		{&AccountInitialEmailAck{State: "pending", Reason: "limit"}, false},
+		{&AccountInitialEmailAck{State: "applied"}, true},
+		{&AccountInitialEmailAck{State: "rejected", Reason: "invalid"}, true},
+		{&AccountInitialEmailAck{State: "something_new"}, false},
+	} {
+		if got := c.ack.Final(); got != c.want {
+			t.Errorf("%+v: Final()=%t", c.ack, got)
+		}
 	}
 }

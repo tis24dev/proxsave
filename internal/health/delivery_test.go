@@ -170,7 +170,7 @@ func TestFetchCentralizedConfigPollSendsTheContract(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "failure", "", PollLog{})
+	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "failure", "", "", PollLog{})
 	if err != nil {
 		t.Fatalf("FetchCentralizedConfigPoll: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestFetchCentralizedConfigPollSendsTheContract(t *testing.T) {
 	}
 
 	// No channel enabled is sent as the explicit "none", never as an empty value a proxy could drop.
-	if _, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "warning", "", PollLog{}); err != nil {
+	if _, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "warning", "", "", PollLog{}); err != nil {
 		t.Fatalf("FetchCentralizedConfigPoll: %v", err)
 	}
 	if gotChannels != "none" || gotNotifyOn != "warning" {
