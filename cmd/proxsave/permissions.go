@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -103,7 +104,17 @@ func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logg
 			continue
 		}
 
-		info, err := safefs.Stat(ctx, dir, timeout)
+		// The bounded walk Lstats its root and never follows a symlink, so a configured
+		// directory that is a symlink was walked as a leaf: only the link was chowned.
+		// The configured root alone is resolved; symlinks inside it stay unfollowed.
+		// A failure to resolve it is a failure to read it, reported as the stat is.
+		root, err := safefs.Run(ctx, "evalsymlinks", dir, timeout, func() (string, error) {
+			return filepath.EvalSymlinks(dir)
+		})
+		var info fs.FileInfo
+		if err == nil {
+			info, err = safefs.Stat(ctx, root, timeout)
+		}
 		if err != nil {
 			switch {
 			case errors.Is(err, safefs.ErrTimeout):
@@ -124,7 +135,11 @@ func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logg
 			continue
 		}
 
-		fsInfo, err := fsDetector.DetectFilesystem(ctx, dir)
+		if root != dir {
+			logger.Debug("Permissions: %s resolves to %s; detecting and walking the resolved directory", dir, root)
+		}
+
+		fsInfo, err := fsDetector.DetectFilesystem(ctx, root)
 		if err != nil {
 			if errors.Is(err, safefs.ErrTimeout) {
 				logger.Warning("Permissions: filesystem detection on %s timed out after %s; skipping chown/chmod (dead/stale mount?)", dir, timeout)
@@ -140,8 +155,13 @@ func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logg
 			continue
 		}
 
-		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", dir, uid, gid)
-		failed, err := applyDirOwnershipRecursive(ctx, dir, uid, gid, timeout, dryRun, logger)
+		// A dry run walks nothing, and its line keeps naming the configured path.
+		walkRoot := root
+		if dryRun {
+			walkRoot = dir
+		}
+		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", walkRoot, uid, gid)
+		failed, err := applyDirOwnershipRecursive(ctx, walkRoot, uid, gid, timeout, dryRun, logger)
 		switch {
 		case err != nil:
 			logger.Warning("Failed to apply permissions on %s: %v", dir, err)
