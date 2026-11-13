@@ -213,6 +213,18 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 		}
 	})
 
+	t.Run("the portal sign-in page keeps its login_kind", func(t *testing.T) {
+		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
+			return health.CentralizedConfig{AliveURL: "https://a", BackupURL: "https://b",
+				LoginURL: "https://hc.proxsave.dev/accounts/login/", LoginKind: health.LoginKindPortal}, nil
+		}
+		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return nil }
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", t.TempDir(), time.Minute)
+		if res.LoginKind != health.LoginKindPortal {
+			t.Fatalf("login_kind lost: %+v", res)
+		}
+	})
+
 	t.Run("fetch error propagates, no login", func(t *testing.T) {
 		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
 			return health.CentralizedConfig{}, health.ErrHCNotReady
