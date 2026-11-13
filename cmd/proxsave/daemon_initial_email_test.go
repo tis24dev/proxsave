@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -277,41 +278,172 @@ func TestBeforeARunTheAddressGoesOutEvenWithAConfirmedPolicy(t *testing.T) {
 	}
 }
 
-// A before-run answer that comes back after the bounded wait is not logged then: the address stays
-// due, goes out again before the next run, and that answer is logged once.
-func TestALateBeforeRunAnswerIsSentAgainAndLoggedOnce(t *testing.T) {
-	relay := &emailRelay{applied: true, ack: map[string]string{"state": "rejected", "reason": "invalid"},
-		release: make(chan struct{})}
-	d := emailDaemon(t, relay, "", emailEnv+"HEALTHCHECK_ACCOUNT_INITIAL_EMAIL="+testInitialEmail+"\n")
+// waitForRequests waits until relay has recorded n requests, failing at a deadline instead of
+// hanging. The fake records a request on arrival, before it waits on release: a delayed answer is
+// released only once its request is known to be in flight.
+func waitForRequests(t *testing.T, relay *emailRelay, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(relay.sent()) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("relay requests = %q, want %d within the deadline", relay.sent(), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// waitForSignal waits for one value on ch, failing at a deadline instead of hanging.
+func waitForSignal(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: not within the deadline", what)
+	}
+}
+
+// lateEmailDaemon is emailDaemon with the address in backup.env, the notify policy confirmed, a
+// 50 ms bounded wait before the run, and scheduled runs whose child runs hook before it starts.
+// finished receives one value each time a before-run poll's goroutine is done.
+func lateEmailDaemon(t *testing.T, relay *emailRelay) (d *daemon, finished chan struct{}) {
+	t.Helper()
+	d = emailDaemon(t, relay, "", emailEnv+"HEALTHCHECK_ACCOUNT_INITIAL_EMAIL="+testInitialEmail+"\n")
 	d.notifyApplied = &notifyPolicy{notifyOn: config.NotifyOnWarning, channels: []string{"telegram"}}
 	d.notifyRefreshWaitOverride = 50 * time.Millisecond
-	logs := captureDaemonLog(t) // a locked sink: the late poll writes to it after the wait
-	visible := func() []string {
-		var out []string
-		for _, line := range logs() {
-			if strings.HasPrefix(line, "INFO ") || strings.HasPrefix(line, "WARNING ") {
-				out = append(out, line)
-			}
-		}
-		return out
-	}
+	d.cfg.BackupEnabled, d.cfg.MaxRunDuration = true, time.Minute
+	finished = make(chan struct{}, 8)
+	d.beforeRunPollFinished = func() { finished <- struct{}{} }
+	return d, finished
+}
 
-	d.refreshNotifyPolicy(context.Background())
-	if got := visible(); len(got) != 0 {
-		t.Fatalf("visible lines before the answer: %q", got)
+// childAfter is a backup child that exits 0, built after hook ran.
+func childAfter(hook func()) func(ctx context.Context) *exec.Cmd {
+	return func(ctx context.Context) *exec.Cmd {
+		hook()
+		return exec.CommandContext(ctx, "/bin/sh", "-c", "exit 0")
 	}
-	close(relay.release) // the late answer arrives, after the wait
-	d.notifyRefreshWaitOverride = 5 * time.Second
-	d.refreshNotifyPolicy(context.Background()) // its poll waits for the late one, then sends again
-	d.refreshNotifyPolicy(context.Background()) // the final answer was logged: nothing due
+}
+
+// runLines are the visible lines of the log, with the run id and timeout cut from the daemon's
+// run lines so they compare across runs.
+func runLines(logs func() []string) []string {
+	var out []string
+	for _, line := range logs() {
+		if !strings.HasPrefix(line, "INFO ") && !strings.HasPrefix(line, "WARNING ") {
+			continue
+		}
+		if i := strings.Index(line, " (rid="); i >= 0 {
+			line = line[:i]
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+const lateRejectionBlock = "INFO Applying monitoring portal email...|INFO   Not a usable email address|" +
+	"WARNING ⚠ Monitoring portal email: not applied"
+
+// A before-run answer that comes back after the bounded wait, while the backup runs, is shown in
+// the same run, right after "daemon: backup finished", once; the next run sends nothing.
+func TestALateBeforeRunAnswerIsLoggedAfterTheBackupFinished(t *testing.T) {
+	relay := &emailRelay{applied: true, ack: map[string]string{"state": "rejected", "reason": "invalid"},
+		release: make(chan struct{})}
+	d, finished := lateEmailDaemon(t, relay)
+	logs := captureDaemonLog(t) // a locked sink: the late poll writes to it after the wait
+	d.newBackupCmd = childAfter(func() {
+		waitForRequests(t, relay, 1)
+		close(relay.release) // the late answer arrives during the backup
+		waitForSignal(t, finished, "the before-run poll")
+	})
+	d.runOnce(context.Background())
+	d.newBackupCmd = childAfter(func() {})
+	d.runOnce(context.Background()) // the final answer was logged: nothing due
+
+	if got := relay.sent(); len(got) != 1 || got[0] != testInitialEmail {
+		t.Fatalf("headers = %q, want the address once", got)
+	}
+	run := "INFO daemon: launching backup|INFO daemon: backup finished"
+	want := run + "|" + lateRejectionBlock + "|" + run
+	if got := strings.Join(runLines(logs), "|"); got != want {
+		t.Fatalf("lines:\n%s", strings.Join(runLines(logs), "\n"))
+	}
+}
+
+// A late answer whose address another poll already answered for good during the backup (a
+// reporter refresh) is not logged a second time after "daemon: backup finished".
+func TestALateBeforeRunAnswerAlreadyLoggedIsNotLoggedAgain(t *testing.T) {
+	relay := &emailRelay{applied: true, ack: map[string]string{"state": "rejected", "reason": "invalid"},
+		release: make(chan struct{})}
+	d, finished := lateEmailDaemon(t, relay)
+	logs := captureDaemonLog(t)
+	d.newBackupCmd = childAfter(func() {
+		waitForRequests(t, relay, 1)
+		close(relay.release)
+		waitForSignal(t, finished, "the before-run poll")
+		startPoll(d) // another poll carrying the address, answered and logged
+	})
+	d.runOnce(context.Background())
 
 	if got := relay.sent(); len(got) != 2 || got[0] != testInitialEmail || got[1] != testInitialEmail {
 		t.Fatalf("headers = %q, want the address twice", got)
 	}
-	want := "INFO Applying monitoring portal email...|INFO   Not a usable email address|" +
-		"WARNING ⚠ Monitoring portal email: not applied"
-	if got := strings.Join(visible(), "|"); got != want {
-		t.Fatalf("lines: %s", got)
+	want := lateRejectionBlock + "|INFO daemon: launching backup|INFO daemon: backup finished"
+	if got := strings.Join(runLines(logs), "|"); got != want {
+		t.Fatalf("lines:\n%s", strings.Join(runLines(logs), "\n"))
+	}
+}
+
+// An answer still missing when the backup has finished shows nothing in that run; the address,
+// still due, goes out again before the next run, whose answer is logged once.
+func TestABeforeRunAnswerMissingAfterTheBackupIsSentAgainNextRun(t *testing.T) {
+	relay := &emailRelay{applied: true, ack: map[string]string{"state": "rejected", "reason": "invalid"},
+		release: make(chan struct{})}
+	d, finished := lateEmailDaemon(t, relay)
+	logs := captureDaemonLog(t)
+	d.newBackupCmd = childAfter(func() { waitForRequests(t, relay, 1) })
+	d.runOnce(context.Background())
+	run := "INFO daemon: launching backup|INFO daemon: backup finished"
+	if got := strings.Join(runLines(logs), "|"); got != run {
+		t.Fatalf("first run lines:\n%s", strings.Join(runLines(logs), "\n"))
+	}
+
+	close(relay.release) // its request is in flight (recorded above): the answer comes after the run
+	waitForSignal(t, finished, "the first before-run poll")
+	d.notifyRefreshWaitOverride = 5 * time.Second
+	d.newBackupCmd = childAfter(func() {})
+	d.runOnce(context.Background())
+
+	if got := relay.sent(); len(got) != 2 || got[0] != testInitialEmail || got[1] != testInitialEmail {
+		t.Fatalf("headers = %q, want the address twice", got)
+	}
+	want := run + "|" + lateRejectionBlock + "|" + run
+	if got := strings.Join(runLines(logs), "|"); got != want {
+		t.Fatalf("lines:\n%s", strings.Join(runLines(logs), "\n"))
+	}
+}
+
+// A run interrupted by a shutdown never reaches "daemon: backup finished": the late answer is not
+// shown, and the address stays due.
+func TestALateBeforeRunAnswerIsNotShownOnShutdown(t *testing.T) {
+	relay := &emailRelay{applied: true, ack: map[string]string{"state": "rejected", "reason": "invalid"},
+		release: make(chan struct{})}
+	d, finished := lateEmailDaemon(t, relay)
+	logs := captureDaemonLog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.newBackupCmd = childAfter(func() {
+		waitForRequests(t, relay, 1)
+		close(relay.release)
+		waitForSignal(t, finished, "the before-run poll")
+		cancel()
+	})
+	d.runOnce(ctx)
+
+	if got := strings.Join(runLines(logs), "|"); got != "INFO daemon: launching backup" {
+		t.Fatalf("lines:\n%s", strings.Join(runLines(logs), "\n"))
+	}
+	if got := d.wantedInitialEmail(); got != testInitialEmail {
+		t.Fatalf("address due = %q, want it still due", got)
 	}
 }
 

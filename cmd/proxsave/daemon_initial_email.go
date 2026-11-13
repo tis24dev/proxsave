@@ -36,7 +36,8 @@ func (d *daemon) wantedInitialEmail() string {
 
 // recordInitialEmailAck keeps a final answer for sent, so that address is not sent again. It is
 // called only once that answer is logged: an answer the operator never saw (a before-run poll
-// that came back after the bounded wait) leaves the address due, to be sent again next run.
+// that came back only after the run's backup had finished) leaves the address due, to be sent
+// again next run.
 func (d *daemon) recordInitialEmailAck(sent string, ack *health.AccountInitialEmailAck) {
 	if sent == "" || !ack.Final() {
 		return
@@ -90,6 +91,37 @@ func (d *daemon) logInitialEmailOutcome(p configPoll) {
 		logging.Info("%s Monitoring portal email: not applied", theme.SymbolWarning)
 	}
 	d.recordInitialEmailAck(p.initialEmail, ack)
+}
+
+// logLateInitialEmailOutcome is the initial email block of a before-run poll that did not answer
+// within the bounded wait (refreshNotifyPolicy), looked at once, right after the run's "daemon:
+// backup finished" line and without waiting. An answer arrived by then is logged there, once, and
+// a final one is recorded. One still missing is dropped: nothing visible, and the address, still
+// due, goes out again on the poll before the next run, so a dropped poll is never logged later
+// and never logged twice. The block is skipped when another poll (a reporter refresh during the
+// backup) already brought a final answer for the address and logged it.
+func (d *daemon) logLateInitialEmailOutcome(late *beforeRunPoll) {
+	if late == nil {
+		return
+	}
+	logger := logging.GetDefaultLogger()
+	select {
+	case <-late.done:
+	default:
+		logging.DebugStep(logger, "initial email", "before-run poll still unanswered after the backup, sent again before the next run")
+		return
+	}
+	sent := late.result.initialEmail
+	if sent == "" {
+		logging.DebugStep(logger, "initial email", "before-run poll answered after the wait, without the address")
+		return
+	}
+	if d.wantedInitialEmail() != sent {
+		logging.DebugStep(logger, "initial email", "before-run poll answered after the wait, a final answer was already logged")
+		return
+	}
+	logging.DebugStep(logger, "initial email", "before-run poll answered after the wait")
+	d.logInitialEmailOutcome(late.result)
 }
 
 // initialEmailRejection is the operator's reason for a rejected address; "" for a reason this

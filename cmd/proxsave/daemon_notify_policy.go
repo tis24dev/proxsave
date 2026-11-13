@@ -80,13 +80,17 @@ const notifyPolicyResends = 2
 // Journal (todo point 42): a policy already confirmed is one DEBUG line and no request; one that
 // is sent is the "Applying notify level..." block, applied or pending. With no relay secret on
 // disk the request is still attempted, as before, but with no block: that case has none.
-func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
+//
+// It returns the poll when that poll carried the portal's initial email and did not answer within
+// the bounded wait (nil otherwise): runOnce looks at it once, without waiting, right after the
+// run's "daemon: backup finished" line (logLateInitialEmailOutcome).
+func (d *daemon) refreshNotifyPolicy(ctx context.Context) *beforeRunPoll {
 	if d.cfg == nil || !d.cfg.HealthcheckEnabled || d.cfg.HealthcheckMode != config.HealthcheckModeCentralized {
-		return
+		return nil
 	}
 	fresh, err := config.LoadConfigWithBaseDir(d.cfg.ConfigPath, d.cfg.BaseDir)
 	if err != nil {
-		return
+		return nil
 	}
 	want := notifyPolicy{notifyOn: negotiatedNotifyOn(fresh), channels: enabledNotifyChannels(fresh)}
 	d.setInitialEmailWant(fresh.HealthcheckAccountInitialEmail)
@@ -101,7 +105,7 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	if applied && !emailDue {
 		logging.DebugStep(logger, "notify policy", "before run notify_on=%s channels=%s already confirmed, not sent",
 			want.notifyOn, want.channelList())
-		return
+		return nil
 	}
 
 	block := !applied
@@ -119,11 +123,15 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	}
 
 	// The poll runs on its own goroutine because it can reach the relay-secret flock, which
-	// honours no deadline. result is written before done is closed and read only after it is.
-	var result configPoll
-	done := make(chan struct{})
+	// honours no deadline.
+	poll := &beforeRunPoll{done: make(chan struct{})}
 	go func() {
-		defer close(done)
+		defer func() {
+			close(poll.done)
+			if hook := d.beforeRunPollFinished; hook != nil {
+				hook()
+			}
+		}()
 		op := ""
 		if block {
 			op = "notify policy"
@@ -135,7 +143,7 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 		if r := d.reporterFromPoll(p, block); r != nil {
 			d.setReporter(r)
 		}
-		result = p
+		poll.result = p
 	}()
 	wait := notifyPolicyRefreshWait
 	if d.notifyRefreshWaitOverride > 0 {
@@ -145,7 +153,7 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 	defer timer.Stop()
 	answered := false
 	select {
-	case <-done:
+	case <-poll.done:
 		answered = true
 	case <-timer.C:
 	case <-ctx.Done():
@@ -155,14 +163,27 @@ func (d *daemon) refreshNotifyPolicy(ctx context.Context) {
 			logging.DebugStep(logger, "notify policy", "no answer within %s", wait)
 			d.logNotifyLevelOutcome(fresh.NotifyOn, want, reachNone)
 		}
-		return
+		if !emailDue {
+			return nil
+		}
+		// Its initial email answer, if any, is looked at once the backup has finished.
+		logging.DebugStep(logger, "initial email", "no answer within %s, looked at again after the backup", wait)
+		return poll
 	}
 	if block {
-		d.logNotifyPolicyAnswer(result)
-		d.logNotifyLevelOutcome(fresh.NotifyOn, want, result.answer())
+		d.logNotifyPolicyAnswer(poll.result)
+		d.logNotifyLevelOutcome(fresh.NotifyOn, want, poll.result.answer())
 	}
 	// After the notify level block, never inside it.
-	d.logInitialEmailOutcome(result)
+	d.logInitialEmailOutcome(poll.result)
+	return nil
+}
+
+// beforeRunPoll is the config poll refreshNotifyPolicy sends before a run, on its own goroutine:
+// result is written before done is closed and read only after it is.
+type beforeRunPoll struct {
+	done   chan struct{}
+	result configPoll
 }
 
 // logNotifyPolicyRead is the DEBUG evidence of what the notify level block sends: NOTIFY_ON as

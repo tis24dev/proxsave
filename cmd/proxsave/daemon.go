@@ -163,6 +163,9 @@ type daemon struct {
 	pollMu sync.Mutex
 	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
 	notifyRefreshWaitOverride time.Duration
+	// beforeRunPollFinished, when set (tests), is called once a before-run poll's goroutine
+	// has closed its done channel (refreshNotifyPolicy).
+	beforeRunPollFinished func()
 	// confirmedCadence is the seam the relay negotiation of SCHEDULER_FREQUENCY plugs into
 	// (todo points 17-22 and 39-40): in centralized mode it returns the cadence in effect for
 	// the configured one, i.e. the one the ProxSave HC Server has confirmed. nil means nothing
@@ -785,7 +788,7 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 
 	// Before the start ping, so its bounded wait is not counted in the run duration the remote
 	// monitor measures, and before getReporter, so a renegotiated channel set is the one pinged.
-	d.refreshNotifyPolicy(parentCtx)
+	lateEmail := d.refreshNotifyPolicy(parentCtx)
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
@@ -855,6 +858,9 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 		return false
 	}
 	logging.Info("daemon: backup finished (rid=%s exit=%d)", rid, code)
+	// A portal initial email answer that missed the bounded wait before the run is shown here,
+	// in the same run, or not at all (it is sent again before the next run).
+	d.logLateInitialEmailOutcome(lateEmail)
 	// A run whose child actually RAN can lift an inherited abandon degrade: the daemon launched
 	// a child, it took the backup lock the orphan used to hold, and it was reaped. That is what
 	// the marker's claim is checked against -- not a skip (ExitBackupSkipped, handled above, is
