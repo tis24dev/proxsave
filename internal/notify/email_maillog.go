@@ -223,7 +223,8 @@ func parseMailQueue(output, recipient string) (count int, entries []mailQueueEnt
 			addressLines++
 		}
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
+		// sendmail ends its listing with "Total requests: N", whose "Total" reads as a queue ID.
+		if trimmed == "" || strings.HasPrefix(trimmed, "Total requests") {
 			continue
 		}
 		fields := strings.Fields(trimmed)

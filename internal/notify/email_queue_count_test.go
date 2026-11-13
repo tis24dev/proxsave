@@ -32,3 +32,22 @@ BE71448FA1*     640 Mon Nov  3 10:01:04  root@pve.lan.local
 		t.Fatalf("exim (no queue-ID line): count = %d, want the address-line count 2", count)
 	}
 }
+
+// sendmail ends its listing with "Total requests: N": its first field, "Total", reads as a
+// queue ID, so one queued message counted as two.
+func TestParseMailQueueSkipsTheSendmailFooter(t *testing.T) {
+	sendmail := `		/var/spool/mqueue (1 request)
+-----Q-ID----- --Size-- -----Q-Time----- ------------Sender/Recipient-----------
+5AD3H1sK012345      612 Mon Nov  3 10:01 <root@pve.lan.local>
+                 (Deferred: Connection timed out with example.invalid.)
+					 <a@example.invalid>
+		Total requests: 1
+`
+	count, entries := parseMailQueue(sendmail, "a@example.invalid")
+	if count != 1 {
+		t.Fatalf("sendmail: count = %d, want 1", count)
+	}
+	if len(entries) != 1 || entries[0].id != "5AD3H1sK012345" {
+		t.Fatalf("sendmail: entries = %+v, want the one message with its real queue ID", entries)
+	}
+}
