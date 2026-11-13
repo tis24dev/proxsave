@@ -217,6 +217,16 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 		OptionIndex: hcIndex,
 		Active:      func() bool { return schedulerValues[scheduler.OptionIndex] == "daemon" },
 	}
+	// HC initial account email (HEALTHCHECK_ACCOUNT_INITIAL_EMAIL, issue 347): always shown, editable and
+	// required only with the daemon and the ProxSave HC Server; prefilled with the stored value.
+	hcInitialEmail := &components.FormField{
+		Label:       "HC initial account email",
+		Description: "ProxSave HC Server: your email for the monitoring portal. Confirmed by mail, applied once.",
+		Kind:        components.FieldText,
+		Text:        prefill.HealthcheckAccountInitialEmail,
+		Active:      func() bool { return healthcheck.Active() && hcValues[healthcheck.OptionIndex] == "centralized" },
+		Validate:    installer.ValidateHealthcheckInitialEmail,
+	}
 	// Notify level (NOTIFY_ON). Active only with a Healthchecks monitor (daemon engine, mode not
 	// Off): without one any level below every run has no effect, and the data block writes always.
 	// Fresh/Overwrite defaults to Warnings and failures; editing an existing config defaults to its
@@ -300,7 +310,7 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	fields := []*components.FormField{
 		secondary, secondaryPath, secondaryLog,
 		cloud, cloudRemote, cloudLog,
-		firewall, telegram, email, method, encryption, scheduler, healthcheck, notifyLevel,
+		firewall, telegram, email, method, encryption, scheduler, healthcheck, hcInitialEmail, notifyLevel,
 		frequency, weekday, monthDay, cronField,
 	}
 	if _, err := shell.Ask(ctx, session, components.NewFormGrid(
@@ -363,6 +373,9 @@ func CollectWizardData(ctx context.Context, session *shell.Session, baseTemplate
 	// Healthchecks require the daemon (the sole pinger); cron forces the mode off.
 	if data.SchedulerMode == "daemon" {
 		data.HealthcheckMode = hcValues[healthcheck.OptionIndex]
+		if data.HealthcheckMode == "centralized" {
+			data.HealthcheckAccountInitialEmail = strings.TrimSpace(hcInitialEmail.Text)
+		}
 	} else {
 		data.HealthcheckMode = "off"
 	}

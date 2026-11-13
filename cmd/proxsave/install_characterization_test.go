@@ -101,7 +101,8 @@ func TestInstallWizardCharacterization_FreshDeclineAll(t *testing.T) {
 	// toggle declined via bare Enter; default scheduler (daemon), default
 	// healthchecks mode (centralized, daemon-only prompt), default notify level
 	// (warning, asked only with a monitor), + run-at accepted.
-	run := runWizardCharacterization(t, "", strings.Repeat("\n", 11))
+	// The HC initial account email is required with centralized: typed after the mode answer.
+	run := runWizardCharacterization(t, "", strings.Repeat("\n", 8)+"ops@example.org\n"+strings.Repeat("\n", 3))
 	if run.err != nil {
 		t.Fatalf("wizard error: %v", run.err)
 	}

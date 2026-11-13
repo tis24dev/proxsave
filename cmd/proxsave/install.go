@@ -727,6 +727,13 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 			return nil, err
 		}
 		data.HealthcheckMode = hcMode
+		if hcMode == "centralized" {
+			email, err := promptHealthcheckInitialEmail(ctx, reader, prefill.HealthcheckAccountInitialEmail)
+			if err != nil {
+				return nil, err
+			}
+			data.HealthcheckAccountInitialEmail = email
+		}
 	}
 
 	// Notify level (NOTIFY_ON): asked only with a Healthchecks monitor. Without one any level below
@@ -1569,4 +1576,25 @@ func clearImmutableAttributesWithContext(ctx context.Context, target string, boo
 		}
 	}
 	return nil
+}
+
+// promptHealthcheckInitialEmail asks the portal's initial email (issue 347), required with the
+// centralized mode: Enter keeps the stored value, and the question repeats until the address passes
+// installer.ValidateHealthcheckInitialEmail, whose message is printed first.
+func promptHealthcheckInitialEmail(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	for {
+		raw, err := promptOptional(ctx, reader, fmt.Sprintf("HC initial account email [%s]: ", def))
+		if err != nil {
+			return "", err
+		}
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			value = strings.TrimSpace(def)
+		}
+		if verr := installer.ValidateHealthcheckInitialEmail(value); verr != nil {
+			fmt.Println(verr.Error())
+			continue
+		}
+		return value, nil
+	}
 }
