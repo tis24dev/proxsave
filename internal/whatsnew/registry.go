@@ -308,12 +308,6 @@ var notes = []Note{
 		},
 	},
 	{
-		Version: "0.46.1",
-		Lines: []string{
-			"This release includes a collection of fixes and corrections.",
-		},
-	},
-	{
 		Version: "0.47.0",
 		Lines: []string{
 			"You can now set an email for your monitoring portal, so you can sign in and set a password there.",
