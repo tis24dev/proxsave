@@ -20,6 +20,7 @@ import (
 
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/internal/types"
 )
 
@@ -709,7 +710,8 @@ var errRecipientWithoutEmail = errors.New("user exists but has no email configur
 // colon lines: a "user: <userid>" header, then indented "<key> <value>" lines. Read as
 // colon lines it never matched, so the email was never found there.
 func (e *EmailNotifier) detectRecipientViaPBSUserCfg(cfgPath string, targetUserID string) (string, error) {
-	data, err := os.ReadFile(cfgPath)
+	// Through an *os.Root on the file's directory, as every other config read of the repo (safefs).
+	data, err := safefs.ReadFileUnderRoot(cfgPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read %s: %w", cfgPath, err)
 	}
@@ -741,7 +743,8 @@ func (e *EmailNotifier) detectRecipientViaPBSUserCfg(cfgPath string, targetUserI
 }
 
 func (e *EmailNotifier) detectRecipientViaUserCfg(cfgPath string, targetUserID string) (string, error) {
-	data, err := os.ReadFile(cfgPath)
+	// Through an *os.Root on the file's directory, as every other config read of the repo (safefs).
+	data, err := safefs.ReadFileUnderRoot(cfgPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read %s: %w", cfgPath, err)
 	}
