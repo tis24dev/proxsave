@@ -97,3 +97,55 @@ func TestCloudLocalModesStayInsideTheCloudDirectory(t *testing.T) {
 		t.Fatalf("issues = %v, want permissions not set", got)
 	}
 }
+
+// A FAT-family CLOUD_REMOTE directory has no Unix permissions: the copies are not
+// chmodded and nothing is reported, where a chmod would fail. Another filesystem without
+// ownership keeps the chmod and reports the copy whose mode could not be set.
+func TestCloudLocalModesSkippedOnFAT(t *testing.T) {
+	for _, tc := range []struct {
+		fsType   FilesystemType
+		skipped  bool
+		wantMode os.FileMode
+	}{
+		{FilesystemFAT32, true, 0o644},
+		{FilesystemFAT, true, 0o644},
+		{FilesystemExFAT, true, 0o644},
+		{FilesystemCIFS, false, 0o600},
+		{FilesystemNTFS, false, 0o600},
+	} {
+		t.Run(string(tc.fsType), func(t *testing.T) {
+			cs, buf, archive, root := newLocalFormStore(t, "", false)
+			cs.localFS.Type = tc.fsType
+			dest := filepath.Join(root, filepath.Base(archive))
+			if err := os.WriteFile(dest, []byte("copy"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// A symlinked sidecar makes the chmod fail where it runs.
+			if err := os.Symlink(outside, dest+".sha256"); err != nil {
+				t.Fatal(err)
+			}
+
+			issues := &storeIssueRecorder{}
+			cs.setLocalPermissions(context.Background(), archive, dest, issues)
+
+			if st, err := os.Stat(dest); err != nil || st.Mode().Perm() != tc.wantMode {
+				t.Fatalf("archive copy mode = %v (%v), want %o", st.Mode().Perm(), err, tc.wantMode)
+			}
+			got := issues.list()
+			failed := strings.Contains(buf.String(), "Permissions failed")
+			if tc.skipped {
+				if len(got) != 0 || failed {
+					t.Fatalf("FAT: issues %v, log:\n%s", got, buf.String())
+				}
+				return
+			}
+			if len(got) != 1 || got[0] != StoreIssuePermissionsNotSet || !failed {
+				t.Fatalf("issues = %v, want permissions not set; log:\n%s", got, buf.String())
+			}
+		})
+	}
+}

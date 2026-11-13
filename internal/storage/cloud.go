@@ -316,12 +316,17 @@ func (c *CloudStorage) NotCheckedInDryRun() bool {
 // SET_BACKUP_PERMISSIONS). rclone writes them 0644. Nothing happens for the remote
 // form. On a filesystem without ownership the owner is left alone but each file still
 // takes its source file's mode, as the Secondary's copy does there: the 0644 left an
-// archive, unencrypted by default, readable by every user of the share.
+// archive, unencrypted by default, readable by every user of the share. A FAT-family
+// filesystem has no Unix permissions: nothing is set there and nothing is reported.
 func (c *CloudStorage) setLocalPermissions(ctx context.Context, sourceFile, destFile string, issues *storeIssueRecorder) {
 	if c.localDir == "" || c.localFS == nil {
 		return
 	}
 	if !c.localFS.SupportsOwnership {
+		if c.localFS.Type.hasNoUnixModes() {
+			c.logger.Debug("Cloud Storage: permissions - not set on the copies of %s (%s has no Unix permissions)", filepath.Base(destFile), c.localFS.Type)
+			return
+		}
 		c.setLocalModesFromSource(ctx, sourceFile, destFile, issues)
 		return
 	}

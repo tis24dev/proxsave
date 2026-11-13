@@ -322,7 +322,8 @@ var secondaryCloseSourceFile = func(f *os.File) error { return f.Close() }
 var secondaryChmod = safefs.Chmod
 
 // copyFile copies a file using Go's io.Copy. modeFailed, when not nil, is told about a
-// copy that was committed without the source mode (the chmod failed).
+// copy that was committed without the source mode (the chmod failed). On a FAT-family
+// filesystem the source mode is not mirrored: there are no Unix permissions to set.
 func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string, modeFailed func(path string, err error)) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -413,8 +414,10 @@ func (s *SecondaryStorage) copyFile(ctx context.Context, src, dest string, modeF
 		return fmt.Errorf("failed to close temporary file %s: %w", tempName, closeErr)
 	}
 
-	modeErr := secondaryChmod(ctx, tempName, sourceInfo.Mode(), to)
-	if modeErr != nil {
+	var modeErr error
+	if s.fsInfo != nil && s.fsInfo.Type.hasNoUnixModes() {
+		s.logger.Debug("Secondary storage: mode of %s not mirrored (%s has no Unix permissions)", filepath.Base(dest), s.fsInfo.Type)
+	} else if modeErr = secondaryChmod(ctx, tempName, sourceInfo.Mode(), to); modeErr != nil {
 		s.logger.Debug("Secondary storage: unable to mirror permissions on %s: %v", tempName, modeErr)
 	}
 	if _, err := safefs.Run(ctx, "secondary-chtimes", tempName, to, func() (struct{}, error) {

@@ -1154,3 +1154,54 @@ func TestSecondaryStorage_Store_ModeNotSetWithoutOwnershipIsReported(t *testing.
 		})
 	}
 }
+
+// A FAT-family Secondary has no Unix permissions: copyFile does not chmod the copies and
+// Store records nothing. Another filesystem without ownership keeps the chmod and reports
+// a copy whose mode could not be set.
+func TestSecondaryStorage_Store_ModeSkippedOnFAT(t *testing.T) {
+	for _, tc := range []struct {
+		fsType  FilesystemType
+		skipped bool
+	}{
+		{FilesystemFAT32, true},
+		{FilesystemFAT, true},
+		{FilesystemExFAT, true},
+		{FilesystemCIFS, false},
+		{FilesystemNTFS, false},
+	} {
+		t.Run(string(tc.fsType), func(t *testing.T) {
+			calls := 0
+			prev := secondaryChmod
+			secondaryChmod = func(context.Context, string, os.FileMode, time.Duration) error {
+				calls++
+				return &os.PathError{Op: "chmod", Path: "x", Err: fs.ErrPermission}
+			}
+			t.Cleanup(func() { secondaryChmod = prev })
+
+			var buf strings.Builder
+			logger := logging.New(types.LogLevelDebug, false)
+			logger.SetOutput(&buf)
+			storage, _ := NewSecondaryStorage(&config.Config{SecondaryEnabled: true, SecondaryPath: t.TempDir()}, logger, "")
+			storage.fsInfo = &FilesystemInfo{Type: tc.fsType, SupportsOwnership: false}
+			backupFile := filepath.Join(t.TempDir(), "node-backup-20240102-030405.tar.zst")
+			if err := os.WriteFile(backupFile, []byte("data"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := storage.Store(context.Background(), backupFile, &types.BackupMetadata{}); err != nil {
+				t.Fatalf("Store error: %v", err)
+			}
+
+			issues := storage.LastStoreIssues()
+			failed := strings.Contains(buf.String(), "Permissions failed")
+			if tc.skipped {
+				if calls != 0 || len(issues) != 0 || failed {
+					t.Fatalf("FAT: chmod calls %d, issues %v, log:\n%s", calls, issues, buf.String())
+				}
+				return
+			}
+			if calls == 0 || len(issues) != 1 || issues[0] != StoreIssuePermissionsNotSet || !failed {
+				t.Fatalf("chmod calls %d, issues %v, want permissions not set; log:\n%s", calls, issues, buf.String())
+			}
+		})
+	}
+}
