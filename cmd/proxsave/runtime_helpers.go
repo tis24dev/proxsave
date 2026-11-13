@@ -1113,24 +1113,60 @@ func repointLegacyCronLines(lines []string) ([]string, bool) {
 	out := make([]string, len(lines))
 	changed := false
 	for i, line := range lines {
-		if strings.Trim(cronCommandToken(line), "\"'") == legacy {
-			// cronCommandToken already excluded comments and env LINES, and a schedule field
-			// is never a path, so the command is the first occurrence of legacy on the line.
-			// A leading assignment does not change that: it is stepped over and the command
-			// still holds the first occurrence.
+		tok := cronCommandToken(line)
+		if strings.Trim(tok, "\"'") == legacy {
+			// Replace the legacy path inside the command field itself, not its first
+			// occurrence on the line. A leading assignment is stepped over by
+			// cronCommandToken, so "TAG=/usr/local/bin/proxmox-backup.old
+			// /usr/local/bin/proxmox-backup --backup" reaches this branch with the legacy
+			// path appearing first inside TAG: replacing the first occurrence rewrote TAG
+			// and left the command on the symlink removed right after. The command field
+			// is located by cronFieldOffset: a schedule field is never a path, and an
+			// assignment contains '=' while the token does not, so no preceding field can
+			// equal it. Schedule, assignments, whitespace and arguments are byte-preserved.
 			//
-			// The assignment form is deliberately NOT repointed. The guard above is exact
-			// equality, so "BIN=/usr/local/bin/proxmox-backup $BIN --backup" fails it and the
-			// line is left alone: cronCommandWord answers with the whole assignment WORD for
-			// that shape, never with the path inside it. That is a missed cosmetic repoint,
-			// not damage - this whole function is best-effort, and its caller says so.
-			out[i] = strings.Replace(line, legacy, canonical, 1)
-			changed = true
-			continue
+			// The assignment form is NOT repointed. The guard above is exact equality, so
+			// "BIN=/usr/local/bin/proxmox-backup $BIN --backup" fails it and the line is
+			// left alone: cronCommandWord answers with the whole assignment WORD for that
+			// shape, never with the path inside it. That line keeps pointing at the legacy
+			// symlink, which the upgrade removes right after this repoint, so it is left
+			// orphaned.
+			if at := cronFieldOffset(line, tok); at >= 0 {
+				out[i] = line[:at] + strings.Replace(tok, legacy, canonical, 1) + line[at+len(tok):]
+				changed = true
+				continue
+			}
 		}
 		out[i] = line
 	}
 	return out, changed
+}
+
+// cronFieldOffset returns the byte offset in line of the first whitespace-separated
+// field equal to word, splitting exactly as strings.Fields does (unicode.IsSpace), or -1
+// when no field equals it. It lets a caller edit one field in place while every other
+// byte of the line, whitespace included, stays as it was.
+func cronFieldOffset(line, word string) int {
+	if word == "" {
+		return -1
+	}
+	start := -1
+	for i, r := range line {
+		if unicode.IsSpace(r) {
+			if start >= 0 && line[start:i] == word {
+				return start
+			}
+			start = -1
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 && line[start:] == word {
+		return start
+	}
+	return -1
 }
 
 // repointLegacyCronEntries reads the crontab, repoints legacy proxmox-backup entries, and
