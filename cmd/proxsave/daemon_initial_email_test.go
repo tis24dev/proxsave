@@ -25,7 +25,8 @@ type emailRelay struct {
 	headers []string
 	queries []string
 	ack     map[string]string
-	applied bool // the notify policy ack
+	applied bool          // the notify policy ack
+	release chan struct{} // when set, every answer waits until it is closed
 }
 
 func (e *emailRelay) handler(w http.ResponseWriter, r *http.Request) {
@@ -33,8 +34,11 @@ func (e *emailRelay) handler(w http.ResponseWriter, r *http.Request) {
 	e.mu.Lock()
 	e.headers = append(e.headers, r.Header.Get("X-Proxsave-Account-Initial-Email"))
 	e.queries = append(e.queries, r.URL.RawQuery)
-	ack, applied := e.ack, e.applied
+	ack, applied, release := e.ack, e.applied, e.release
 	e.mu.Unlock()
+	if release != nil {
+		<-release
+	}
 	body := map[string]any{
 		"mode":            "centralized",
 		"alive_ping_url":  "https://hc.invalid/ping/alive",
@@ -269,6 +273,44 @@ func TestBeforeARunTheAddressGoesOutEvenWithAConfirmedPolicy(t *testing.T) {
 	}
 	want := "Applying monitoring portal email...|  Waiting for the confirmation link sent by mail|⚠ Monitoring portal email: not applied"
 	if got := strings.Join(infoLines(buf.String()), "|"); got != want {
+		t.Fatalf("lines: %s", got)
+	}
+}
+
+// A before-run answer that comes back after the bounded wait is not logged then: the address stays
+// due, goes out again before the next run, and that answer is logged once.
+func TestALateBeforeRunAnswerIsSentAgainAndLoggedOnce(t *testing.T) {
+	relay := &emailRelay{applied: true, ack: map[string]string{"state": "rejected", "reason": "invalid"},
+		release: make(chan struct{})}
+	d := emailDaemon(t, relay, "", emailEnv+"HEALTHCHECK_ACCOUNT_INITIAL_EMAIL="+testInitialEmail+"\n")
+	d.notifyApplied = &notifyPolicy{notifyOn: config.NotifyOnWarning, channels: []string{"telegram"}}
+	d.notifyRefreshWaitOverride = 50 * time.Millisecond
+	logs := captureDaemonLog(t) // a locked sink: the late poll writes to it after the wait
+	visible := func() []string {
+		var out []string
+		for _, line := range logs() {
+			if strings.HasPrefix(line, "INFO ") || strings.HasPrefix(line, "WARNING ") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+
+	d.refreshNotifyPolicy(context.Background())
+	if got := visible(); len(got) != 0 {
+		t.Fatalf("visible lines before the answer: %q", got)
+	}
+	close(relay.release) // the late answer arrives, after the wait
+	d.notifyRefreshWaitOverride = 5 * time.Second
+	d.refreshNotifyPolicy(context.Background()) // its poll waits for the late one, then sends again
+	d.refreshNotifyPolicy(context.Background()) // the final answer was logged: nothing due
+
+	if got := relay.sent(); len(got) != 2 || got[0] != testInitialEmail || got[1] != testInitialEmail {
+		t.Fatalf("headers = %q, want the address twice", got)
+	}
+	want := "INFO Applying monitoring portal email...|INFO   Not a usable email address|" +
+		"WARNING ⚠ Monitoring portal email: not applied"
+	if got := strings.Join(visible(), "|"); got != want {
 		t.Fatalf("lines: %s", got)
 	}
 }

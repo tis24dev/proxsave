@@ -34,7 +34,9 @@ func (d *daemon) wantedInitialEmail() string {
 	return want
 }
 
-// recordInitialEmailAck keeps a final answer for sent, so that address is not sent again.
+// recordInitialEmailAck keeps a final answer for sent, so that address is not sent again. It is
+// called only once that answer is logged: an answer the operator never saw (a before-run poll
+// that came back after the bounded wait) leaves the address due, to be sent again next run.
 func (d *daemon) recordInitialEmailAck(sent string, ack *health.AccountInitialEmailAck) {
 	if sent == "" || !ack.Final() {
 		return
@@ -55,7 +57,7 @@ func (d *daemon) setInitialEmailWant(value string) {
 // the address: DEBUG evidence, then the outcome. Nothing visible when the poll failed or the relay
 // did not answer about it (an older relay): the next poll sends it again.
 func (d *daemon) logInitialEmailOutcome(p configPoll) {
-	if !p.initialEmailSent {
+	if p.initialEmail == "" {
 		return
 	}
 	logger := logging.GetDefaultLogger()
@@ -87,6 +89,7 @@ func (d *daemon) logInitialEmailOutcome(p configPoll) {
 		}
 		logging.Info("%s Monitoring portal email: not applied", theme.SymbolWarning)
 	}
+	d.recordInitialEmailAck(p.initialEmail, ack)
 }
 
 // initialEmailRejection is the operator's reason for a rejected address; "" for a reason this

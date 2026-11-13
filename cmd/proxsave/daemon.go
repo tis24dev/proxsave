@@ -2207,9 +2207,10 @@ type configPoll struct {
 	secret    string         // the exact secret sent, the comparand of a rejected-secret clear
 	frequency cron.Frequency // the schedule frequency sent
 	notify    notifyPolicy   // the notify policy whose ack cfg carries
-	// initialEmailSent says the poll carried HEALTHCHECK_ACCOUNT_INITIAL_EMAIL; cfg then holds the
-	// relay's answer in AccountInitialEmail. The address itself is never kept here.
-	initialEmailSent bool
+	// initialEmail is the HEALTHCHECK_ACCOUNT_INITIAL_EMAIL the poll carried ("" when none); cfg
+	// then holds the relay's answer in AccountInitialEmail. It is kept only so that the answer is
+	// recorded once it is logged (logInitialEmailOutcome), and never logged.
+	initialEmail string
 }
 
 // relaySecret is the relay secret on disk or, when there is none yet, one from a THROTTLED,
@@ -2272,11 +2273,10 @@ func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, 
 	}
 	cfg, status, err := fetch(want)
 	p := configPoll{sent: true, status: status, cfg: cfg, err: err, secret: secret, frequency: freq, notify: want,
-		initialEmailSent: initialEmail != ""}
+		initialEmail: initialEmail}
 	if err != nil {
 		return p
 	}
-	d.recordInitialEmailAck(initialEmail, p.cfg.AccountInitialEmail)
 	// A poll that sent a policy no longer wanted may have reached the relay after a newer one
 	// and put the old policy back there: send the wanted one again, so the relay's last word is
 	// always the policy wanted now. Every answer is recorded, the last resend's included: the
