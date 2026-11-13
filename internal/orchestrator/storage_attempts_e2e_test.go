@@ -649,3 +649,50 @@ func TestDispatchLogFileCloudLocalLogModeReusesInitDetection(t *testing.T) {
 		})
 	}
 }
+
+// Step [8], CLOUD_REMOTE a local directory: the log chmod (SetLocalLogMode, inside
+// copyLogToCloud) only ever sees a destination inside the CLOUD_REMOTE directory. An
+// absolute CLOUD_LOG_PATH is placed under CLOUD_REMOTE, never at that absolute path on
+// the host; a CLOUD_LOG_PATH that resolves outside it is refused before the upload, so
+// neither rclone nor the chmod runs.
+func TestDispatchLogFileCloudLogChmodStaysInsideTheShare(t *testing.T) {
+	for _, tc := range []struct {
+		name, logPath string
+		uploaded      bool
+	}{
+		{"absolute", "/var/log/proxsave", true},
+		{"absolute with traversal", "/../../outside", false},
+		{"relative traversal", "../outside", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := logging.New(types.LogLevelInfo, false)
+			logger.SetOutput(&buf)
+			root := filepath.Join(t.TempDir(), "cloud")
+			cfg := &config.Config{CloudEnabled: true, CloudRemote: root, CloudLogPath: tc.logPath, FsIoTimeoutSeconds: 30}
+			o := &Orchestrator{logger: logger, cfg: cfg}
+			var dests []string
+			o.copyLogToCloudFn = func(_ context.Context, _, destPath string) error {
+				dests = append(dests, destPath)
+				return nil
+			}
+			src := writeSrcLog(t)
+			if err := o.dispatchLogFile(context.Background(), src); err != nil {
+				t.Fatalf("dispatchLogFile: %v", err)
+			}
+			if !tc.uploaded {
+				if len(dests) != 0 {
+					t.Fatalf("upload (and its chmod) ran for a refused CLOUD_LOG_PATH: %v", dests)
+				}
+				if !strings.Contains(buf.String(), "CLOUD_LOG_PATH: outside "+root) {
+					t.Fatalf("missing the refusal in:\n%s", buf.String())
+				}
+				return
+			}
+			want := filepath.Join(root, tc.logPath, filepath.Base(src))
+			if len(dests) != 1 || dests[0] != want {
+				t.Fatalf("upload destinations = %v, want [%s] inside %s", dests, want, root)
+			}
+		})
+	}
+}
