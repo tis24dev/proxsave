@@ -1319,7 +1319,8 @@ func (e *EmailNotifier) buildEmailMessage(recipient, subject, htmlBody, textBody
 	if attachLog {
 		// Try to read log file; on failure, fall back to plain multipart/alternative
 		logPath := strings.TrimSpace(data.LogFilePath)
-		content, err := os.ReadFile(logPath)
+		// Through an *os.Root on the log's directory, as the user.cfg reads above (safefs).
+		content, err := safefs.ReadFileUnderRoot(logPath)
 		if err != nil {
 			e.logger.Warning("Failed to read log file for email attachment (%s): %v", logPath, err)
 			attachLog = false
