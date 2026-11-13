@@ -46,8 +46,8 @@ func TestPortalBoxForTheSignInPage(t *testing.T) {
 ╰─────────────────────────────────────────╯
 `
 	for passwordSet, line := range map[bool]string{
-		false: `Sign in with your email: use "Email Me a Link" on the sign-in page.`,
-		true:  "Sign in with your email and the password you set.",
+		false: `Sign in: your email, then "Email Me a Link"`,
+		true:  "Sign in: your email and password",
 	} {
 		v := ansi.Strip(buildHealthcheckPrompt(false, page, "", "", "WORKING", "ok", orchestrator.HealthcheckSetupLevelOk,
 			nil, nil, portalLinkCopy{portalPage: true, passwordSet: passwordSet}))

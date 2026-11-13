@@ -257,7 +257,7 @@ func ClassifyHealthcheckSetupSkip(res HealthcheckSetupBootstrap) HealthcheckSetu
 // password when there is one, else with an emailed link. Shared by the TUI and --install --cli.
 func HealthcheckPortalPageSignIn(passwordSet bool) string {
 	if passwordSet {
-		return "Sign in with your email and the password you set."
+		return "Sign in: your email and password"
 	}
-	return `Sign in with your email: use "Email Me a Link" on the sign-in page.`
+	return `Sign in: your email, then "Email Me a Link"`
 }

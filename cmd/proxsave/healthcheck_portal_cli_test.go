@@ -33,8 +33,8 @@ func TestPrintHealthcheckPortalOfTodayIsUnchanged(t *testing.T) {
 func TestPrintHealthcheckPortalForTheSignInPage(t *testing.T) {
 	page := "https://hc.proxsave.dev/accounts/login/"
 	for passwordSet, line := range map[bool]string{
-		false: `Sign in with your email: use "Email Me a Link" on the sign-in page.`,
-		true:  "Sign in with your email and the password you set.",
+		false: `Sign in: your email, then "Email Me a Link"`,
+		true:  "Sign in: your email and password",
 	} {
 		st := orchestrator.HealthcheckSetupState{LoginURL: page, LoginIsPortalPage: true, LoginPasswordSet: passwordSet}
 		want := "\nYour monitoring portal:\n  " + page + "\n" + line + "\n\n"

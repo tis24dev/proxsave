@@ -321,14 +321,19 @@ address**, not a username. Sign in there with the password you chose.
 
 **Your email.** The account the server makes for a host has an address that receives no
 mail, and the portal mails a code before it lets you set a password or change the email.
-Set `HEALTHCHECK_ACCOUNT_INITIAL_EMAIL` in `backup.env` to your address: the daemon sends
-it to the server, which mails a confirmation link to it, valid 15 minutes. Press Confirm
-on that page and this host's checks move into the portal account of that address, made
-then if you have none. Hosts with the same address share one account, one project each.
-From then on you sign in with your email, by password or with "Email Me a Link", and
-change the address from the portal: the variable is not used again for this host. The
-server sends at most three mails for one address; after that only a different address
-starts again.
+To use your own address:
+
+1. Set `HEALTHCHECK_ACCOUNT_INITIAL_EMAIL` in `backup.env`.
+2. The daemon sends it to the server, which mails a confirmation link (valid 15 minutes).
+3. Press Confirm: this host's checks move into the portal account of that address,
+   made if missing.
+
+Then:
+
+- Same address on several hosts: one account, one project per host.
+- Sign in: your email, then "Email Me a Link" or your password.
+- Change the address: from the portal; the variable is not used again for this host.
+- Mails per address: at most three; after that only a different address starts again.
 
 The exact wording differs a little per surface. The log epilogue uses
 `Healthchecks Portal:` for both states, the link and the sign-in address alike, and
