@@ -243,9 +243,14 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsIn
 		return false, nil
 	}
 	c.logger.Debug("Cloud log copy: setting mode 0640 on %s (%s, detected at storage init)", logFile, fsInfo.Type)
-	// Lchmod: the directory can be a share other hosts write to, and a symlink swapped
-	// in for the log must not redirect a root chmod to another file.
-	if err := safefs.Lchmod(ctx, logFile, 0o640, c.fsIoTimeout()); err != nil {
+	// Confined to the CLOUD_REMOTE directory: it can be a share other hosts write to, and a
+	// symlink swapped in for the log or one of its parent directories must not redirect a
+	// root chmod to another file. A log outside it is confined to its own directory.
+	root := c.localModeRoot()
+	if !pathWithin(filepath.Clean(logFile), root) {
+		root = filepath.Dir(logFile)
+	}
+	if err := safefs.LchmodInRoot(ctx, root, logFile, 0o640, c.fsIoTimeout()); err != nil {
 		c.logger.Debug("Cloud log copy: cannot set the mode of %s: %v", logFile, err)
 		return false, err
 	}
@@ -254,8 +259,9 @@ func (c *CloudStorage) SetLocalLogMode(ctx context.Context, logFile string, fsIn
 
 // setLocalModesFromSource gives each file of the backup set copied to destFile the mode
 // of the same file next to sourceFile, 0600 when that mode cannot be read, so a copy is
-// never left at rclone's 0644. The chmod refuses a symlink: the directory can be a share
-// other hosts write to. A failure stays at DEBUG, as on the Secondary.
+// never left at rclone's 0644. The chmod refuses a symlink and stays inside the CLOUD_REMOTE
+// directory: the directory can be a share other hosts write to. A failure stays at DEBUG,
+// as on the Secondary.
 func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, destFile string) {
 	timeout := c.fsIoTimeout()
 	for _, dest := range buildBackupCandidatePaths(destFile, true) {
@@ -270,10 +276,19 @@ func (c *CloudStorage) setLocalModesFromSource(ctx context.Context, sourceFile, 
 			c.logger.Debug("Cloud Storage: permissions - no source mode for %s, using %o: %v", filepath.Base(dest), mode, err)
 		}
 		c.logger.Debug("Cloud Storage: permissions - owner left as is for %s (filesystem without ownership), mode %o from the source", filepath.Base(dest), mode)
-		if err := safefs.Lchmod(ctx, dest, mode, timeout); err != nil {
+		if err := safefs.LchmodInRoot(ctx, c.localModeRoot(), dest, mode, timeout); err != nil {
 			c.logger.Debug("Cloud Storage: permissions - cannot set the mode of %s: %v", filepath.Base(dest), err)
 		}
 	}
+}
+
+// localModeRoot is the directory the local chmods are confined to: the CLOUD_REMOTE
+// directory, or the backup directory for a store built without it.
+func (c *CloudStorage) localModeRoot() string {
+	if c.localRoot != "" {
+		return c.localRoot
+	}
+	return c.localDir
 }
 
 // DetectionFailure is why the last detection of the local directory fell back to an
