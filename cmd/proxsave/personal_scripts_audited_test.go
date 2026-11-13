@@ -764,6 +764,11 @@ func parkedParentOpens(t *testing.T) int {
 	stacks := string(buf[:runtime.Stack(buf, true)])
 	parked := 0
 	for goroutine := range strings.SplitSeq(stacks, "\n\n") {
+		// Only the personal-script probe: every safefs read of a concurrent test also passes through
+		// os.OpenRoot for an instant, and counting those made the baseline one too high at random.
+		if !strings.Contains(goroutine, "openPersonalScriptForExecution") {
+			continue
+		}
 		if strings.Contains(goroutine, "os.openRootNolog") || strings.Contains(goroutine, "os.OpenRoot(") {
 			parked++
 		}
