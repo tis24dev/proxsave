@@ -217,11 +217,28 @@ func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, 
 
 	logger.Debug("Walking directory tree for permissions: %s (uid=%d,gid=%d)", root, uid, gid)
 
+	var failures walkFailures
 	err = safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
-		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger, &failed)
+		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger, &failures)
 	})
-	logger.Debug("Permission walk on %s finished: %d entries could not be changed, walk error: %v", root, failed, err)
-	return failed, err
+	logger.Debug("Permission walk on %s finished: %d entries could not be changed, walk error: %v", root, failures.count, err)
+	return failures.count, err
+}
+
+// walkFailures counts the walked entries that could not be changed, each once. The walk
+// reports a directory it could not read right after visiting that directory, so a
+// directory whose chmod failed and whose read then failed is the same entry, counted once.
+type walkFailures struct {
+	count    int
+	lastPath string
+}
+
+func (f *walkFailures) add(path string) {
+	if f.count > 0 && f.lastPath == path {
+		return
+	}
+	f.count++
+	f.lastPath = path
 }
 
 // applyOwnershipWalkEntry applies bounded ownership/permissions to a single walked
@@ -229,16 +246,18 @@ func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, 
 // bounded walk) is logged and SKIPPED (return nil) rather than propagated:
 // returning it would abort the walk, leaving every not-yet-visited entry with its
 // old ownership. One unreadable/stale subtree must not block fixing the rest of
-// the backup tree. An entry whose chown or chmod failed is counted in failed, once.
-func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, walkErr error, uid, gid int, timeout time.Duration, logger *logging.Logger, failed *int) error {
+// the backup tree, but it was not changed either, so it is counted in failed like an
+// entry whose chown or chmod failed. Each entry is counted once.
+func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, walkErr error, uid, gid int, timeout time.Duration, logger *logging.Logger, failed *walkFailures) error {
 	if walkErr != nil {
-		logger.Debug("permission walk: skipping %s: %v", path, walkErr)
+		logger.Debug("permission walk: skipping %s, its subtree is not changed: %v", path, walkErr)
+		failed.add(path)
 		return nil
 	}
 	entryFailed := false
 	defer func() {
 		if entryFailed {
-			*failed++
+			failed.add(path)
 		}
 	}()
 

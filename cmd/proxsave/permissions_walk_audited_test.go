@@ -30,9 +30,50 @@ func permWalkTestLogger() *logging.Logger {
 
 func TestApplyOwnershipWalkEntry_TraversalErrorIsSkippedNotAborted(t *testing.T) {
 	// A non-nil walkErr (with a nil DirEntry, as WalkDir passes on read failures)
-	// must return nil so the walk continues to the rest of the tree.
-	if err := applyOwnershipWalkEntry(context.Background(), "/some/unreadable/subdir", nil, errors.New("permission denied"), 0, 0, 0, permWalkTestLogger(), new(int)); err != nil {
+	// must return nil so the walk continues to the rest of the tree, and the subtree
+	// it could not read is counted as an entry that could not be changed.
+	var failed walkFailures
+	if err := applyOwnershipWalkEntry(context.Background(), "/some/unreadable/subdir", nil, errors.New("permission denied"), 0, 0, 0, permWalkTestLogger(), &failed); err != nil {
 		t.Fatalf("a traversal error must be skipped (return nil) so the walk continues, got %v", err)
+	}
+	if failed.count != 1 {
+		t.Fatalf("an unread subtree was counted %d times, want 1", failed.count)
+	}
+}
+
+// A directory whose chmod failed is reported again when its read fails: one entry.
+func TestWalkFailuresCountsAnEntryOnce(t *testing.T) {
+	var failed walkFailures
+	for _, p := range []string{"/b/sub", "/b/sub", "/b/other", "/b/sub"} {
+		failed.add(p)
+	}
+	if failed.count != 3 {
+		t.Fatalf("count = %d, want 3 (the repeated report of /b/sub right after it is one entry)", failed.count)
+	}
+}
+
+// A subdirectory the walk cannot read leaves its subtree unchanged: the pass reports
+// it, so the footer is not "normalized correctly" over a subtree never visited.
+func TestApplyBackupPermissions_UnreadableSubdirIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a 0000 directory")
+	}
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o700) })
+
+	failed, err := applyDirOwnershipRecursive(context.Background(), dir, os.Getuid(), os.Getgid(), 0, false, permWalkTestLogger())
+	if err != nil || failed != 1 {
+		t.Fatalf("failed = %d, err = %v, want the unreadable subdirectory counted once and no walk error", failed, err)
 	}
 }
 
@@ -48,12 +89,12 @@ func TestApplyOwnershipWalkEntry_NormalEntryReturnsNil(t *testing.T) {
 	}
 
 	// chown to our own uid/gid is a harmless no-op; the entry must process cleanly.
-	failed := 0
+	var failed walkFailures
 	if err := applyOwnershipWalkEntry(context.Background(), file, entries[0], nil, os.Getuid(), os.Getgid(), 0, permWalkTestLogger(), &failed); err != nil {
 		t.Fatalf("a normal entry must return nil, got %v", err)
 	}
-	if failed != 0 {
-		t.Fatalf("a clean entry was counted as failed (%d)", failed)
+	if failed.count != 0 {
+		t.Fatalf("a clean entry was counted as failed (%d)", failed.count)
 	}
 }
 
