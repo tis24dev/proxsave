@@ -141,8 +141,13 @@ func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logg
 		}
 
 		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", dir, uid, gid)
-		if err := applyDirOwnershipRecursive(ctx, dir, uid, gid, timeout, dryRun, logger); err != nil {
+		failed, err := applyDirOwnershipRecursive(ctx, dir, uid, gid, timeout, dryRun, logger)
+		switch {
+		case err != nil:
 			logger.Warning("Failed to apply permissions on %s: %v", dir, err)
+			outcome.skipped = append(outcome.skipped, dir+" could not be changed")
+		case failed > 0:
+			logger.Warning("Failed to apply permissions on %s: %d entries could not be changed", dir, failed)
 			outcome.skipped = append(outcome.skipped, dir+" could not be changed")
 		}
 	}
@@ -182,26 +187,21 @@ func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
 // block forever in an uninterruptible syscall on a dead/stale mount). In dry-run
 // it mutates nothing, matching the read-only dry-run security preflight.
 //
-// An entry whose chown or chmod failed does not stop the walk; when the walk itself
-// succeeded, the count of such entries is returned as the error.
-func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, timeout time.Duration, dryRun bool, logger *logging.Logger) error {
+// An entry whose chown or chmod failed does not stop the walk; failed is the count of
+// such entries. err is the error that stopped the walk itself (a cancelled context).
+func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, timeout time.Duration, dryRun bool, logger *logging.Logger) (failed int, err error) {
 	if dryRun {
 		logger.Info("DRY RUN: would recursively set ownership %d:%d, 0750 directory perms and 0640 backup file perms on %s", uid, gid, root)
-		return nil
+		return 0, nil
 	}
 
 	logger.Debug("Walking directory tree for permissions: %s (uid=%d,gid=%d)", root, uid, gid)
 
-	failed := 0
-	if err := safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
+	err = safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
 		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger, &failed)
-	}); err != nil {
-		return err
-	}
-	if failed > 0 {
-		return fmt.Errorf("%d entries could not be changed", failed)
-	}
-	return nil
+	})
+	logger.Debug("Permission walk on %s finished: %d entries could not be changed, walk error: %v", root, failed, err)
+	return failed, err
 }
 
 // applyOwnershipWalkEntry applies bounded ownership/permissions to a single walked

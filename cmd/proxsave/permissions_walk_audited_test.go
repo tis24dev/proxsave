@@ -68,9 +68,9 @@ func TestApplyBackupPermissions_FailedEntriesAreReported(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "file"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := applyDirOwnershipRecursive(context.Background(), dir, 0, 0, 0, false, permWalkTestLogger())
-	if err == nil || err.Error() != "2 entries could not be changed" {
-		t.Fatalf("err = %v, want both entries (the directory and its file) counted", err)
+	failed, err := applyDirOwnershipRecursive(context.Background(), dir, 0, 0, 0, false, permWalkTestLogger())
+	if err != nil || failed != 2 {
+		t.Fatalf("failed = %d, err = %v, want both entries (the directory and its file) counted and no walk error", failed, err)
 	}
 
 	var out bytes.Buffer

@@ -54,3 +54,34 @@ func TestBackupPermissionsOutcomeMarksADocumentedSkip(t *testing.T) {
 		t.Fatalf("missing BACKUP_PATH: outcome %+v, want a documented skip and nothing skipped", outcome)
 	}
 }
+
+// A backup path whose walk left an entry unchanged is a skipped path: the footer is a
+// warning that names it, never "normalized correctly (including backup paths)".
+func TestPermissionsFooterNamesABackupPathWithAFailedEntry(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a 0000 file, so its chmod does not fail")
+	}
+	usr, grp := currentUserGroup(t)
+	base := t.TempDir()
+	for _, d := range []string{"backup", "log", "configs"} {
+		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The chmod of a backup set file opens it first; a 0000 file cannot be opened by
+	// its non-root owner, so that entry is the one the walk cannot change.
+	if err := os.WriteFile(filepath.Join(base, "backup", "pve1-backup-20261001-010101.tar.xz"), []byte("x"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(base, "configs", "backup.env")
+	env := "BASE_DIR=" + base + "\nBACKUP_PATH=" + filepath.Join(base, "backup") + "\nLOG_PATH=" + filepath.Join(base, "log") +
+		"\nSET_BACKUP_PERMISSIONS=true\nBACKUP_USER=" + usr + "\nBACKUP_GROUP=" + grp + "\nSECONDARY_ENABLED=false\n"
+	if err := os.WriteFile(cfgPath, []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, message := fixPermissionsAfterInstall(context.Background(), cfgPath, base, logging.NewBootstrapLogger(), io.Discard)
+	wantMessage := "permissions and ownership normalized; backup paths skipped: " + filepath.Join(base, "backup") + " could not be changed"
+	if status != "warning" || message != wantMessage {
+		t.Fatalf("status=%q message=%q, want %q %q", status, message, "warning", wantMessage)
+	}
+}
