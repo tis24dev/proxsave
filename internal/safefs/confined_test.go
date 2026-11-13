@@ -1,11 +1,13 @@
 package safefs
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestReadFileUnderRootReadsFile(t *testing.T) {
@@ -219,5 +221,52 @@ func TestReadFileInRootDetectsLoop(t *testing.T) {
 	}
 	if _, err := ReadFileInRoot(root, "/etc/loop"); err == nil {
 		t.Fatal("expected error for symlink loop")
+	}
+}
+
+// LchmodInRoot changes a file under root, and refuses what would leave it: a parent directory
+// replaced by a symlink to another directory (Lchmod followed it), a symlink at the final
+// component (as Lchmod), and a path above root.
+func TestLchmodInRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "f")
+	for _, p := range []string{filepath.Join(root, "sub", "f"), victim} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "swapped")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("f", filepath.Join(root, "sub", "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := LchmodInRoot(ctx, root, filepath.Join(root, "sub", "f"), 0o600, time.Second); err != nil {
+		t.Fatalf("a file under root: %v", err)
+	}
+	if st, _ := os.Stat(filepath.Join(root, "sub", "f")); st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", st.Mode().Perm())
+	}
+	for _, p := range []string{
+		filepath.Join(root, "swapped", "f"), // a parent symlinked out of root
+		filepath.Join(root, "sub", "link"),  // a final-component symlink, even inside root
+		filepath.Join(root, "..", filepath.Base(outside), "f"),
+		victim,
+	} {
+		if err := LchmodInRoot(ctx, root, p, 0o640, time.Second); err == nil {
+			t.Errorf("%s: changed, want refused", p)
+		}
+	}
+	if st, _ := os.Stat(victim); st.Mode().Perm() != 0o644 {
+		t.Fatalf("the file outside root went to %v, want 0644 untouched", st.Mode().Perm())
+	}
+	if st, _ := os.Lstat(filepath.Join(root, "sub", "f")); st.Mode().Perm() != 0o600 {
+		t.Fatalf("the link target changed through the link: %v", st.Mode().Perm())
 	}
 }

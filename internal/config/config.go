@@ -263,16 +263,20 @@ type Config struct {
 	PersonalScriptPostRun string
 
 	// Healthchecks connector (dead-man switch + backup outcome), used by the daemon.
-	HealthcheckEnabled           bool
-	HealthcheckMode              string // "centralized" (fetch ping-urls from the server) | "self"
-	HealthcheckHeartbeatInterval time.Duration
-	HealthcheckSendLog           bool
-	HealthcheckAliveURL          string // centralized cache (auto-filled from the server)
-	HealthcheckBackupURL         string // centralized cache (auto-filled from the server)
-	HealthcheckPingEndpoint      string // self mode: ping base
-	HealthcheckPingKey           string // self mode: optional ping key for slug URLs
-	HealthcheckAliveID           string // self mode: UUID or slug of the service-alive check
-	HealthcheckBackupID          string // self mode: UUID or slug of the backup-outcome check
+	HealthcheckEnabled bool
+	HealthcheckMode    string // "centralized" (fetch ping-urls from the server) | "self"
+	// HealthcheckAccountInitialEmail is the operator's address for the monitoring portal
+	// (centralized only, issue 347): sent to the relay until it is applied or refused, then
+	// changed from the portal. Empty sends nothing.
+	HealthcheckAccountInitialEmail string
+	HealthcheckHeartbeatInterval   time.Duration
+	HealthcheckSendLog             bool
+	HealthcheckAliveURL            string // centralized cache (auto-filled from the server)
+	HealthcheckBackupURL           string // centralized cache (auto-filled from the server)
+	HealthcheckPingEndpoint        string // self mode: ping base
+	HealthcheckPingKey             string // self mode: optional ping key for slug URLs
+	HealthcheckAliveID             string // self mode: UUID or slug of the service-alive check
+	HealthcheckBackupID            string // self mode: UUID or slug of the backup-outcome check
 	// Fase 1 updates sensor (daemon): whether a newer release is available.
 	HealthcheckUpdatesURL     string        // self mode: full updates check ping URL (optional)
 	HealthcheckUpdatesID      string        // self mode: UUID or slug of the updates check
@@ -574,11 +578,10 @@ func (c *Config) parseGeneralSettings() {
 	c.ProfilingEnabled = c.getBool("PROFILING_ENABLED", true)
 	c.DebugLevel = c.getLogLevel("DEBUG_LEVEL", types.LogLevelInfo)
 
-	if disableColors, ok := c.raw["DISABLE_COLORS"]; ok {
-		c.UseColor = !utils.ParseBool(disableColors)
-	} else {
-		c.UseColor = c.getBool("USE_COLOR", true)
-	}
+	// DISABLE_COLORS, the Bash-era name, is no longer read: 935fcc51 dropped the legacy
+	// names from the loader and missed this one, so the integrity check called it unknown
+	// and ignored while it still overrode USE_COLOR, from the file and the environment.
+	c.UseColor = c.getBool("USE_COLOR", true)
 	c.ColorizeStepLogs = c.getBool("COLORIZE_STEP_LOGS", true) && c.UseColor
 }
 
@@ -954,6 +957,7 @@ func (c *Config) parsePersonalScriptSettings() {
 func (c *Config) parseHealthcheckSettings() {
 	c.HealthcheckEnabled = c.getBool("HEALTHCHECK_ENABLED", false)
 	c.HealthcheckMode = normalizeHealthcheckMode(c.getString("HEALTHCHECK_MODE", HealthcheckModeCentralized))
+	c.HealthcheckAccountInitialEmail = strings.TrimSpace(c.getString("HEALTHCHECK_ACCOUNT_INITIAL_EMAIL", ""))
 	c.HealthcheckHeartbeatInterval = c.getDuration("HEALTHCHECK_HEARTBEAT_INTERVAL", 5*time.Minute)
 	c.HealthcheckSendLog = c.getBool("HEALTHCHECK_SEND_LOG", true)
 	c.HealthcheckAliveURL = strings.TrimSpace(c.getString("HEALTHCHECK_ALIVE_URL", ""))
@@ -1307,8 +1311,15 @@ func newConfigVarExpander(raw map[string]string, baseDir string) *configVarExpan
 	}
 }
 
+// expand resolves $VAR and ${VAR} in s. "$$" is a literal "$": os.Expand has no escape
+// and hands it over as the shell name "$", and with no form of quoting able to protect a
+// "$", a credential that holds one (a webhook password, an HMAC secret) could not be
+// written at all.
 func (e *configVarExpander) expand(s string) string {
 	return os.Expand(s, func(key string) string {
+		if key == "$" {
+			return "$"
+		}
 		return e.resolve(key)
 	})
 }
@@ -1524,6 +1535,17 @@ func normalizeList(values []string) []string {
 }
 
 // BuildWebhookConfig constructs a complete webhook configuration with all endpoints
+// ActiveSecondaryPaths returns SECONDARY_PATH and SECONDARY_LOG_PATH when the secondary
+// is enabled, and two empty strings when it is not. The loader keeps both paths with
+// SECONDARY_ENABLED=false, so a pass that walks, chowns or creates them must ask here:
+// a disabled secondary is not the operator's to have ProxSave touch.
+func (c *Config) ActiveSecondaryPaths() (dataPath, logPath string) {
+	if c == nil || !c.SecondaryEnabled {
+		return "", ""
+	}
+	return c.SecondaryPath, c.SecondaryLogPath
+}
+
 func (c *Config) BuildWebhookConfig() *WebhookConfig {
 	endpoints := []WebhookEndpoint{}
 

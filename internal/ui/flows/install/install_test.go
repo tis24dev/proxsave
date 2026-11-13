@@ -153,11 +153,16 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}()
 
 	// Single aligned form: inactive dependent rows are skipped. Fresh install
-	// defaults to the daemon, so the Healthchecks and Notify level rows are active too:
-	// Enter through the 11 active rows (Frequency included; Weekday and Day of month are
-	// inactive on daily) reaches Continue; the final Enter submits.
+	// defaults to the daemon, so the Healthchecks, HC initial account email and Notify
+	// level rows are active too: Enter through the 12 active rows (Frequency included;
+	// Weekday and Day of month are inactive on daily) reaches Continue; the final Enter
+	// submits. The email, required with the ProxSave HC Server, is typed on its row (9th).
 	d.waitScreen("Configuration")
-	for range 12 {
+	for range 8 {
+		d.keys("enter")
+	}
+	d.typeText("ops@example.org")
+	for range 5 {
 		d.keys("enter")
 	}
 
@@ -175,6 +180,9 @@ func TestCollectWizardDataDeclineAll(t *testing.T) {
 	}
 	if data.NotifyOn != "warning" {
 		t.Fatalf("fresh install must default Notify level to warning, got %q", data.NotifyOn)
+	}
+	if data.HealthcheckAccountInitialEmail != "ops@example.org" {
+		t.Fatalf("HC initial account email = %q", data.HealthcheckAccountInitialEmail)
 	}
 	if data.NotificationMode != "none" {
 		t.Fatalf("notification mode = %q, want none", data.NotificationMode)
@@ -766,13 +774,14 @@ func TestCollectWizardDataNotifyLevel(t *testing.T) {
 		template = installer.SetEnvValueInTemplate(template, "SCHEDULER_MODE", "daemon")
 		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_ENABLED", "true")
 		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_MODE", "centralized")
+		template = installer.SetEnvValueInTemplate(template, "HEALTHCHECK_ACCOUNT_INITIAL_EMAIL", "ops@example.org")
 		return installer.SetEnvValueInTemplate(template, "NOTIFY_ON", level)
 	}
 	t.Run("prefill_failure_roundtrip", func(t *testing.T) {
 		d := newDriver(t)
 		resCh := collectWizardAsync(t, d, daemonCentralized("failure"))
 		d.waitScreen("Configuration")
-		d.keys("down down down down down down down down down down down down enter")
+		d.keys("down down down down down down down down down down down down down enter") // the stored email prefills its row
 		res := <-resCh
 		if res.err != nil || res.data.NotifyOn != "failure" {
 			t.Fatalf("notify=%q err=%v, want the stored failure kept", res.data.NotifyOn, res.err)
@@ -782,9 +791,11 @@ func TestCollectWizardDataNotifyLevel(t *testing.T) {
 		d := newDriver(t)
 		resCh := collectWizardAsync(t, d, "")
 		d.waitScreen("Configuration")
-		d.keys("down down down down down down down down") // 8 downs -> Notify level row
-		d.keys("right")                                   // warning -> failure
-		d.keys("down down down enter")                    // Frequency, Run at, Continue, submit
+		d.keys("down down down down down down down down") // 8 downs -> HC initial account email (required)
+		d.typeText("ops@example.org")
+		d.keys("down")                 // -> Notify level row
+		d.keys("right")                // warning -> failure
+		d.keys("down down down enter") // Frequency, Run at, Continue, submit
 		res := <-resCh
 		if res.err != nil || res.data.NotifyOn != "failure" {
 			t.Fatalf("notify=%q err=%v, want failure", res.data.NotifyOn, res.err)
@@ -797,10 +808,12 @@ func TestCollectWizardDataScheduleWeekly(t *testing.T) {
 	d := newDriver(t)
 	resCh := collectWizardAsync(t, d, "")
 	d.waitScreen("Configuration")
-	d.keys("down down down down down down down down down") // 9 downs -> Frequency row
-	d.keys("right")                                        // daily -> weekly
-	d.keys("down right right right right")                 // Weekday: mon -> fri
-	d.keys("down down enter")                              // Run at, Continue, submit
+	d.keys("down down down down down down down down") // 8 downs -> HC initial account email (required)
+	d.typeText("ops@example.org")
+	d.keys("down down")                    // -> Frequency row
+	d.keys("right")                        // daily -> weekly
+	d.keys("down right right right right") // Weekday: mon -> fri
+	d.keys("down down enter")              // Run at, Continue, submit
 	res := <-resCh
 	if res.err != nil {
 		t.Fatalf("unexpected error: %v", res.err)

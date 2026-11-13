@@ -77,7 +77,7 @@ func TestSecondaryCopyFileLeafOpenTimeout(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- s.copyFile(t.Context(), fifo, filepath.Join(dir, "dst")) }()
+	go func() { done <- s.copyFile(t.Context(), fifo, filepath.Join(dir, "dst"), nil) }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, safefs.ErrTimeout) {
@@ -104,7 +104,7 @@ func TestSecondaryCopyFileHealthy(t *testing.T) {
 		t.Fatalf("NewSecondaryStorage: %v", err)
 	}
 	dst := filepath.Join(dir, "dst")
-	if err := s.copyFile(context.Background(), src, dst); err != nil {
+	if err := s.copyFile(context.Background(), src, dst, nil); err != nil {
 		t.Fatalf("copyFile: %v", err)
 	}
 	data, err := os.ReadFile(dst)

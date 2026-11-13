@@ -336,6 +336,16 @@ func (o *Orchestrator) refreshLogIssuesFromFile(stats *BackupStats, includeCateg
 	// No cap: the notifications list every problem; the chat webhooks keep their own
 	// short list (webhook_payloads.go).
 	categories, errorCount, warningCount, notifyCount := ParseLogCounts(stats.LogFilePath, 0)
+	// A file that lost lines (write errors, timeouts, a disabled sink) undercounts: the
+	// exit code and the healthchecks ping then read a clean run. Take the higher of the
+	// file's counts and the logger's own.
+	if o.logger != nil && o.logger.FileIncomplete() {
+		o.logger.Debug("Run log incomplete: counts file errors=%d warnings=%d notify=%d, logger errors=%d warnings=%d notify=%d",
+			errorCount, warningCount, notifyCount, o.logger.ErrorCount(), o.logger.WarningCount(), o.logger.NotifyCount())
+		errorCount = max(errorCount, int(o.logger.ErrorCount()))
+		warningCount = max(warningCount, int(o.logger.WarningCount()))
+		notifyCount = max(notifyCount, int(o.logger.NotifyCount()))
+	}
 	stats.ErrorCount = errorCount
 	stats.WarningCount = warningCount
 	stats.NotifyCount = notifyCount
@@ -779,8 +789,8 @@ func (o *Orchestrator) copyLogToCloud(ctx context.Context, sourcePath, destPath 
 		}
 	}
 	// rclone writes the log 0644. In a local CLOUD_REMOTE directory it gets the mode the
-	// Secondary log copy creates (copyFile, 0640), owner unchanged, on a filesystem that
-	// takes ownership; the log is there either way.
+	// Secondary log copy creates (copyFile, 0640), owner unchanged; the log is there
+	// either way.
 	if _, err := client.SetLocalLogMode(ctx, destPath, o.cloudFilesystemInfo()); err != nil {
 		return &logPermissionsError{err: err, checksumNotVerified: checksumNotVerified}
 	}

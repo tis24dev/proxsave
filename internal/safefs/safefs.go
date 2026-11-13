@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -300,6 +302,58 @@ func Lchmod(ctx context.Context, path string, mode os.FileMode, timeout time.Dur
 		return struct{}{}, lchmod(path, mode)
 	})
 	return err
+}
+
+// LchmodInRoot is Lchmod confined to root, for a path in a directory other hosts can write to:
+// every directory component of path is resolved through an *os.Root on root, so a symlink that
+// leaves root (or an absolute one) is refused there too, not only at the final component. The
+// final component is opened with O_NOFOLLOW, as Lchmod does, and the mode is applied with fchmod
+// on that descriptor. path is absolute under root, or relative to it. Bounded like Lchmod.
+func LchmodInRoot(ctx context.Context, root, path string, mode os.FileMode, timeout time.Duration) error {
+	_, err := runLimited(ctx, timeout, &TimeoutError{Op: "lchmod", Path: path, Timeout: effectiveTimeout(ctx, timeout)}, func() (struct{}, error) {
+		return struct{}{}, lchmodInRoot(root, path, mode)
+	})
+	return err
+}
+
+// lchmodInRoot opens the parent directory of path through os.Root (os.Root.OpenFile follows a
+// final-component symlink that stays inside root even with O_NOFOLLOW, so the file itself is
+// opened with openat on that directory, O_NOFOLLOW honoured) and fchmods it.
+func lchmodInRoot(root, path string, mode os.FileMode) error {
+	rel := filepath.Clean(path)
+	if filepath.IsAbs(rel) {
+		r, err := filepath.Rel(filepath.Clean(root), rel)
+		if err != nil {
+			return &os.PathError{Op: "lchmod", Path: path, Err: err}
+		}
+		rel = r
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return &os.PathError{Op: "lchmod", Path: path, Err: errors.New("path escapes from root")}
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	dir, base := filepath.Split(rel)
+	if dir == "" {
+		dir = "."
+	}
+	parent, err := r.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	fd, err := syscall.Openat(int(parent.Fd()), base, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return &os.PathError{Op: "openat", Path: path, Err: err}
+	}
+	defer func() { _ = syscall.Close(fd) }() // fchmod already applied; a close error on the fd is not meaningful
+	if err := syscall.Fchmod(fd, chmodSyscallMode(mode)); err != nil {
+		return &os.PathError{Op: "fchmod", Path: path, Err: err}
+	}
+	return nil
 }
 
 // lchmodNoFollow opens path with O_NOFOLLOW (a symlink final component fails with

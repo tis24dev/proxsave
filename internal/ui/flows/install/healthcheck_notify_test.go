@@ -84,7 +84,7 @@ func TestHealthcheckNotifyBlockTexts(t *testing.T) {
 func TestHealthcheckPromptPlacesTheNotificationsBlockAboveTheSensors(t *testing.T) {
 	sensors := []health.SensorRow{{Name: "proxsave-alive", State: "ok", Level: health.SensorOk}}
 	nb := &healthcheckNotifyBlock{Setting: "NOTIFY_ON=failure", Current: "always (Healthchecks not configured)"}
-	v := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, sensors, nb))
+	v := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, sensors, nb, portalLinkCopy{}))
 
 	want := "It is reporting.\n\nNotifications:\nSetting: NOTIFY_ON=failure\nCurrent: always (Healthchecks not configured)\n\nSensors:\n"
 	if !strings.Contains(v, want) {
@@ -96,7 +96,7 @@ func TestHealthcheckPromptPlacesTheNotificationsBlockAboveTheSensors(t *testing.
 		}
 	}
 
-	if v := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil, nil)); strings.Contains(v, "Notifications:") {
+	if v := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil, nil, portalLinkCopy{})); strings.Contains(v, "Notifications:") {
 		t.Fatalf("no block before a Check:\n%s", v)
 	}
 }

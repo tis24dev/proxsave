@@ -71,7 +71,7 @@ func TestFetchWithChannelsSendsQuery(t *testing.T) {
 	defer srv.Close()
 
 	// A populated non-nil slice -> channels=email,telegram (comma-joined, order preserved).
-	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "always", "", PollLog{})
+	cfg, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{"email", "telegram"}, "always", "", "", PollLog{})
 	if err != nil {
 		t.Fatalf("FetchCentralizedConfigPoll: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestFetchWithChannelsSendsQuery(t *testing.T) {
 	}
 
 	// An EMPTY (non-nil) slice -> the explicit "none" sentinel (pause all), never empty value.
-	if _, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "always", "", PollLog{}); err != nil {
+	if _, _, err := FetchCentralizedConfigPoll(context.Background(), srv.Client(), srv.URL, "1", "s", []string{}, "always", "", "", PollLog{}); err != nil {
 		t.Fatalf("FetchCentralizedConfigPoll(empty): %v", err)
 	}
 	if got := gotQuery.Get("channels"); got != "none" {

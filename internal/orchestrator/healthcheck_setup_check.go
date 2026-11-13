@@ -33,7 +33,10 @@ type HealthcheckCheckResult struct {
 	PortalURL   string
 	PortalLogin string
 	PasswordSet *bool
-	Reachable   bool
+	// LoginKind is the server's login_kind: health.LoginKindPortal when LoginURL is the portal's
+	// sign-in page (the operator owns the project), "" for a single-use magic-link.
+	LoginKind string
+	Reachable bool
 
 	Daemon     health.Diagnosis // daemon liveness/transmission diagnosed from the status file
 	DaemonRead bool             // false only if the status file existed but could not be read
@@ -135,6 +138,7 @@ func CheckHealthcheckConnection(ctx context.Context, serverAPIHost, serverID, ba
 	res.PortalURL = cfg.PortalURL
 	res.PortalLogin = cfg.PortalLogin
 	res.PasswordSet = cfg.PasswordSet
+	res.LoginKind = cfg.LoginKind
 	if cfg.AliveURL != "" {
 		if perr := healthcheckSetupPing(ctx, cfg.AliveURL); perr != nil {
 			res.Err = perr

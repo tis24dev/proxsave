@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -79,6 +80,9 @@ func checkForUpdates(ctx context.Context, logger *logging.Logger, currentVersion
 
 	latestTag, latestVersion, releaseBody, err := fetchLatestRelease(checkCtx)
 	if err != nil {
+		if statusErr, ok := errors.AsType[*githubStatusError](err); ok {
+			logger.Debug("Update check: latest release response body=%q", statusErr.excerpt)
+		}
 		logger.Debug("Update check skipped: GitHub unreachable: %v", err)
 		return &UpdateInfo{
 			NewVersion: false,

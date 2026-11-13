@@ -651,15 +651,19 @@ func TestCloudLocalFormSidecarFailureThenPermissions(t *testing.T) {
 	}
 }
 
-// On a filesystem without ownership the Secondary sets nothing, and neither does the
-// local form; the remote form never does.
-func TestCloudLocalFormNoOwnershipSetsNothing(t *testing.T) {
+// On a filesystem without ownership the Secondary's copy keeps its source's mode, and
+// so does the local form now: rclone's 0644 left an archive, unencrypted by default,
+// readable by every user of the share. The owner is left alone and nothing is printed;
+// the remote form never sets anything.
+func TestCloudLocalFormNoOwnershipSetsTheSourceMode(t *testing.T) {
 	cs, buf, archive, root := newLocalFormStore(t, "", false)
 	if err := cs.Store(context.Background(), archive, nil); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if st, err := os.Stat(filepath.Join(root, filepath.Base(archive))); err != nil || st.Mode().Perm() != 0o644 {
-		t.Fatalf("mode = %v (%v), want rclone's 0644 left alone", st.Mode().Perm(), err)
+	for _, name := range []string{filepath.Base(archive), filepath.Base(archive) + ".sha256", filepath.Base(archive) + ".metadata"} {
+		if st, err := os.Stat(filepath.Join(root, name)); err != nil || st.Mode().Perm() != 0o600 {
+			t.Fatalf("%s: mode = %v (%v), want the source's 0600", name, st.Mode().Perm(), err)
+		}
 	}
 	if got := visibleOf(buf.String()); len(got) != 0 || len(cs.LastStoreIssues()) != 0 {
 		t.Fatalf("no ownership: nothing to print or record, got %v %v", got, cs.LastStoreIssues())

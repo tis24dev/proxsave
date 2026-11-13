@@ -374,7 +374,7 @@ func TestResolveCloudPath(t *testing.T) {
 		// New style WITH leading slash
 		{"new style simple", "/logs", "gdrive", "gdrive:/logs"},
 		{"new style subpath", "/proxmox-backup/log", "gdrive", "gdrive:/proxmox-backup/log"},
-		{"new style with leading slash stripped", "/logs", "gdrive", "gdrive:/logs"},
+		{"new style with leading slash kept", "/logs", "gdrive", "gdrive:/logs"},
 		{"new style remote has legacy path", "/logs", "gdrive:base", "gdrive:/logs"},
 
 		// New style WITHOUT leading slash (rclone accepts both formats)

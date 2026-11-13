@@ -127,7 +127,7 @@ func (m rootModel) View() tea.View {
 	v.MouseMode = tea.MouseModeCellMotion
 	if m.cfg.UseColor {
 		// Only repaint the terminal background when color is enabled:
-		// with DISABLE_COLORS the OSC 11 repaint would contradict the
+		// with USE_COLOR=false the OSC 11 repaint would contradict the
 		// monochrome contract.
 		v.BackgroundColor = theme.Background
 	}

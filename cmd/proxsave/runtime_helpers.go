@@ -415,7 +415,12 @@ func formatFilesystemDetail(info *storage.FilesystemInfo) string {
 	mount := info.MountPoint
 	mount = cmp.Or(mount, "unknown")
 
-	return fmt.Sprintf("%s (%s)%s [mount: %s]", info.Type, ownership, network, mount)
+	link := ""
+	if info.LinkTarget != "" {
+		link = " [link to: " + info.LinkTarget + "]"
+	}
+
+	return fmt.Sprintf("%s (%s)%s [mount: %s]%s", info.Type, ownership, network, mount, link)
 }
 
 // logStoragePath opens a storage-init block: the path line, then the configuration
@@ -896,11 +901,14 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
 }
 
-func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
+// migrateLegacyCronEntries rewrites the root crontab with a single proxsave entry at cronSchedule
+// and returns that entry with ok=true once crontab accepted the table; "" and false when it gave
+// up (each early return logs its WARNING) or the write failed.
+func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) (written string, ok bool) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
 		logBootstrapWarning(bootstrap, "Unable to update cron entry: executable path is unknown")
-		return
+		return "", false
 	}
 
 	newCommandToken := "/usr/local/bin/proxsave"
@@ -911,7 +919,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		fallback := strings.TrimSpace(execPath)
 		if fallback == "" {
 			logBootstrapWarning(bootstrap, "Unable to locate Go binary for cron migration")
-			return
+			return "", false
 		}
 		logBootstrapInfo(bootstrap, "proxsave symlink not found; falling back to %s for cron entries", fallback)
 		newCommandToken = fallback
@@ -940,11 +948,12 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 			return err
 		}
 		// DELIBERATELY NOT safeexec.ApplyWaitDelay, unlike readCron above. See the note on
-		// crontabWriteLines in daemon_setup.go for the measurements; the stakes are highest
-		// here. This writer's error is DISCARDED (migrateLegacyCronEntries is void), and
-		// applyCronMode calls it to establish the cron fallback and then removes the daemon
-		// unit unconditionally. A bound that killed a working descendant here would leave
-		// the host with no cron line AND no daemon, silently.
+		// crontabWriteLines in daemon_setup.go for the measurements. This writer establishes
+		// the cron fallback that replaces the daemon on install and on --daemon-remove. Both
+		// callers read the written line back and keep the daemon when it is not there, so a
+		// bound that killed a working descendant here would no longer strand the host
+		// unscheduled, but it would abandon a revert or an install whose write may well have
+		// landed.
 		cmd.Stdin = strings.NewReader(content)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -956,7 +965,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	current, err := readCron()
 	if err != nil {
 		logBootstrapWarning(bootstrap, "Unable to inspect existing cron entries: %v", err)
-		return
+		return "", false
 	}
 
 	normalized := strings.ReplaceAll(current, "\r\n", "\n")
@@ -986,10 +995,11 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
 		logBootstrapWarning(bootstrap, "Failed to update cron entries: %v", err)
-		return
+		return "", false
 	}
 
 	logBootstrapDebug(bootstrap, "Reinstalled proxsave cron entry at schedule %s: %s", schedule, newCommandToken)
+	return updatedLines[len(updatedLines)-1], true
 }
 
 // dropLegacyBashCronLines removes crontab lines whose command is the old Bash
@@ -1104,24 +1114,60 @@ func repointLegacyCronLines(lines []string) ([]string, bool) {
 	out := make([]string, len(lines))
 	changed := false
 	for i, line := range lines {
-		if strings.Trim(cronCommandToken(line), "\"'") == legacy {
-			// cronCommandToken already excluded comments and env LINES, and a schedule field
-			// is never a path, so the command is the first occurrence of legacy on the line.
-			// A leading assignment does not change that: it is stepped over and the command
-			// still holds the first occurrence.
+		tok := cronCommandToken(line)
+		if strings.Trim(tok, "\"'") == legacy {
+			// Replace the legacy path inside the command field itself, not its first
+			// occurrence on the line. A leading assignment is stepped over by
+			// cronCommandToken, so "TAG=/usr/local/bin/proxmox-backup.old
+			// /usr/local/bin/proxmox-backup --backup" reaches this branch with the legacy
+			// path appearing first inside TAG: replacing the first occurrence rewrote TAG
+			// and left the command on the symlink removed right after. The command field
+			// is located by cronFieldOffset: a schedule field is never a path, and an
+			// assignment contains '=' while the token does not, so no preceding field can
+			// equal it. Schedule, assignments, whitespace and arguments are byte-preserved.
 			//
-			// The assignment form is deliberately NOT repointed. The guard above is exact
-			// equality, so "BIN=/usr/local/bin/proxmox-backup $BIN --backup" fails it and the
-			// line is left alone: cronCommandWord answers with the whole assignment WORD for
-			// that shape, never with the path inside it. That is a missed cosmetic repoint,
-			// not damage - this whole function is best-effort, and its caller says so.
-			out[i] = strings.Replace(line, legacy, canonical, 1)
-			changed = true
-			continue
+			// The assignment form is NOT repointed. The guard above is exact equality, so
+			// "BIN=/usr/local/bin/proxmox-backup $BIN --backup" fails it and the line is
+			// left alone: cronCommandWord answers with the whole assignment WORD for that
+			// shape, never with the path inside it. That line keeps pointing at the legacy
+			// symlink, which the upgrade removes right after this repoint, so it is left
+			// orphaned.
+			if at := cronFieldOffset(line, tok); at >= 0 {
+				out[i] = line[:at] + strings.Replace(tok, legacy, canonical, 1) + line[at+len(tok):]
+				changed = true
+				continue
+			}
 		}
 		out[i] = line
 	}
 	return out, changed
+}
+
+// cronFieldOffset returns the byte offset in line of the first whitespace-separated
+// field equal to word, splitting exactly as strings.Fields does (unicode.IsSpace), or -1
+// when no field equals it. It lets a caller edit one field in place while every other
+// byte of the line, whitespace included, stays as it was.
+func cronFieldOffset(line, word string) int {
+	if word == "" {
+		return -1
+	}
+	start := -1
+	for i, r := range line {
+		if unicode.IsSpace(r) {
+			if start >= 0 && line[start:i] == word {
+				return start
+			}
+			start = -1
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 && line[start:] == word {
+		return start
+	}
+	return -1
 }
 
 // repointLegacyCronEntries reads the crontab, repoints legacy proxmox-backup entries, and
@@ -1236,23 +1282,29 @@ func cronCommandToken(line string) string {
 	}
 
 	if strings.HasPrefix(first, "@") {
-		if len(fields) >= 2 {
-			return cronCommandWord(fields[1:])
-		}
-		return ""
+		return cronCommandWordAt(fields, 1)
 	}
+	return cronCommandWordAt(fields, 5)
+}
 
-	if len(fields) <= 5 {
+// cronCommandWordAt is the command word of a crontab line whose command starts at
+// field n: 5 in the user format (1 after an @nickname), 6 in the system format (2), one
+// later for its USER field. Both extractors go through it: the system one took the field
+// as it was, so "root TZ=UTC /usr/local/bin/proxsave" in /etc/cron.d was invisible to the
+// duplicate-schedule checks while the same job in the root crontab was seen.
+func cronCommandWordAt(fields []string, n int) string {
+	if len(fields) <= n {
 		return ""
 	}
-	return cronCommandWord(fields[5:])
+	return cronCommandWord(fields[n:])
 }
 
 // cronCommandWord picks the token to judge out of the words that follow the schedule.
-// cron accepts VAR=value in front of a job's command, and an operator writes one there
-// more often than it looks: cron does not read /etc/timezone, so "TZ=" in front of a
-// backup job is the ordinary way to pin its hour. Without this the whole line was
-// invisible - to the detector, to the removal, and to the schedule adoption alike.
+// cron accepts VAR=value in front of a job's command (TZ=, PATH=, LANG=): the shell runs
+// it as an assignment for that job only. It does not move the job's hour - cron(8) fires
+// every job in its own single timezone, from /etc/timezone - but it hides the command
+// behind it. Without this the whole line was invisible - to the detector, to the
+// removal, and to the schedule adoption alike.
 //
 // It is deliberately ADDITIVE, because four of this function's callers WRITE the root
 // crontab and a token invented here is a line ProxSave deletes. Every line that answers

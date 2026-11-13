@@ -296,6 +296,11 @@ func runInstallTUI(ctx context.Context, configPath string, bootstrap *logging.Bo
 		// (self) verify the pasted alive URL is reachable. Eligibility is decided solely
 		// by RunHealthcheckSetup (re-reads the written config); Shown=false with no UI otherwise.
 		hcRes, hcErr := flowinstall.RunHealthcheckSetup(ctx, session, baseDir, configPath, false, installer.HealthcheckSetupOptions{BeforeBootstrap: runtimePreparation.PrepareCaptured})
+		// The step maps Ctrl+C to "check skipped" (right for the dashboard, which also
+		// runs it), and a Ctrl+C on its spinner to the task's own context.Canceled: either
+		// way the install carried on into finalization on a closed session and ended as
+		// "Installation failed". A closed session here is the operator's Ctrl+C.
+		hcErr = closedSessionIsAbort(session.Done(), hcErr, bootstrap)
 		if abortErr := abortInstallOnOptionalStep(ctx, bootstrap, "Healthcheck setup", hcErr); abortErr != nil {
 			return abortErr
 		}

@@ -184,6 +184,25 @@ func cronModeFixture(t *testing.T) (*config.Config, string) {
 	return &config.Config{BaseDir: dir, SchedulerTime: "02:00"}, configPath
 }
 
+// revertCronLine is the canonical line a cron write at SCHEDULER_TIME=02:00 produces.
+const revertCronLine = "00 02 * * * /usr/local/bin/proxsave --backup"
+
+// cronWriteLands stubs a cron write that landed: the writer reports revertCronLine as written,
+// and the crontab read back holds the extra lines followed by it. applyCronMode removes the
+// daemon only after reading its own line back, so every test of what happens AFTER that gate
+// has to start here. It returns the schedule the writer was asked for.
+func cronWriteLands(t *testing.T, extra ...string) *string {
+	t.Helper()
+	schedule := new(string)
+	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, s, _ string) (string, bool) {
+		*schedule = s
+		return revertCronLine, true
+	}
+	lines := append(append([]string(nil), extra...), revertCronLine)
+	crontabReadLinesFn = func(context.Context) ([]string, error) { return lines, nil }
+	return schedule
+}
+
 // A revert must ALWAYS leave the host scheduled. This branch used to withhold the canonical
 // cron line whenever the detector saw an operator command that might run ProxSave, on the
 // reasoning that its worst case was "the host keeps the proxsave line it already had". That
@@ -202,12 +221,8 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 	cfg, configPath := cronModeFixture(t)
 
 	const wrapper = "30 02 * * * /usr/local/sbin/proxsave-nas-guard"
-	crontabReadLinesFn = func(context.Context) ([]string, error) { return []string{wrapper}, nil }
+	migrated := cronWriteLands(t, wrapper)
 	wrapperCronLinesFn = func([]string) []string { return []string{wrapper} }
-	migrated := ""
-	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule, _ string) {
-		migrated = schedule
-	}
 
 	var report cronRevertReport
 	seen := captureConsole(t, func() {
@@ -218,8 +233,8 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 		}
 	})
 
-	if migrated != "00 02 * * *" {
-		t.Fatalf("the canonical cron line must be written whatever the detector found, got %q", migrated)
+	if *migrated != "00 02 * * *" {
+		t.Fatalf("the canonical cron line must be written whatever the detector found, got %q", *migrated)
 	}
 	// One problem, one WARNING, and it carries the count so it stands alone under
 	// DEBUG_LEVEL=warning. The finding itself is INFO below it.
@@ -259,14 +274,8 @@ func TestApplyCronModeAlwaysWritesTheCronLineAndReportsTheFinding(t *testing.T) 
 func TestApplyCronModeStillWritesTheCronLineWithoutAWrapper(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
-	crontabReadLinesFn = func(context.Context) ([]string, error) {
-		return []string{"0 6 * * * /usr/bin/rsync /a /b"}, nil
-	}
+	migrated := cronWriteLands(t, "0 6 * * * /usr/bin/rsync /a /b")
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrated := ""
-	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule, _ string) {
-		migrated = schedule
-	}
 	crontabWriteLinesFn = func(context.Context, []string) error {
 		t.Error("without a wrapper the crontab is rewritten by migrateLegacyCronEntries, not here")
 		return nil
@@ -280,20 +289,20 @@ func TestApplyCronModeStillWritesTheCronLineWithoutAWrapper(t *testing.T) {
 	// migrateLegacyCronEntries' OWN fallback for an empty schedule, which is exactly the
 	// value this test must not accept: it would pass even if applyCronMode stopped passing
 	// the configured time at all.
-	if migrated != "00 02 * * *" {
-		t.Fatalf("a host with no wrapper must still get its cron line at SCHEDULER_TIME, got %q", migrated)
+	if *migrated != "00 02 * * *" {
+		t.Fatalf("a host with no wrapper must still get its cron line at SCHEDULER_TIME, got %q", *migrated)
 	}
 }
 
-// Fail-open: an unreadable crontab must be treated as "no wrapper" and keep today's append.
-// Being scheduled twice is recoverable; being unscheduled is silent data loss.
+// An unreadable crontab after the write is a write nobody can confirm, and the revert removes
+// the daemon only over a cron line it has read back. So the write is still ATTEMPTED - the
+// unreadable read is no reason to skip it - but the revert then stops: the daemon stays, the
+// configuration stays, and the caller gets errCronRevertCronNotWritten.
 //
-// The second half is the #298 follow-up. A ProxSave schedule under /etc is an INDEPENDENT
-// fact: it is read from files, not from `crontab -l`, so a failed crontab read is no
-// reason to stay quiet about it. It still does not gate the append - nothing does - which
-// is why this fail-open rule needed no splitting: the two facts are reported separately
-// because they are separately true, not weighed against each other.
-func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.T) {
+// Nothing past the gate runs either. The wrapper detector reads the same unreadable crontab, and
+// the /etc advisory says the host is reverting to cron, which it is not: emitting it over a
+// daemon left in place would make its title the lie.
+func TestApplyCronModeKeepsTheDaemonWhenTheCrontabIsUnreadable(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
 	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, errors.New("crontab -l boom") }
@@ -301,24 +310,33 @@ func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.
 		t.Error("the detector must not be consulted when the crontab could not be read")
 		return nil
 	}
-	systemCronConsulted := false
 	systemCronProxsaveRefsFn = func() []indirectCronRef {
-		systemCronConsulted = true
+		t.Error("the /etc advisory must not be emitted on a revert that was abandoned")
 		return nil
 	}
 	migrated := false
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {
+	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) (string, bool) {
 		migrated = true
+		return revertCronLine, true
+	}
+	removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+		t.Error("the daemon must not be removed over a cron line nobody could read back")
+		return nil
 	}
 
-	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
-		t.Fatalf("applyCronMode: %v", err)
+	report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
+	if !errors.Is(err, errCronRevertCronNotWritten) {
+		t.Fatalf("want errCronRevertCronNotWritten, got %v", err)
 	}
 	if !migrated {
-		t.Fatal("an unreadable crontab must fall back to writing the cron line, never to leaving the host unscheduled")
+		t.Fatal("an unreadable crontab is no reason to skip the cron write")
 	}
-	if !systemCronConsulted {
-		t.Fatal("a failed `crontab -l` says nothing about /etc: the system-cron advisory must still run, or the host is told its revert restored the only schedule when a second one is sitting in /etc/cron.d")
+	if report.CronVerified || report.CronScheduled || !report.CronWritten || report.ModeRecorded {
+		t.Errorf("the report must say: written by the writer, not verified, not scheduled, mode not recorded; got %+v", report)
+	}
+	data, _ := os.ReadFile(configPath)
+	if !strings.Contains(string(data), "SCHEDULER_MODE=daemon") {
+		t.Fatalf("an abandoned revert must leave the configuration untouched:\n%s", data)
 	}
 }
 
@@ -339,7 +357,7 @@ func TestApplyCronModeFallsBackToTheAppendWhenTheCrontabIsUnreadable(t *testing.
 func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
-	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	migrated := cronWriteLands(t)
 	wrapperCronLinesFn = func([]string) []string { return nil }
 	systemCronProxsaveRefsFn = func() []indirectCronRef {
 		return []indirectCronRef{{
@@ -349,10 +367,6 @@ func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *tes
 			Source:  "/etc/cron.d/proxsave-guard",
 		}}
 	}
-	migrated := ""
-	migrateLegacyCronEntriesFn = func(_ context.Context, _, _ string, _ *logging.BootstrapLogger, schedule, _ string) {
-		migrated = schedule
-	}
 	crontabWriteLinesFn = func(context.Context, []string) error {
 		t.Error("a /etc finding must not send the revert down the removal path: it is not a wrapper this host's crontab owns")
 		return nil
@@ -361,8 +375,8 @@ func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *tes
 	if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil); err != nil {
 		t.Fatalf("applyCronMode: %v", err)
 	}
-	if migrated != "00 02 * * *" {
-		t.Fatalf("a ProxSave schedule under /etc must NOT cancel the revert's own cron line (that would leave the host unscheduled if the finding was wrong or the entry is later deleted), got %q", migrated)
+	if *migrated != "00 02 * * *" {
+		t.Fatalf("a ProxSave schedule under /etc must NOT cancel the revert's own cron line (that would leave the host unscheduled if the finding was wrong or the entry is later deleted), got %q", *migrated)
 	}
 }
 
@@ -377,9 +391,8 @@ func TestApplyCronModeStillWritesTheCronLineWhenSystemCronAlsoSchedulesIt(t *tes
 func TestApplyCronModeEmitsTheSystemCronAdvisory(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
-	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	cronWriteLands(t)
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	systemCronProxsaveRefsFn = func() []indirectCronRef {
 		return []indirectCronRef{{
 			Line:    "17 02 * * * root /usr/local/sbin/proxsave-nas-guard",
@@ -416,9 +429,8 @@ func TestApplyCronModeEmitsTheSystemCronAdvisory(t *testing.T) {
 func TestApplyCronModeAdvisoryUsesOneWarning(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
-	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	cronWriteLands(t)
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	// TWO findings, so a per-line WARNING cannot be mistaken for the one-warning shape.
 	systemCronProxsaveRefsFn = func() []indirectCronRef {
 		return []indirectCronRef{
@@ -540,9 +552,8 @@ func TestMaybeAutoMigrateDaemonReportsWhatTheRemovalDid(t *testing.T) {
 func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
 	t.Run("write lands: the mode is reported as recorded", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
-		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+		cronWriteLands(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 
 		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 		if err != nil {
@@ -555,9 +566,8 @@ func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
 
 	t.Run("write fails: the report says the mode is NOT recorded", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
-		crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+		cronWriteLands(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 		// A directory where the file is expected: every write fails, nothing else does.
 		if err := os.Remove(configPath); err != nil {
 			t.Fatal(err)
@@ -576,138 +586,156 @@ func TestApplyCronModeReportsWhetherTheModeWasRecorded(t *testing.T) {
 	})
 }
 
-// A revert that could not write the crontab must not report success. migrateLegacyCronEntries is
-// void and has four early returns that write nothing - unknown exec path, no binary to point at,
-// `crontab -l` failing, `crontab -` failing - and applyCronMode cannot see any of them, then
-// removes the daemon unit anyway. A host with a broken or absent cron ended with no unit and no
-// cron line, at exit 0.
+// A revert that could not write the crontab must not remove the daemon. migrateLegacyCronEntries
+// has four early returns that write nothing - unknown exec path, no binary to point at,
+// `crontab -l` failing, `crontab -` failing - and applyCronMode used to drop its verdict and
+// remove the daemon unit anyway. A host with a broken or absent cron ended with no unit and no
+// cron line.
 //
-// The check READS THE CRONTAB BACK rather than trusting a return value, for the same reason
-// cronRemovalOutcome.Verified exists: what matters is whether the line is there, not whether the
-// writer thought it wrote one.
+// The gate needs the writer's verdict AND the very line it wrote read back from the crontab, for
+// the same reason cronRemovalOutcome.Verified exists: what matters is whether the line is there,
+// not whether the writer thought it wrote one. And it has to be THAT line: an older proxsave line
+// with another schedule, left by a write that failed, does not schedule what the configuration
+// says. On every failure nothing else happens: no teardown, no config write, and the caller gets
+// errCronRevertCronNotWritten.
 func TestApplyCronModeReportsWhetherTheCronLineExists(t *testing.T) {
-	t.Run("the line is there afterwards", func(t *testing.T) {
+	t.Run("the line is there afterwards: the revert goes through", func(t *testing.T) {
 		cfg, configPath := cronModeFixture(t)
 		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
-		crontabReadLinesFn = func(context.Context) ([]string, error) {
-			return []string{"00 02 * * * /usr/local/bin/proxsave --backup"}, nil
+		cronWriteLands(t)
+		removed := false
+		removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+			removed = true
+			return nil
 		}
 
 		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
 		if err != nil {
 			t.Fatalf("applyCronMode: %v", err)
 		}
-		if !report.CronScheduled {
-			t.Error("a canonical proxsave line is present, so the revert is scheduled")
+		if !report.CronWritten || !report.CronScheduled || !report.CronVerified {
+			t.Errorf("the line was written and read back, so the report must say so, got %+v", report)
+		}
+		if !removed {
+			t.Error("with the cron line in place the daemon must be removed")
 		}
 	})
 
-	t.Run("the write silently did nothing", func(t *testing.T) {
-		cfg, configPath := cronModeFixture(t)
-		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
-		crontabReadLinesFn = func(context.Context) ([]string, error) {
-			return []string{"0 6 * * * /usr/bin/rsync /a /b"}, nil
-		}
-
-		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
-		if err != nil {
-			t.Fatalf("a failed cron write must not fail the call: the daemon is already gone, got %v", err)
-		}
-		if report.CronScheduled {
-			t.Error("no proxsave line is present, so the revert must not report a schedule")
-		}
-	})
-
-	// "Could not read" is not "there is none", and the report has to keep them apart. The screen
-	// built on this field denied a schedule outright, which on an unreadable crontab is a
-	// measurement nobody took - the same shape of claim as the one canonicalCronLinePresent's own
-	// comment refuses to make in the other direction.
-	t.Run("the crontab cannot be read: not scheduled AND not verified", func(t *testing.T) {
-		cfg, configPath := cronModeFixture(t)
-		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
-		crontabReadLinesFn = func(context.Context) ([]string, error) {
-			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
-		}
-
-		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
-		if err != nil {
-			t.Fatalf("applyCronMode: %v", err)
-		}
-		if report.CronScheduled {
-			t.Error("an unreadable crontab is not evidence of a schedule")
-		}
-		if report.CronVerified {
-			t.Error("an unreadable crontab is not evidence of the absence of one either")
-		}
-	})
-
-	t.Run("the crontab was read: verified either way", func(t *testing.T) {
-		for _, lines := range [][]string{
-			{"00 02 * * * /usr/local/bin/proxsave --backup"},
-			{"0 6 * * * /usr/bin/rsync /a /b"},
-		} {
+	for _, tc := range []struct {
+		name         string
+		written      string
+		ok           bool
+		crontab      []string
+		readErr      error
+		wantVerified bool
+	}{
+		{
+			name:         "the writer reports a failure, even with a proxsave line in the crontab",
+			written:      "",
+			ok:           false,
+			crontab:      []string{revertCronLine},
+			wantVerified: true,
+		},
+		{
+			name:         "the write silently did nothing",
+			written:      revertCronLine,
+			ok:           true,
+			crontab:      []string{"0 6 * * * /usr/bin/rsync /a /b"},
+			wantVerified: true,
+		},
+		{
+			name:         "an older proxsave line with another schedule does not pass",
+			written:      revertCronLine,
+			ok:           true,
+			crontab:      []string{"30 04 * * * /usr/local/bin/proxsave --backup"},
+			wantVerified: true,
+		},
+		{
+			// "Could not read" is not "there is none", and the report keeps them apart, but
+			// neither is a line read back: the daemon stays.
+			name:         "the crontab cannot be read back",
+			written:      revertCronLine,
+			ok:           true,
+			readErr:      errors.New(`exec: "crontab": executable file not found in $PATH`),
+			wantVerified: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			cfg, configPath := cronModeFixture(t)
-			wrapperCronLinesFn = func([]string) []string { return nil }
-			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
-			crontabReadLinesFn = func(context.Context) ([]string, error) { return lines, nil }
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) (string, bool) {
+				return tc.written, tc.ok
+			}
+			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, tc.readErr }
+			wrapperCronLinesFn = func([]string) []string {
+				t.Error("an abandoned revert must not reach the wrapper advisory")
+				return nil
+			}
+			systemCronProxsaveRefsFn = func() []indirectCronRef {
+				t.Error("an abandoned revert must not reach the /etc advisory")
+				return nil
+			}
+			removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+				t.Error("the daemon must not be removed without the cron line read back")
+				return nil
+			}
+			before, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
-			if err != nil {
-				t.Fatalf("applyCronMode: %v", err)
+			if !errors.Is(err, errCronRevertCronNotWritten) {
+				t.Fatalf("want errCronRevertCronNotWritten, got %v", err)
 			}
-			if !report.CronVerified {
-				t.Errorf("the crontab was read, so the answer is a measurement, got %+v for %v", report, lines)
+			if report.CronScheduled {
+				t.Error("the line written is not in the crontab, so the report must not claim a schedule")
 			}
-		}
-	})
-
-	t.Run("the crontab cannot be read: fail closed", func(t *testing.T) {
-		cfg, configPath := cronModeFixture(t)
-		wrapperCronLinesFn = func([]string) []string { return nil }
-		migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
-		crontabReadLinesFn = func(context.Context) ([]string, error) {
-			return nil, errors.New(`exec: "crontab": executable file not found in $PATH`)
-		}
-
-		report, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", nil)
-		if err != nil {
-			t.Fatalf("applyCronMode: %v", err)
-		}
-		// A host with no crontab binary at all is exactly the host this exists to catch, and it
-		// is also the host where nothing can be verified. Claiming a schedule would be the lie.
-		if report.CronScheduled {
-			t.Error("an unreadable crontab is not evidence of a schedule")
-		}
-	})
+			if report.CronVerified != tc.wantVerified {
+				t.Errorf("CronVerified = %v, want %v", report.CronVerified, tc.wantVerified)
+			}
+			if report.CronWritten != tc.ok {
+				t.Errorf("CronWritten = %v, want the writer's own verdict %v", report.CronWritten, tc.ok)
+			}
+			if report.ModeRecorded {
+				t.Error("nothing was written to the configuration, so the report must not say it was")
+			}
+			after, _ := os.ReadFile(configPath)
+			if !bytes.Equal(before, after) {
+				t.Errorf("setBackupEnvKeys must not run on an abandoned revert:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+		})
+	}
 }
 
 // The exit code of --daemon-remove is the only thing a script or a cron job sees. A revert that
-// could not write the cron entry leaves the host with no daemon and no schedule, so reporting
-// success there is the same defect as issue #298 in its most expensive form: the operator's
-// automation records a clean revert over a host that stopped backing up.
+// could not write the cron entry is abandoned with the daemon left in place, and it has to exit
+// non-zero with the reason on screen: the operator asked for cron and did not get it.
 //
 // runDaemonRemove is drivable: applyCronMode reaches the crontab and the unit only through seams.
 func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		crontab   []string
-		wantCode  int
-		wantInLog string
+		name        string
+		crontab     []string
+		wantCode    int
+		wantInLog   []string
+		wantRemoved bool
 	}{
 		{
-			name:      "the cron entry is there afterwards: success",
-			crontab:   []string{"00 02 * * * /usr/local/bin/proxsave --backup"},
-			wantCode:  types.ExitSuccess.Int(),
-			wantInLog: "Daemon removed",
+			name:        "the cron entry is there afterwards: success",
+			crontab:     []string{revertCronLine},
+			wantCode:    types.ExitSuccess.Int(),
+			wantInLog:   []string{"Daemon removed"},
+			wantRemoved: true,
 		},
 		{
-			name:      "no cron entry afterwards: failure",
-			crontab:   []string{"0 6 * * * /usr/bin/rsync /a /b"},
-			wantCode:  types.ExitGenericError.Int(),
-			wantInLog: "Cron write failed.",
+			name:     "no cron entry afterwards: failure, daemon left in place",
+			crontab:  []string{"0 6 * * * /usr/bin/rsync /a /b"},
+			wantCode: types.ExitGenericError.Int(),
+			wantInLog: []string{
+				"daemon: the cron entry could not be written, so the daemon service was left in place and keeps scheduling the backup.",
+				"daemon-remove failed: the cron entry could not be written",
+			},
+			wantRemoved: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -726,8 +754,14 @@ func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
 				systemCronProxsaveRefsFn = origSystem
 			})
 			restartVerifyBackupRunning = func(string) bool { return false }
-			removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error { return nil }
-			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
+			removed := false
+			removeDaemonServiceFn = func(context.Context, *logging.BootstrapLogger) error {
+				removed = true
+				return nil
+			}
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) (string, bool) {
+				return revertCronLine, true
+			}
 			wrapperCronLinesFn = func([]string) []string { return nil }
 			systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, nil }
@@ -755,8 +789,13 @@ func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
 			if code != tc.wantCode {
 				t.Errorf("exit code = %d, want %d, out=%q", code, tc.wantCode, buf.String())
 			}
-			if !strings.Contains(buf.String(), tc.wantInLog) {
-				t.Errorf("the operator must read %q, out=%q", tc.wantInLog, buf.String())
+			for _, want := range tc.wantInLog {
+				if !strings.Contains(buf.String(), want) {
+					t.Errorf("the operator must read %q, out=%q", want, buf.String())
+				}
+			}
+			if removed != tc.wantRemoved {
+				t.Errorf("daemon removed = %v, want %v", removed, tc.wantRemoved)
 			}
 		})
 	}
@@ -767,45 +806,54 @@ func TestRunDaemonRemoveExitCodeFollowsTheCronEntry(t *testing.T) {
 // a host where that write did not land the sentence was simply false, and it was false in the
 // reassuring direction: it told the operator a schedule existed next to the unmanaged ones when
 // none did.
+//
+// A write that did not land no longer reaches the duplicate warning at all: the revert stops at
+// the cron gate with the daemon in place, so the only WARNING is the one saying so.
 func TestApplyCronModeDuplicateWarningStatesTheCrontabItRead(t *testing.T) {
 	const wrapper = "30 02 * * * /usr/local/sbin/nas-guard"
 
 	for _, tc := range []struct {
 		name    string
 		crontab []string
+		wantErr error
 		want    string
-		absent  string
+		absent  []string
 	}{
 		{
 			name:    "the entry is there: say so",
-			crontab: []string{wrapper, "00 02 * * * /usr/local/bin/proxsave --backup"},
+			crontab: []string{wrapper, revertCronLine},
 			want:    "The cron entry is in the crontab",
-			absent:  "could be written",
+			absent:  []string{"could be written", "left in place"},
 		},
 		{
-			name:    "the entry is not there: do not claim it",
+			name:    "the entry is not there: no duplicate claim, the daemon stays",
 			crontab: []string{wrapper},
-			want:    "no proxsave cron entry could be written",
-			absent:  "is in the crontab",
+			wantErr: errCronRevertCronNotWritten,
+			want:    "daemon: the cron entry could not be written, so the daemon service was left in place and keeps scheduling the backup.",
+			absent:  []string{"is in the crontab", "unmanaged cron line(s)", "no proxsave cron entry could be written"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, configPath := cronModeFixture(t)
 			crontabReadLinesFn = func(context.Context) ([]string, error) { return tc.crontab, nil }
 			wrapperCronLinesFn = func([]string) []string { return []string{wrapper} }
-			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
+			migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) (string, bool) {
+				return revertCronLine, true
+			}
 
 			seen := captureConsole(t, func() {
-				if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); err != nil {
-					t.Fatalf("applyCronMode: %v", err)
+				if _, err := applyCronMode(context.Background(), cfg, configPath, "/usr/local/bin/proxsave", logging.NewBootstrapLogger()); !errors.Is(err, tc.wantErr) {
+					t.Fatalf("applyCronMode: got %v, want %v", err, tc.wantErr)
 				}
 			})
 
 			if !strings.Contains(seen, tc.want) {
 				t.Errorf("the WARNING must state %q, out=%q", tc.want, seen)
 			}
-			if strings.Contains(seen, tc.absent) {
-				t.Errorf("the WARNING must not state %q, out=%q", tc.absent, seen)
+			for _, absent := range tc.absent {
+				if strings.Contains(seen, absent) {
+					t.Errorf("the output must not state %q, out=%q", absent, seen)
+				}
 			}
 		})
 	}
@@ -815,9 +863,8 @@ func TestApplyCronModeDuplicateWarningStatesTheCrontabItRead(t *testing.T) {
 func TestApplyCronModeStaysSilentWithoutASystemCronFinding(t *testing.T) {
 	cfg, configPath := cronModeFixture(t)
 
-	crontabReadLinesFn = func(context.Context) ([]string, error) { return nil, nil }
+	cronWriteLands(t)
 	wrapperCronLinesFn = func([]string) []string { return nil }
-	migrateLegacyCronEntriesFn = func(context.Context, string, string, *logging.BootstrapLogger, string, string) {}
 	systemCronProxsaveRefsFn = func() []indirectCronRef { return nil }
 
 	seen := captureConsole(t, func() {

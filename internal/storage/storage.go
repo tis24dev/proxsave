@@ -28,6 +28,9 @@ const (
 	// Filesystems that do NOT support Unix ownership
 	FilesystemFAT32 FilesystemType = "vfat"
 	FilesystemFAT   FilesystemType = "fat"
+	// FilesystemMSDOS is the kernel's FAT driver without long names: FAT-family, treated
+	// like FilesystemFAT everywhere.
+	FilesystemMSDOS FilesystemType = "msdos"
 	FilesystemExFAT FilesystemType = "exfat"
 	FilesystemNTFS  FilesystemType = "ntfs"
 	FilesystemFUSE  FilesystemType = "fuse"
@@ -35,6 +38,9 @@ const (
 	// Network filesystems (need testing)
 	FilesystemNFS  FilesystemType = "nfs"
 	FilesystemNFS4 FilesystemType = "nfs4"
+	// FilesystemCeph is CephFS, kernel client or ceph-fuse: POSIX ownership unless the
+	// client cap carries root_squash, so the network probe decides.
+	FilesystemCeph FilesystemType = "ceph"
 	FilesystemCIFS FilesystemType = "cifs"
 	FilesystemSMB  FilesystemType = "smb"
 
@@ -50,6 +56,8 @@ type FilesystemInfo struct {
 	IsNetworkFS       bool
 	MountPoint        string
 	Device            string
+	// LinkTarget is where Path resolves when a symlink is on the way, "" otherwise.
+	LinkTarget string
 }
 
 // BackupLocation represents a location where backups are stored
@@ -315,12 +323,24 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 		FilesystemXFS, FilesystemBtrfs, FilesystemZFS,
 		FilesystemJFS, FilesystemReiserFS, FilesystemOverlay, FilesystemTmpfs:
 		return true
-	case FilesystemFAT32, FilesystemFAT, FilesystemExFAT,
+	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT,
 		FilesystemNTFS, FilesystemFUSE:
 		return false
-	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB:
+	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph:
 		// Network filesystems need runtime testing
 		return false
+	default:
+		return false
+	}
+}
+
+// hasNoUnixModes reports a FAT-family filesystem (vfat, fat, msdos, exfat): it has no Unix
+// permissions, the mount options give every file its mode, so there is no mode for a
+// chmod to set on a copy.
+func (f FilesystemType) hasNoUnixModes() bool {
+	switch f {
+	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT:
+		return true
 	default:
 		return false
 	}
@@ -329,7 +349,7 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 // IsNetworkFilesystem returns true if the filesystem is network-based
 func (f FilesystemType) IsNetworkFilesystem() bool {
 	switch f {
-	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB:
+	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph:
 		return true
 	default:
 		return false
@@ -340,7 +360,7 @@ func (f FilesystemType) IsNetworkFilesystem() bool {
 // from ownership operations (incompatible filesystems like FAT32/CIFS)
 func (f FilesystemType) ShouldAutoExclude() bool {
 	switch f {
-	case FilesystemFAT32, FilesystemFAT, FilesystemExFAT, FilesystemNTFS, FilesystemFUSE, FilesystemCIFS, FilesystemSMB:
+	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT, FilesystemNTFS, FilesystemFUSE, FilesystemCIFS, FilesystemSMB:
 		return true
 	default:
 		return false

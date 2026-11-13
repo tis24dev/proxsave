@@ -56,7 +56,9 @@ type InstallWizardPrefill struct {
 	SchedulerWeekday    string // SCHEDULER_WEEKDAY as stored (empty when absent)
 	SchedulerMonthDay   string // SCHEDULER_MONTHDAY as stored (empty when absent)
 	HealthcheckMode     string // "off" | "centralized" | "self" (empty on a fresh/pre-daemon config)
-	NotifyOn            string // "always" | "warning" | "failure"; empty when absent or not valid
+	// HealthcheckAccountInitialEmail is HEALTHCHECK_ACCOUNT_INITIAL_EMAIL as stored ("" when absent).
+	HealthcheckAccountInitialEmail string
+	NotifyOn                       string // "always" | "warning" | "failure"; empty when absent or not valid
 }
 
 // InstallWizardData holds the collected installation data.
@@ -89,7 +91,10 @@ type InstallWizardData struct {
 	EnableEncryption       bool
 	SchedulerMode          string // "cron" | "daemon"
 	HealthcheckMode        string // "off" | "centralized" | "self"; empty with daemon -> backward-compat centralized-on
-	NotifyOn               string // Notify level: "always" | "warning" | "failure"; empty -> NOTIFY_ON left as stored
+	// HealthcheckAccountInitialEmail is the portal's initial email (issue 347), required with the
+	// centralized mode and written only then; with any other mode the stored value is kept.
+	HealthcheckAccountInitialEmail string
+	NotifyOn                       string // Notify level: "always" | "warning" | "failure"; empty -> NOTIFY_ON left as stored
 }
 
 // HealthcheckSelfParams holds the full ping URLs the self-mode params screen
@@ -386,6 +391,9 @@ func ApplyInstallData(baseTemplate string, data *InstallWizardData) (string, err
 		template = setEnvValue(template, "HEALTHCHECK_ENABLED", "true")
 		template = setEnvValue(template, "HEALTHCHECK_MODE", "centralized")
 		clearURLs()
+		if email := strings.TrimSpace(data.HealthcheckAccountInitialEmail); email != "" {
+			template = setEnvValue(template, "HEALTHCHECK_ACCOUNT_INITIAL_EMAIL", email)
+		}
 	}
 
 	// Notify level (NOTIFY_ON). Below always it applies only with a Healthchecks monitor, so without
@@ -486,6 +494,8 @@ func DeriveInstallWizardPrefill(baseTemplate string) InstallWizardPrefill {
 		out.HealthcheckMode = "off"
 	}
 
+	out.HealthcheckAccountInitialEmail = strings.TrimSpace(readTemplateString(values, "HEALTHCHECK_ACCOUNT_INITIAL_EMAIL"))
+
 	if raw := readTemplateString(values, "NOTIFY_ON"); strings.TrimSpace(raw) != "" {
 		if level := config.NormalizeNotifyOn(raw); config.IsValidNotifyOn(level) {
 			out.NotifyOn = level
@@ -562,3 +572,34 @@ func installEmailDeliveryMethodOrDefault(method string) string {
 		return "relay"
 	}
 }
+
+// ValidateHealthcheckInitialEmail checks the address the install wizard asks with the centralized
+// Healthchecks mode (issue 347): required, then a minimal form check (one "@", a dotted domain,
+// printable characters without spaces or "$": loading backup.env expands $NAME and ${NAME}, so an
+// address with "$" would not be the one saved). The ProxSave HC Server checks it again.
+func ValidateHealthcheckInitialEmail(value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return wizardMessage("Required with ProxSave HC Server")
+	}
+	local, domain, ok := strings.Cut(v, "@")
+	usable := ok && local != "" && !strings.Contains(domain, "@") && strings.Contains(domain, ".") &&
+		!strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".") && !strings.Contains(domain, "..") &&
+		len(v) <= 254
+	for _, r := range v {
+		if r <= ' ' || r > '~' || r == '$' {
+			usable = false
+		}
+	}
+	if !usable {
+		return wizardMessage("Not a usable email address")
+	}
+	return nil
+}
+
+// wizardMessage is a validation answer the install wizard shows to the operator as it is (the TUI under
+// the field, --install --cli before asking again): an approved sentence, capitalized, never wrapped into
+// another error.
+type wizardMessage string
+
+func (m wizardMessage) Error() string { return string(m) }

@@ -63,6 +63,14 @@ type CentralizedConfig struct {
 	// infer it from an empty LoginURL: a failed mint looks identical and would tell a
 	// password-less operator to sign in with a password they never chose.
 	PasswordSet *bool `json:"password_set"`
+	// LoginKind is LoginKindPortal when LoginURL is the portal's plain sign-in page rather than a
+	// single-use magic-link: the relay sends it for a project the operator owns (an initial
+	// email applied, or a project moved to an account of theirs). "" for a magic-link or an
+	// older relay.
+	LoginKind string `json:"login_kind,omitempty"`
+	// AccountInitialEmail is the relay's answer to HEALTHCHECK_ACCOUNT_INITIAL_EMAIL on a poll
+	// that sent it; nil otherwise or from an older relay.
+	AccountInitialEmail *AccountInitialEmailAck `json:"account_initial_email,omitempty"`
 	// Checks carries additive, OPTIONAL per-sensor ping URLs beyond the two frozen
 	// alive/backup keys (Fase 1: {"updates":"<ping-url>"}). An old server omits it; the
 	// completeness check below still requires only alive+backup, so a new client against
@@ -115,7 +123,7 @@ func FetchCentralizedConfig(ctx context.Context, client *http.Client, serverAPIH
 }
 
 func fetchConfig(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool) (CentralizedConfig, error) {
-	cfg, _, err := fetchConfigPoll(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil, nil, PollLog{})
+	cfg, _, err := fetchConfigPoll(ctx, client, serverAPIHost, serverID, secret, includeLogin, nil, nil, "", PollLog{})
 	return cfg, err
 }
 
@@ -132,7 +140,7 @@ type PollLog struct {
 // and also returns the HTTP status of the answer: 0 when
 // there was none (the error is then the transport's), the relay's status otherwise, whatever the
 // error. With plog.Logger an answer other than 200 adds an excerpt of its body, secret masked.
-func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string, extra url.Values, plog PollLog) (CentralizedConfig, int, error) {
+func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, includeLogin bool, channels []string, extra url.Values, initialEmail string, plog PollLog) (CentralizedConfig, int, error) {
 	q := url.Values{"server_id": {serverID}}
 	maps.Copy(q, extra)
 	if includeLogin {
@@ -150,15 +158,17 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 	// bounded read, error redaction) is the shared serverbot brick; the endpoint
 	// vocabulary below (status map + typed errors + completeness check) stays here.
 	resp, err := serverbot.New(serverAPIHost, client, plog.Logger).Do(ctx, serverbot.Request{
-		Method:       http.MethodGet,
-		Path:         "/api/healthcheck/config",
-		Query:        q,
-		Secret:       secret,
-		Timeout:      fetchTimeout,
-		MaxBytes:     8192,
-		LogOperation: plog.Operation,
-		LogPrefix:    plog.Prefix,
-		LogURLDetail: plog.URLDetail,
+		Method:   http.MethodGet,
+		Path:     "/api/healthcheck/config",
+		Query:    q,
+		Secret:   secret,
+		Timeout:  fetchTimeout,
+		MaxBytes: 8192,
+		// The address travels in a header and never in LogURLDetail: never logged.
+		AccountInitialEmail: initialEmail,
+		LogOperation:        plog.Operation,
+		LogPrefix:           plog.Prefix,
+		LogURLDetail:        plog.URLDetail,
 	})
 	if err != nil {
 		// Transport failure (build/dial/read), already URL-stripped + secret-masked by
@@ -209,4 +219,22 @@ func fetchConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, se
 	default:
 		return CentralizedConfig{}, resp.Status, fmt.Errorf("healthcheck config: HTTP %d", resp.Status)
 	}
+}
+
+// LoginKindPortal is CentralizedConfig.LoginKind for a login URL that is the portal's sign-in page.
+const LoginKindPortal = "portal"
+
+// AccountInitialEmailAck is the relay's answer about HEALTHCHECK_ACCOUNT_INITIAL_EMAIL (issue 347):
+// State is "pending" (a confirmation mail is out, or none could go yet), "applied" (the address
+// now signs in to the portal; the variable is not needed any more) or "rejected", with Reason
+// "invalid", "reserved" or "unconfirmed". A pending answer may carry Reason "limit".
+type AccountInitialEmailAck struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// Final reports whether the relay will answer the same for this address from now on: the daemon
+// then stops sending it.
+func (a *AccountInitialEmailAck) Final() bool {
+	return a != nil && (a.State == "applied" || a.State == "rejected")
 }

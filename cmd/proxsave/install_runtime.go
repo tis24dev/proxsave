@@ -92,9 +92,23 @@ func newInstallRuntimePreparation(configPath, baseDir string, execInfo ExecInfo,
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, schedule, configPath)
+			written, ok := runPostInstallSymlinksAndCron(ctx, baseDir, execInfo, bootstrap, schedule, configPath)
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			// The cron write reports its failures only as WARNINGs, so the crontab is read
+			// back: removing the daemon over a cron line that is not there left the host
+			// with no scheduler at all, under "Installation completed". The line read back
+			// must be the one just written: an older proxsave line left by a failed write
+			// (another schedule or --config) does not count.
+			present, verified := cronLineReadBack(ctx, written)
+			logging.Debug("install: cron entry after the write: written=%v present=%v verified=%v", ok, present, verified)
+			if !ok || !present || !verified {
+				if daemonUnitInstalled() {
+					logging.Warning("daemon: the cron entry could not be written, so the daemon service was left in place and keeps scheduling the backup.")
+					return errors.New("the cron entry could not be written")
+				}
+				return errors.New("the cron entry could not be written, so no scheduler is installed")
 			}
 			if daemonUnitInstalled() {
 				if err := removeDaemonService(ctx, bootstrap); err != nil {

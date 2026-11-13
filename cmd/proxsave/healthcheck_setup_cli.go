@@ -150,6 +150,14 @@ func runHealthcheckSetupCLI(ctx context.Context, reader *bufio.Reader, baseDir, 
 func printHealthcheckPortal(st orchestrator.HealthcheckSetupState) {
 	if link := strings.TrimSpace(st.LoginURL); link != "" {
 		fmt.Println()
+		if st.LoginIsPortalPage {
+			// The operator owns the project (issue 347): the sign-in page, not a single-use link.
+			fmt.Println("Your monitoring portal:")
+			fmt.Printf("  %s\n", link)
+			fmt.Println(orchestrator.HealthcheckPortalPageSignIn(st.LoginPasswordSet))
+			fmt.Println()
+			return
+		}
 		fmt.Println("Your monitoring portal (single-use link, valid ~1h):")
 		fmt.Printf("  %s\n", link)
 		fmt.Println("Open it to set a password and configure alert channels (email, etc.).")

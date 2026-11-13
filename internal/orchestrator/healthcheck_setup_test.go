@@ -213,6 +213,18 @@ func TestCheckHealthcheckConnection(t *testing.T) {
 		}
 	})
 
+	t.Run("the portal sign-in page keeps its login_kind", func(t *testing.T) {
+		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
+			return health.CentralizedConfig{AliveURL: "https://a", BackupURL: "https://b",
+				LoginURL: "https://hc.proxsave.dev/accounts/login/", LoginKind: health.LoginKindPortal}, nil
+		}
+		healthcheckSetupPing = func(ctx context.Context, aliveURL string) error { return nil }
+		res := CheckHealthcheckConnection(context.Background(), "https://h", "id", t.TempDir(), time.Minute)
+		if res.LoginKind != health.LoginKindPortal {
+			t.Fatalf("login_kind lost: %+v", res)
+		}
+	})
+
 	t.Run("fetch error propagates, no login", func(t *testing.T) {
 		healthcheckSetupFetch = func(ctx context.Context, client *http.Client, host, id, secret string, includeLogin bool) (health.CentralizedConfig, error) {
 			return health.CentralizedConfig{}, health.ErrHCNotReady
@@ -485,5 +497,28 @@ func TestClassifyHealthcheckBehindDefaultsABlankReason(t *testing.T) {
 	msg := ClassifyHealthcheckSetupResult(behind).Message
 	if want := "is behind: it is running an older binary than the one now on disk;"; !strings.Contains(msg, want) {
 		t.Fatalf("BEHIND message = %q, want it to contain %q", msg, want)
+	}
+}
+
+// The portal's sign-in page (issue 347): marked only with login_kind portal and a trusted URL.
+func TestClassifyHealthcheckSetupResultPortalPage(t *testing.T) {
+	yes, no := true, false
+	page := "https://hc.proxsave.dev/accounts/login/"
+	for _, c := range []struct {
+		name              string
+		res               HealthcheckCheckResult
+		page, passwordSet bool
+	}{
+		{"portal page without password", HealthcheckCheckResult{Reachable: true, LoginURL: page, LoginKind: health.LoginKindPortal, PasswordSet: &no}, true, false},
+		{"portal page with password", HealthcheckCheckResult{Reachable: true, LoginURL: page, LoginKind: health.LoginKindPortal, PasswordSet: &yes}, true, true},
+		{"portal page, password unknown", HealthcheckCheckResult{Reachable: true, LoginURL: page, LoginKind: health.LoginKindPortal}, true, false},
+		{"magic link", HealthcheckCheckResult{Reachable: true, LoginURL: "https://hc.proxsave.dev/l/abc", PasswordSet: &no}, false, false},
+		{"unknown kind", HealthcheckCheckResult{Reachable: true, LoginURL: page, LoginKind: "other"}, false, false},
+		{"foreign host dropped", HealthcheckCheckResult{Reachable: true, LoginURL: "https://evil.example/accounts/login/", LoginKind: health.LoginKindPortal}, false, false},
+	} {
+		st := ClassifyHealthcheckSetupResult(c.res)
+		if st.LoginIsPortalPage != c.page || st.LoginPasswordSet != c.passwordSet {
+			t.Errorf("%s: page=%t password=%t", c.name, st.LoginIsPortalPage, st.LoginPasswordSet)
+		}
 	}
 }

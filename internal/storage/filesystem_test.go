@@ -54,6 +54,8 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 		{"fat32", FilesystemFAT32},
 		{"fat", FilesystemFAT},
 		{"fat16", FilesystemFAT},
+		{"msdos", FilesystemMSDOS},
+		{"MSDOS", FilesystemMSDOS},
 		{"exfat", FilesystemExFAT},
 		{"ntfs", FilesystemNTFS},
 		{"ntfs-3g", FilesystemNTFS},
@@ -72,6 +74,32 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 	for _, tc := range cases {
 		if got := parseFilesystemType(tc.in); got != tc.want {
 			t.Fatalf("parseFilesystemType(%q)=%q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// An msdos mount has its own type and behaves like fat for every user of the type: no
+// ownership, excluded from chown/chmod, and no mode set on the Cloud and Secondary copies.
+// vfat keeps its own type with the same behaviour.
+func TestMsdosBehavesLikeFAT(t *testing.T) {
+	if got := parseFilesystemType("msdos"); got != FilesystemMSDOS || string(got) != "msdos" {
+		t.Fatalf("parseFilesystemType(msdos) = %q, want %q", got, "msdos")
+	}
+	if got := parseFilesystemType("vfat"); got != FilesystemFAT32 || string(got) != "vfat" {
+		t.Fatalf("parseFilesystemType(vfat) = %q, want %q", got, "vfat")
+	}
+	for _, fs := range []FilesystemType{FilesystemMSDOS, FilesystemFAT32} {
+		if got, want := fs.hasNoUnixModes(), FilesystemFAT.hasNoUnixModes(); got != want || !got {
+			t.Fatalf("%q hasNoUnixModes() = %v, want %v (as fat)", fs, got, want)
+		}
+		if got, want := fs.ShouldAutoExclude(), FilesystemFAT.ShouldAutoExclude(); got != want || !got {
+			t.Fatalf("%q ShouldAutoExclude() = %v, want %v (as fat)", fs, got, want)
+		}
+		if got, want := fs.SupportsUnixOwnership(), FilesystemFAT.SupportsUnixOwnership(); got != want || got {
+			t.Fatalf("%q SupportsUnixOwnership() = %v, want %v (as fat)", fs, got, want)
+		}
+		if got, want := fs.IsNetworkFilesystem(), FilesystemFAT.IsNetworkFilesystem(); got != want || got {
+			t.Fatalf("%q IsNetworkFilesystem() = %v, want %v (as fat)", fs, got, want)
 		}
 	}
 }
@@ -135,7 +163,11 @@ func TestFilesystemDetectorGetMountPoint_PicksProcForProcPaths(t *testing.T) {
 		t.Skip("this test depends on /proc mounts")
 	}
 	detector := NewFilesystemDetector(newTestLogger())
-	mp, err := detector.getMountPoint("/proc/self")
+	fi, err := os.Stat("/proc/self")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, _, err := detector.getMountPoint(context.Background(), "/proc/self", fi)
 	if err != nil {
 		t.Fatalf("getMountPoint error: %v", err)
 	}

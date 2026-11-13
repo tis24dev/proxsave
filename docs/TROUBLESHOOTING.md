@@ -896,7 +896,7 @@ grep -n '^user:root@pam:' /etc/pve/user.cfg
 proxmox-backup-manager user list --output-format json
 
 # PBS (config file)
-grep -n '^user:root@pam:' /etc/proxmox-backup/user.cfg
+grep -A5 '^user: root@pam' /etc/proxmox-backup/user.cfg
 ```
 
 ##### If `EMAIL_DELIVERY_METHOD=sendmail`

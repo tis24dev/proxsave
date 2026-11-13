@@ -26,8 +26,10 @@ import (
 	"github.com/tis24dev/proxsave/internal/cli"
 	"github.com/tis24dev/proxsave/internal/config"
 	"github.com/tis24dev/proxsave/internal/identity"
+	"github.com/tis24dev/proxsave/internal/input"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safeexec"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 	"github.com/tis24dev/proxsave/internal/types"
 	buildinfo "github.com/tis24dev/proxsave/internal/version"
 )
@@ -228,12 +230,21 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "fetching latest release info")
 	tag, latestVersion, _, err := fetchLatestRelease(ctx)
 	if err != nil {
+		if statusErr, ok := errors.AsType[*githubStatusError](err); ok {
+			logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "latest release response body=%q", statusErr.excerpt)
+		}
 		// Four of fetchLatestRelease's five errors open with "failed to ...", so a
 		// wrapper repeated the verb. The fifth, "empty tag_name in latest release
 		// response", does not name the operation: on that shape the cause stands
 		// bare. Known cost.
+		if ctx.Err() != nil {
+			// Ctrl+C or SIGTERM during the check: an interrupted run, not a
+			// configuration error (exit 2 said "Invalid or missing configuration").
+			return "", "", exitCodeInterrupted, true, err
+		}
 		bootstrap.Error("%v", err)
-		return "", "", types.ExitConfigError.Int(), true, err
+		// GitHub not answering is a failed run, like a failed download (exit 1).
+		return "", "", types.ExitGenericError.Int(), true, err
 	}
 
 	logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "current=%s latest=%s", currentVersion, latestVersion)
@@ -255,6 +266,16 @@ func upgradeAcquireBinary(ctx context.Context, args *cli.Args, bootstrap *loggin
 		reader := bufio.NewReader(os.Stdin)
 		confirmed, promptErr := promptYesNo(ctx, reader, "Do you want to download and install this version now? (backup.env will be updated with any missing keys; a backup will be created) [y/N]: ", false)
 		if promptErr != nil {
+			switch {
+			case ctx.Err() != nil:
+				// Ctrl+C or SIGTERM at the prompt: exit 130, as backup and restore.
+				return "", "", exitCodeInterrupted, true, promptErr
+			case errors.Is(promptErr, input.ErrInputAborted):
+				// End of input or the idle timeout: nothing was chosen, nothing changed.
+				logging.DebugStepBootstrap(bootstrap, "upgrade workflow", "prompt ended without an answer: %v", promptErr)
+				bootstrap.Println("Upgrade cancelled by user; no changes were made.")
+				return "", "", types.ExitSuccess.Int(), true, nil
+			}
 			bootstrap.Error("%v", promptErr)
 			return "", "", types.ExitConfigError.Int(), true, promptErr
 		}
@@ -671,6 +692,37 @@ func resolveReleaseTarget(goos, goarch string) (string, string, error) {
 	return osName, "amd64", nil
 }
 
+// githubStatusError is a non-200 answer from GitHub. Its text is the status, plus the
+// message of GitHub's JSON error (the API's rate limit says why there) when asked for;
+// excerpt is the answer itself, for a DEBUG line only: a proxy in front of GitHub can
+// answer with a multi-line HTML page holding control bytes.
+type githubStatusError struct {
+	code    int
+	message string
+	excerpt string
+}
+
+func newGitHubStatusError(code int, body []byte, withMessage bool) *githubStatusError {
+	e := &githubStatusError{code: code, excerpt: (&serverbot.Response{Body: body}).Snippet(200)}
+	if withMessage {
+		var apiErr struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &apiErr) == nil {
+			e.message = strings.TrimSpace((&serverbot.Response{Body: []byte(apiErr.Message)}).Snippet(200))
+		}
+	}
+	return e
+}
+
+func (e *githubStatusError) Error() string {
+	text := strings.TrimSpace(fmt.Sprintf("status %d %s", e.code, http.StatusText(e.code)))
+	if e.message != "" {
+		text += ": " + e.message
+	}
+	return text
+}
+
 // fetchLatestRelease returns (tag, version, body, err) for the latest GitHub release.
 // body is the raw release description (used to surface the release notes); it is remote-
 // controlled, so every consumer that displays it MUST sanitize it first.
@@ -691,7 +743,7 @@ func fetchLatestRelease(ctx context.Context) (string, string, string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		return "", "", "", fmt.Errorf("failed to fetch latest release: status %d, body: %s", resp.StatusCode, string(body))
+		return "", "", "", fmt.Errorf("failed to fetch latest release: %w", newGitHubStatusError(resp.StatusCode, body, true))
 	}
 
 	var info releaseInfo
@@ -802,7 +854,9 @@ func downloadFile(ctx context.Context, url string, root *os.Root, name string, b
 	logging.DebugStepBootstrap(bootstrap, "upgrade download", "status=%s", resp.Status)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024))
-		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
+		statusErr := newGitHubStatusError(resp.StatusCode, body, false)
+		logging.DebugStepBootstrap(bootstrap, "upgrade download", "response body=%q", statusErr.excerpt)
+		return fmt.Errorf("download failed with %w", statusErr)
 	}
 
 	out, err := root.Create(name)
@@ -1134,7 +1188,7 @@ func upgradeFooterBody(upgradeErr error, version, configPath, baseDir, telegramC
 	fmt.Println()
 
 	fmt.Println("Commands:")
-	fmt.Println("  proxsave (alias: proxmox-backup) - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
+	fmt.Println("  proxsave           - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
 	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --upgrade          - Update proxsave binary to latest release (also adds missing keys to backup.env)")
 	fmt.Println("  --install          - Re-run interactive installation/setup")

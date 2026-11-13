@@ -31,13 +31,15 @@ func (a *ScheduleAck) Confirms(frequency string) bool {
 // contract-1 notify policy (hc_contract, notify_on and the channel set) plus ?frequency, so the relay
 // gives the backup check and the periodic notify checks that period and acks it in Schedule. It
 // also returns the HTTP status of the answer (0 when there was none) and logs the transport
-// stages in DEBUG as plog says. An empty frequency is not sent.
-func FetchCentralizedConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, channels []string, notifyOn, frequency string, plog PollLog) (CentralizedConfig, int, error) {
+// stages in DEBUG as plog says. An empty frequency is not sent. A non-empty initialEmail
+// (HEALTHCHECK_ACCOUNT_INITIAL_EMAIL) rides the X-Proxsave-Account-Initial-Email header and the
+// relay answers it in AccountInitialEmail.
+func FetchCentralizedConfigPoll(ctx context.Context, client *http.Client, serverAPIHost, serverID, secret string, channels []string, notifyOn, frequency, initialEmail string, plog PollLog) (CentralizedConfig, int, error) {
 	extra := url.Values{"hc_contract": {"1"}, "notify_on": {notifyOn}}
 	if frequency != "" {
 		extra.Set("frequency", frequency)
 	}
-	return fetchConfigPoll(ctx, client, serverAPIHost, serverID, secret, false, channels, extra, plog)
+	return fetchConfigPoll(ctx, client, serverAPIHost, serverID, secret, false, channels, extra, initialEmail, plog)
 }
 
 // ScheduleStateSchemaVersion is the version of the .schedule_state.json layout.

@@ -444,7 +444,7 @@ not the backup's, so no run log, recap, notification, healthchecks ping or metri
   log ProxSave is writing at that moment, the second the installation, and between them they
   are the only way a script could learn about the run or write into ProxSave's log. Nothing is
   added, so there is no run id either. The script runs as the daemon does, as `root`, in the
-  daemon's working directory. Make it executable and give it a shebang.
+  daemon's working directory. Make it executable and give it a shebang. An interpreted script sees its own name as `/proc/self/fd/3`, not as the configured path: `$0`, `BASH_SOURCE`, Python's `__file__` and Perl's `$FindBin::Bin` all carry it, so `dirname "$0"` points at `/proc/self/fd`. To find files next to the script, resolve it first: `readlink -f "$0"`, `os.path.realpath(__file__)` or `$FindBin::RealBin`.
 - **A stop does not queue behind either script.** A `systemctl stop` or `systemctl restart`
   landing while the run is in flight still starts `PERSONAL_SCRIPT_POST_RUN`, but does not wait
   for it: the daemon's whole teardown budget is the unit's stop timeout, 90 seconds on a stock

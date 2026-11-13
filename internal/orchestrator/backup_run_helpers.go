@@ -163,7 +163,7 @@ func (o *Orchestrator) logBackupCollectionSummary(collStats *backup.CollectionSt
 		collStats.DirsCreated)
 }
 
-func (o *Orchestrator) applyBackupOptimizations(ctx context.Context, tempDir string) (backup.OptimizationResult, error) {
+func (o *Orchestrator) applyBackupOptimizations(ctx context.Context, tempDir string, excludePatterns []string) (backup.OptimizationResult, error) {
 	if !o.optimizationCfg.Enabled() {
 		o.logger.Debug("Skipping optimization step (all features disabled)")
 		return backup.OptimizationResult{}, nil
@@ -171,7 +171,9 @@ func (o *Orchestrator) applyBackupOptimizations(ctx context.Context, tempDir str
 
 	fmt.Println()
 	o.logger.Step("Backup optimizations on collected data")
-	res, err := backup.ApplyOptimizations(ctx, o.logger, tempDir, o.optimizationCfg)
+	optCfg := o.optimizationCfg
+	optCfg.ExcludePatterns = excludePatterns
+	res, err := backup.ApplyOptimizations(ctx, o.logger, tempDir, optCfg)
 	if err != nil {
 		// ApplyOptimizations only returns an error for an unsafe deduplication state
 		// (a tree that would lose fidelity on restore); abort rather than ship it.

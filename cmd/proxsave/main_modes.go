@@ -71,6 +71,7 @@ func validateModeCompatibility(args *cli.Args) []string {
 		validateInstallCompatibility,
 		validateUpgradeCompatibility,
 		validateRestoreCompatibility,
+		validateDryRunCompatibility,
 		validateDaemonCompatibility,
 	} {
 		if messages := rule(args); len(messages) > 0 {
@@ -194,6 +195,32 @@ func validateRestoreCompatibility(args *cli.Args) []string {
 		return []string{"--dry-run is not supported with --restore: a restore cannot run without modifying the system."}
 	}
 	return nil
+}
+
+// validateDryRunCompatibility refuses --dry-run with the modes that never read it, for
+// the reason given for --upgrade above. They returned before the runtime, where the
+// flag is honoured, and wrote for real: --newkey replaced the recipient, --new-install
+// deleted backup/, configs/ and log/, --upgrade-config-json rewrote backup.env.
+// --upgrade-config is not refused: with --dry-run it runs its existing preview
+// (runUpgradeConfigDryMode), which is what the flag asks for.
+func validateDryRunCompatibility(args *cli.Args) []string {
+	if !args.DryRun {
+		return nil
+	}
+	var messages []string
+	if args.Install || args.NewInstall {
+		messages = append(messages, "--dry-run is not supported with --install or --new-install: the installer always writes the installation.")
+	}
+	if args.ForceNewKey {
+		messages = append(messages, "--dry-run is not supported with --newkey: it always replaces the encryption recipient.")
+	}
+	if args.Decrypt {
+		messages = append(messages, "--dry-run is not supported with --decrypt: it always writes the decrypted archive.")
+	}
+	if args.UpgradeConfigJSON {
+		messages = append(messages, "--dry-run is not supported with --upgrade-config-json: use --upgrade-config-dry-run to preview the changes.")
+	}
+	return messages
 }
 
 func validateDaemonCompatibility(args *cli.Args) []string {
@@ -398,7 +425,7 @@ func runDecryptOnlyMode(ctx context.Context, args *cli.Args, bootstrap *logging.
 	}
 	decryptCLI := modeUseCLI(args)
 	logging.DebugStepBootstrap(bootstrap, "main run", "mode=decrypt cli=%v", decryptCLI)
-	if err := runDecryptWorkflowOnly(ctx, args.ConfigPath, bootstrap, toolVersion, decryptCLI); err != nil {
+	if err := runDecryptWorkflowOnly(ctx, args, bootstrap, toolVersion, decryptCLI); err != nil {
 		if errors.Is(err, orchestrator.ErrDecryptAborted) {
 			bootstrap.Info("Decrypt workflow aborted by user")
 			return types.ExitSuccess.Int(), true

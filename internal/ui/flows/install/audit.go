@@ -82,6 +82,13 @@ func RunPostInstallAudit(ctx context.Context, session *shell.Session, execPath, 
 		suggestions = found
 		return nil
 	})
+	if errors.Is(collectErr, context.Canceled) {
+		// The operator stopped the dry-run: nothing was checked, nothing failed.
+		result.CollectErr = collectErr
+		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelNeutral,
+			"NOT CHECKED", "The dry-run was cancelled before it finished.", backToMenu)
+		return result, nil
+	}
 	if collectErr != nil {
 		result.CollectErr = collectErr
 		showAuditResult(ctx, session, "Post-install check", orchestrator.HealthcheckSetupLevelWarn,

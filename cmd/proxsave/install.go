@@ -476,7 +476,7 @@ func installFooterBody(installErr error, configPath, baseDir, telegramCode, perm
 	fmt.Println("https://github.com/sponsors/tis24dev")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  proxsave (alias: proxmox-backup) - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
+	fmt.Println("  proxsave           - Open the interactive dashboard (runs the backup directly when non-interactive, e.g. cron)")
 	fmt.Println("  --backup           - Run a backup now (what bare proxsave does when non-interactive)")
 	fmt.Println("  --help             - Show all options")
 	fmt.Println("  --dry-run          - Test without changes")
@@ -628,9 +628,11 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 		// defence schedulerEngineDefault / healthcheckModeDefault / cronTimeDefault
 		// already apply to their keys; this one was missed.
 		//
-		// CLOUD_LOG_PATH is deliberately NOT cleared: "/proxsave/log" is a real path
-		// inside whatever remote is chosen, listed by the template's own comment as an
-		// accepted form, so it is a usable default rather than a stand-in.
+		// CLOUD_LOG_PATH is deliberately NOT cleared: the template's "proxsave/log" is a
+		// real path inside whatever remote is chosen, so it is a usable default rather
+		// than a stand-in. It has no leading "/": unlike CLOUD_REMOTE_PATH that one is
+		// kept, and on sftp/ftp it put the logs at the server root, away from the backups
+		// in the login home.
 		prefill.CloudRemote = ""
 	}
 
@@ -725,6 +727,13 @@ func collectInstallWizardDataCLI(ctx context.Context, reader *bufio.Reader, prom
 			return nil, err
 		}
 		data.HealthcheckMode = hcMode
+		if hcMode == "centralized" {
+			email, err := promptHealthcheckInitialEmail(ctx, reader, prefill.HealthcheckAccountInitialEmail)
+			if err != nil {
+				return nil, err
+			}
+			data.HealthcheckAccountInitialEmail = email
+		}
 	}
 
 	// Notify level (NOTIFY_ON): asked only with a Healthchecks monitor. Without one any level below
@@ -774,12 +783,14 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 	return nil
 }
 
-func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
+// runPostInstallSymlinksAndCron returns the cron entry written and ok=true once crontab accepted
+// it (migrateLegacyCronEntries).
+func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) (written string, ok bool) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 
 	if err := runPostInstallEntrypoints(ctx, execInfo, bootstrap); err != nil {
-		return
+		return "", false
 	}
 
 	// Ensure a cron entry for the Go binary: preserve an entry that already
@@ -789,7 +800,7 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 		cronSchedule = resolveCronScheduleFromEnv()
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
-	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule, configPath)
+	return migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule, configPath)
 }
 
 // runPostInstallEntrypoints is shared by the early daemon and late cron paths.
@@ -1567,4 +1578,25 @@ func clearImmutableAttributesWithContext(ctx context.Context, target string, boo
 		}
 	}
 	return nil
+}
+
+// promptHealthcheckInitialEmail asks the portal's initial email (issue 347), required with the
+// centralized mode: Enter keeps the stored value, and the question repeats until the address passes
+// installer.ValidateHealthcheckInitialEmail, whose message is printed first.
+func promptHealthcheckInitialEmail(ctx context.Context, reader *bufio.Reader, def string) (string, error) {
+	for {
+		raw, err := promptOptional(ctx, reader, fmt.Sprintf("HC initial account email [%s]: ", def))
+		if err != nil {
+			return "", err
+		}
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			value = strings.TrimSpace(def)
+		}
+		if verr := installer.ValidateHealthcheckInitialEmail(value); verr != nil {
+			fmt.Println(verr.Error())
+			continue
+		}
+		return value, nil
+	}
 }

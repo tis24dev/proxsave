@@ -800,7 +800,8 @@ func TestRunConfigWizardCLIReturnsCronSchedule(t *testing.T) {
 	// 6 toggle declines, empty scheduler-engine answer (defaults to daemon on a
 	// fresh install), empty healthcheck-mode answer (daemon-only prompt, defaults
 	// to centralized), empty notify-level answer (defaults to warning), then the run-at time.
-	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\n\n\n03:15\n"))
+	// The HC initial account email follows the centralized mode answer (required there).
+	reader := bufio.NewReader(strings.NewReader("n\nn\nn\nn\nn\nn\n\n\nops@example.org\n\n\n03:15\n"))
 
 	var result installConfigResult
 	var err error
@@ -1520,5 +1521,27 @@ func TestRunPostInstallAuditCLIListsTheDisabledVariablesInOrder(t *testing.T) {
 	want := "disabled 2 component(s): BACKUP_CLUSTER_CONFIG, BACKUP_ZFS_CONFIG"
 	if !strings.Contains(out, want) {
 		t.Fatalf("summary does not list the variables in order; want %q in:\n%s", want, out)
+	}
+}
+
+// The CLI asks the HC initial account email after centralized, repeats on an empty or unusable
+// answer with the approved message, and keeps the stored value on Enter.
+func TestPromptHealthcheckInitialEmail(t *testing.T) {
+	var got string
+	out := captureStdout(t, func() {
+		v, err := promptHealthcheckInitialEmail(context.Background(), bufio.NewReader(strings.NewReader("\nnope\nops@example.org\n")), "")
+		if err != nil {
+			t.Fatalf("prompt: %v", err)
+		}
+		got = v
+	})
+	if got != "ops@example.org" ||
+		!strings.Contains(out, "HC initial account email []: Required with ProxSave HC Server\n") ||
+		!strings.Contains(out, "Not a usable email address\n") {
+		t.Fatalf("value %q, transcript:\n%s", got, out)
+	}
+	kept, err := promptHealthcheckInitialEmail(context.Background(), bufio.NewReader(strings.NewReader("\n")), "kept@example.org")
+	if err != nil || kept != "kept@example.org" {
+		t.Fatalf("Enter must keep the stored value: %q %v", kept, err)
 	}
 }

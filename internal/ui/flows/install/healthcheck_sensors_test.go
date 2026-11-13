@@ -20,7 +20,7 @@ func TestBuildHealthcheckPromptSensors(t *testing.T) {
 		{Name: "proxsave-updates", Level: health.SensorError, State: "update available", Age: "1m ago"},
 		{Name: "proxsave-neutral", Level: health.SensorNeutral, State: "no data"},
 	}
-	v := buildHealthcheckPrompt(false, "", "", "", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, sensors, nil)
+	v := buildHealthcheckPrompt(false, "", "", "", "WORKING", "It is reporting.", orchestrator.HealthcheckSetupLevelOk, sensors, nil, portalLinkCopy{})
 	plain := ansi.Strip(v)
 
 	if !strings.Contains(plain, "Sensors:") {
@@ -49,7 +49,7 @@ func TestBuildHealthcheckPromptSensors(t *testing.T) {
 	}
 
 	// No sensors -> no "Sensors:" block (pre-check state).
-	none := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil, nil))
+	none := ansi.Strip(buildHealthcheckPrompt(false, "", "", "", "NOT CHECKED", "Choose Check.", orchestrator.HealthcheckSetupLevelNeutral, nil, nil, portalLinkCopy{}))
 	if strings.Contains(none, "Sensors:") {
 		t.Fatalf("no sensors must render no Sensors block:\n%s", none)
 	}
@@ -66,7 +66,7 @@ func TestBuildHealthcheckPromptSanitizesInjection(t *testing.T) {
 	}
 	v := buildHealthcheckPrompt(false, "", "", "", "UNREACHABLE",
 		"probe failed: \x1b[2J\x07connection refused\x1b]0;evil\x07",
-		orchestrator.HealthcheckSetupLevelError, sensors, nil)
+		orchestrator.HealthcheckSetupLevelError, sensors, nil, portalLinkCopy{})
 	for _, bad := range []string{"\x1b]0;", "\x07", "\x9b", "\x1b[2J", "pwned", "evil"} {
 		if strings.Contains(v, bad) {
 			t.Fatalf("healthcheck prompt leaks injected sequence %q:\n%q", bad, v)

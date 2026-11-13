@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -39,29 +40,49 @@ func fsIoTimeoutDuration(cfg *config.Config) time.Duration {
 //   - It only touches backup/log paths (not binaries/config files).
 //   - Failures are logged as warnings but do not abort the backup.
 func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *logging.Logger, dryRun bool) error {
+	applyBackupPermissionsOutcome(ctx, cfg, logger, dryRun)
+	return nil
+}
+
+// backupPermissionsOutcome is what the pass left undone. skipped names each backup path
+// it could not set, one reason per WARNING it logged; documentedSkip is true when a path
+// was left alone for a documented reason (no Unix ownership, missing directory). The
+// install and upgrade footers read it: the pass returns no error, and the footer said
+// "normalized correctly (including backup paths)" over every skip.
+type backupPermissionsOutcome struct {
+	skipped        []string
+	documentedSkip bool
+}
+
+func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logger *logging.Logger, dryRun bool) (outcome backupPermissionsOutcome) {
 	backupUser := strings.TrimSpace(cfg.BackupUser)
 	backupGroup := strings.TrimSpace(cfg.BackupGroup)
 	if backupUser == "" || backupGroup == "" {
 		logger.Warning("SET_BACKUP_PERMISSIONS=true but BACKUP_USER/BACKUP_GROUP are empty; skipping permission adjustments")
-		return nil
+		outcome.skipped = append(outcome.skipped, "BACKUP_USER/BACKUP_GROUP are empty")
+		return outcome
 	}
 
 	uid, gid, err := resolveUserGroupIDs(backupUser, backupGroup)
 	if err != nil {
 		// Log and skip rather than aborting
 		logger.Warning("Failed to resolve BACKUP_USER/BACKUP_GROUP (%s:%s): %v", backupUser, backupGroup, err)
-		return nil
+		outcome.skipped = append(outcome.skipped, "BACKUP_USER/BACKUP_GROUP cannot be resolved")
+		return outcome
 	}
 
 	logger.Info("Applying backup permissions (SET_BACKUP_PERMISSIONS=true) for user:group %s:%s", backupUser, backupGroup)
 
 	timeout := fsIoTimeoutDuration(cfg)
 
+	// A disabled secondary keeps its configured paths, and walking them chowned a
+	// directory the backup no longer uses (the Bash version gated this on the flag).
+	secondaryPath, secondaryLogPath := cfg.ActiveSecondaryPaths()
 	dirs := []string{
 		strings.TrimSpace(cfg.BackupPath),
 		strings.TrimSpace(cfg.LogPath),
-		strings.TrimSpace(cfg.SecondaryPath),
-		strings.TrimSpace(cfg.SecondaryLogPath),
+		strings.TrimSpace(secondaryPath),
+		strings.TrimSpace(secondaryLogPath),
 	}
 
 	// Bounded + dry-run-aware detector (parity with the security preflight): a
@@ -79,46 +100,78 @@ func applyBackupPermissions(ctx context.Context, cfg *config.Config, logger *log
 		}
 		if strings.Contains(dir, ":") && !isLocalPath(dir) {
 			logger.Info("Permissions: skipping remote cloud path (ownership unsupported): %s", dir)
+			outcome.documentedSkip = true
 			continue
 		}
 
-		info, err := safefs.Stat(ctx, dir, timeout)
+		// The bounded walk Lstats its root and never follows a symlink, so a configured
+		// directory that is a symlink was walked as a leaf: only the link was chowned.
+		// The configured root alone is resolved; symlinks inside it stay unfollowed.
+		// A failure to resolve it is a failure to read it, reported as the stat is.
+		root, err := safefs.Run(ctx, "evalsymlinks", dir, timeout, func() (string, error) {
+			return filepath.EvalSymlinks(dir)
+		})
+		var info fs.FileInfo
+		if err == nil {
+			info, err = safefs.Stat(ctx, root, timeout)
+		}
 		if err != nil {
 			switch {
 			case errors.Is(err, safefs.ErrTimeout):
 				logger.Warning("Permissions: stat of %s timed out after %s; skipping (dead/stale mount?)", dir, timeout)
+				outcome.skipped = append(outcome.skipped, dir+" could not be read")
 			case os.IsNotExist(err):
 				logger.Skip("Permissions: directory does not exist: %s", dir)
+				outcome.documentedSkip = true
 			default:
 				logger.Warning("Permissions: failed to stat %s (skipping): %v", dir, err)
+				outcome.skipped = append(outcome.skipped, dir+" could not be read")
 			}
 			continue
 		}
 		if !info.IsDir() {
 			logger.Skip("Permissions: path is not a directory, skipping: %s", dir)
+			outcome.documentedSkip = true
 			continue
 		}
 
-		fsInfo, err := fsDetector.DetectFilesystem(ctx, dir)
+		if root != dir {
+			logger.Debug("Permissions: %s resolves to %s; detecting and walking the resolved directory", dir, root)
+		}
+
+		fsInfo, err := fsDetector.DetectFilesystem(ctx, root)
 		if err != nil {
 			if errors.Is(err, safefs.ErrTimeout) {
 				logger.Warning("Permissions: filesystem detection on %s timed out after %s; skipping chown/chmod (dead/stale mount?)", dir, timeout)
 			} else {
 				logger.Warning("Permissions: failed to detect filesystem for %s; skipping chown/chmod: %v", dir, err)
 			}
+			outcome.skipped = append(outcome.skipped, "the filesystem of "+dir+" could not be detected")
 			continue
 		}
 		if fsInfo.Type.ShouldAutoExclude() || !fsInfo.SupportsOwnership {
 			logger.Info("Permissions: skipping chown/chmod for %s (filesystem %s does not support Unix ownership)", dir, fsInfo.Type)
+			outcome.documentedSkip = true
 			continue
 		}
 
-		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", dir, uid, gid)
-		if err := applyDirOwnershipRecursive(ctx, dir, uid, gid, timeout, dryRun, logger); err != nil {
+		// A dry run walks nothing, and its line keeps naming the configured path.
+		walkRoot := root
+		if dryRun {
+			walkRoot = dir
+		}
+		logger.Debug("Applying permissions on path: %s (uid=%d,gid=%d)", walkRoot, uid, gid)
+		failed, err := applyDirOwnershipRecursive(ctx, walkRoot, uid, gid, timeout, dryRun, logger)
+		switch {
+		case err != nil:
 			logger.Warning("Failed to apply permissions on %s: %v", dir, err)
+			outcome.skipped = append(outcome.skipped, dir+" could not be changed")
+		case failed > 0:
+			logger.Warning("Failed to apply permissions on %s: %d entries could not be changed", dir, failed)
+			outcome.skipped = append(outcome.skipped, dir+" could not be changed")
 		}
 	}
-	return nil
+	return outcome
 }
 
 func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
@@ -153,17 +206,39 @@ func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
 // by FS_IO_TIMEOUT (filepath.WalkDir's internal readdir/lstat would otherwise
 // block forever in an uninterruptible syscall on a dead/stale mount). In dry-run
 // it mutates nothing, matching the read-only dry-run security preflight.
-func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, timeout time.Duration, dryRun bool, logger *logging.Logger) error {
+//
+// An entry whose chown or chmod failed does not stop the walk; failed is the count of
+// such entries. err is the error that stopped the walk itself (a cancelled context).
+func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, timeout time.Duration, dryRun bool, logger *logging.Logger) (failed int, err error) {
 	if dryRun {
 		logger.Info("DRY RUN: would recursively set ownership %d:%d, 0750 directory perms and 0640 backup file perms on %s", uid, gid, root)
-		return nil
+		return 0, nil
 	}
 
 	logger.Debug("Walking directory tree for permissions: %s (uid=%d,gid=%d)", root, uid, gid)
 
-	return safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
-		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger)
+	var failures walkFailures
+	err = safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
+		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger, &failures)
 	})
+	logger.Debug("Permission walk on %s finished: %d entries could not be changed, walk error: %v", root, failures.count, err)
+	return failures.count, err
+}
+
+// walkFailures counts the walked entries that could not be changed, each once. The walk
+// reports a directory it could not read right after visiting that directory, so a
+// directory whose chmod failed and whose read then failed is the same entry, counted once.
+type walkFailures struct {
+	count    int
+	lastPath string
+}
+
+func (f *walkFailures) add(path string) {
+	if f.count > 0 && f.lastPath == path {
+		return
+	}
+	f.count++
+	f.lastPath = path
 }
 
 // applyOwnershipWalkEntry applies bounded ownership/permissions to a single walked
@@ -171,19 +246,28 @@ func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, 
 // bounded walk) is logged and SKIPPED (return nil) rather than propagated:
 // returning it would abort the walk, leaving every not-yet-visited entry with its
 // old ownership. One unreadable/stale subtree must not block fixing the rest of
-// the backup tree.
-func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, walkErr error, uid, gid int, timeout time.Duration, logger *logging.Logger) error {
+// the backup tree, but it was not changed either, so it is counted in failed like an
+// entry whose chown or chmod failed. Each entry is counted once.
+func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, walkErr error, uid, gid int, timeout time.Duration, logger *logging.Logger, failed *walkFailures) error {
 	if walkErr != nil {
-		logger.Debug("permission walk: skipping %s: %v", path, walkErr)
+		logger.Debug("permission walk: skipping %s, its subtree is not changed: %v", path, walkErr)
+		failed.add(path)
 		return nil
 	}
+	entryFailed := false
+	defer func() {
+		if entryFailed {
+			failed.add(path)
+		}
+	}()
 
 	// Lchown (not Chown): bounded, and never follows a symlink to chown a target
 	// outside the backup tree (the walk itself never descends symlinks). For
 	// regular files and directories it is identical to chown.
 	if err := safefs.Lchown(ctx, path, uid, gid, timeout); err != nil {
-		// Do not stop on chown errors (including timeouts); just log at debug level.
+		// Do not stop on chown errors (including timeouts); log at debug level and count.
 		logger.Debug("chown failed on %s: %v", path, err)
+		entryFailed = true
 	}
 
 	if d != nil && d.IsDir() {
@@ -197,6 +281,7 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 		// mode) both bounds the call and structurally avoids the G302 finding.
 		if err := safefs.Lchmod(ctx, path, 0o750, timeout); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
+			entryFailed = true
 		}
 		return nil
 	}
@@ -208,6 +293,7 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 	if d != nil && d.Type().IsRegular() && storage.IsBackupSetFile(d.Name()) {
 		if err := safefs.Lchmod(ctx, path, backup.SharedArtifactFilePerm, timeout); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
+			entryFailed = true
 		}
 	}
 	return nil
@@ -286,16 +372,17 @@ func fixPermissionsAfterInstall(ctx context.Context, configPath, baseDir string,
 			bootstrap.Info("Finalizing installation: applying backup directory permissions")
 		}
 		// Install/upgrade finalization always mutates (dryRun=false); it exists to
-		// leave the environment consistent and has no dry-run mode of its own.
-		if err := applyBackupPermissions(ctx, cfg, logger, false); err != nil {
-			if bootstrap != nil {
-				bootstrap.Warning("Post-install: backup permission adjustment failed (ignored): %v", err)
-			}
+		// leave the environment consistent and has no dry-run mode of its own. The
+		// reasons go in the line itself: the TUI does not show the pass's WARNINGs.
+		outcome := applyBackupPermissionsOutcome(ctx, cfg, logger, false)
+		logger.Debug("Post-install: backup permissions skipped=%q documentedSkip=%v", outcome.skipped, outcome.documentedSkip)
+		switch {
+		case len(outcome.skipped) > 0:
 			if status != "error" {
 				status = "warning"
-				message = "permissions normalized with warnings for backup paths (non-blocking, see log)"
+				message = "permissions and ownership normalized; backup paths skipped: " + strings.Join(outcome.skipped, "; ")
 			}
-		} else if status == "ok" {
+		case status == "ok" && !outcome.documentedSkip:
 			message = "permissions and ownership normalized correctly (including backup paths)"
 		}
 	}

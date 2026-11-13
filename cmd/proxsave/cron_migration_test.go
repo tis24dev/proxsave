@@ -312,6 +312,87 @@ func TestRepointLegacyCronLines(t *testing.T) {
 	if changed2 || out2[0] != "0 5 * * * /usr/local/bin/proxsave --backup" {
 		t.Errorf("no legacy line -> changed=false, unchanged; got changed=%v out=%v", changed2, out2)
 	}
+
+	// The command field is repointed, never the first occurrence of the legacy path on the
+	// line: a preceding assignment or a later argument naming that path stays byte-identical.
+	rows := []struct {
+		name    string
+		line    string
+		want    string
+		changed bool
+	}{
+		{
+			name:    "assignment value holding the legacy path before the command",
+			line:    "0 5 * * * TAG=/usr/local/bin/proxmox-backup.old /usr/local/bin/proxmox-backup --backup",
+			want:    "0 5 * * * TAG=/usr/local/bin/proxmox-backup.old /usr/local/bin/proxsave --backup",
+			changed: true,
+		},
+		{
+			name:    "quoted assignment and quoted command",
+			line:    `0 5 * * * TAG='/usr/local/bin/proxmox-backup.old' "/usr/local/bin/proxmox-backup" --backup`,
+			want:    `0 5 * * * TAG='/usr/local/bin/proxmox-backup.old' "/usr/local/bin/proxsave" --backup`,
+			changed: true,
+		},
+		{
+			name:    "nickname schedule with an assignment",
+			line:    "@daily TAG=/usr/local/bin/proxmox-backup.old /usr/local/bin/proxmox-backup --backup",
+			want:    "@daily TAG=/usr/local/bin/proxmox-backup.old /usr/local/bin/proxsave --backup",
+			changed: true,
+		},
+		{
+			name:    "irregular whitespace is preserved",
+			line:    "0 5 * * *   TZ=UTC\t/usr/local/bin/proxmox-backup  --backup",
+			want:    "0 5 * * *   TZ=UTC\t/usr/local/bin/proxsave  --backup",
+			changed: true,
+		},
+		{
+			name:    "argument naming the legacy path is left alone",
+			line:    "0 5 * * * /usr/local/bin/proxmox-backup --log /usr/local/bin/proxmox-backup.log",
+			want:    "0 5 * * * /usr/local/bin/proxsave --log /usr/local/bin/proxmox-backup.log",
+			changed: true,
+		},
+		{
+			// Pins current behaviour: an assignment whose value is the legacy binary answers
+			// as the command word itself, so the exact-equality guard skips the line.
+			name:    "assignment naming the legacy binary is not repointed",
+			line:    "0 5 * * * A=/usr/local/bin/proxmox-backup /usr/local/bin/proxmox-backup --backup",
+			want:    "0 5 * * * A=/usr/local/bin/proxmox-backup /usr/local/bin/proxmox-backup --backup",
+			changed: false,
+		},
+	}
+	for _, tc := range rows {
+		got, gotChanged := repointLegacyCronLines([]string{tc.line})
+		if gotChanged != tc.changed || got[0] != tc.want {
+			t.Errorf("%s:\n line    %q\n got     %q changed=%v\n want    %q changed=%v",
+				tc.name, tc.line, got[0], gotChanged, tc.want, tc.changed)
+		}
+	}
+}
+
+// cronFieldOffset finds the first whitespace-separated field equal to the word, splitting
+// like strings.Fields, and never a substring inside a longer field.
+func TestCronFieldOffset(t *testing.T) {
+	cases := []struct {
+		line string
+		word string
+		want int
+	}{
+		{"0 5 * * * /usr/local/bin/proxmox-backup --backup", "/usr/local/bin/proxmox-backup", 10},
+		{"0 5 * * * TAG=/usr/local/bin/proxmox-backup.old /usr/local/bin/proxmox-backup", "/usr/local/bin/proxmox-backup", 48},
+		{"0 5 * * * /x/proxmox-backup.log", "/x/proxmox-backup", -1},
+		{"a\tb\u00a0c  d", "c", 5},
+		{"a\tb\u00a0c  d", "d", 8},
+		{"  lead", "lead", 2},
+		{"word", "word", 0},
+		{"a b", "", -1},
+		{"", "a", -1},
+		{"ab abc", "abc", 3},
+	}
+	for _, tc := range cases {
+		if got := cronFieldOffset(tc.line, tc.word); got != tc.want {
+			t.Errorf("cronFieldOffset(%q, %q) = %d, want %d", tc.line, tc.word, got, tc.want)
+		}
+	}
 }
 
 // The cron line pins the run to the config the daemon or the install used when it is

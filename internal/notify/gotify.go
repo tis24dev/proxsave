@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/proxsave/internal/logging"
+	"github.com/tis24dev/proxsave/internal/serverbot"
 )
 
 // GotifyConfig holds configuration for Gotify notifications.
@@ -151,7 +152,11 @@ func (g *GotifyNotifier) Send(ctx context.Context, data *NotificationData) (*Not
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err = fmt.Errorf("gotify returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		// The answer goes to a DEBUG line only, token masked before the cut: a proxy page
+		// can be multi-line HTML with control bytes.
+		masked := logging.RedactSecrets(string(respBody), g.config.Token)
+		g.logger.Debug("Gotify answer (HTTP %d): %s", resp.StatusCode, (&serverbot.Response{Body: []byte(masked)}).Snippet(200))
+		err = fmt.Errorf("gotify returned HTTP %d", resp.StatusCode)
 		g.logger.Debug("Gotify send failed (surfaced once by the notification adapter): %v", err)
 		result.Success = false
 		result.Error = err

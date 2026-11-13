@@ -74,9 +74,10 @@ func TestCloudLocalStoreRecreatesTheDirectory(t *testing.T) {
 	}
 }
 
-// The log copied into a local directory gets 0640 only on a filesystem that takes
-// ownership (as for the backups), judged on the detection made at storage init: no
-// second detection, no ownership probe in the log directory.
+// The log copied into a local directory gets 0640, the Secondary log's mode, on a
+// filesystem with or without ownership (rclone's 0644 was left on one without), judged
+// on the detection made at storage init: no second detection, no ownership probe in
+// the log directory.
 func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cloud")
 	logDir := filepath.Join(dir, "proxsave", "log")
@@ -91,7 +92,7 @@ func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 		mode    os.FileMode
 	}{
 		{"ownership", &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}, true, 0o640},
-		{"no ownership", &FilesystemInfo{Type: FilesystemFAT32}, false, 0o644},
+		{"no ownership", &FilesystemInfo{Type: FilesystemFAT32}, true, 0o640},
 		{"no detection", nil, false, 0o644},
 	} {
 		if err := os.WriteFile(logFile, []byte("log"), 0o644); err != nil {
@@ -129,5 +130,37 @@ func TestCloudSetLocalLogModeFollowsOwnership(t *testing.T) {
 	remote, _ := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: "remote:x"}, newTestLogger(), "")
 	if applied, err := remote.SetLocalLogMode(context.Background(), logFile, ext4); applied || err != nil {
 		t.Fatalf("the remote form sets nothing: %v %v", applied, err)
+	}
+}
+
+// A parent directory of the log replaced by a symlink to a directory outside the CLOUD_REMOTE
+// directory: the mode is not set, and the file there keeps its own.
+func TestCloudSetLocalLogModeStaysInsideTheCloudDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cloud")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outside, "log"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	victim := filepath.Join(outside, "log", "backup-node-20261003-100000.log")
+	if err := os.WriteFile(victim, []byte("log"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "proxsave")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	cs, err := NewCloudStorage(&config.Config{CloudEnabled: true, CloudRemote: dir}, newTestLogger(), "")
+	if err != nil {
+		t.Fatalf("NewCloudStorage: %v", err)
+	}
+	ext4 := &FilesystemInfo{Type: FilesystemExt4, SupportsOwnership: true}
+	logFile := filepath.Join(dir, "proxsave", "log", filepath.Base(victim))
+	if applied, err := cs.SetLocalLogMode(context.Background(), logFile, ext4); err == nil || applied {
+		t.Fatalf("applied=%v err=%v, want the chmod refused", applied, err)
+	}
+	if st, err := os.Stat(victim); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("file outside the cloud directory: mode %v (%v), want 0644 untouched", st.Mode().Perm(), err)
 	}
 }

@@ -145,6 +145,11 @@ type daemon struct {
 	notifyWant    *notifyPolicy
 	notifyApplied *notifyPolicy
 	notifyPolls   uint64 // config polls that reached the relay; guarded by mu
+	// initialEmailWant is HEALTHCHECK_ACCOUNT_INITIAL_EMAIL as last read by refreshNotifyPolicy
+	// (nil: d.cfg's). initialEmailDone is the address the relay gave a final answer for
+	// (applied or rejected): it is not sent again while the variable holds it. Both guarded by mu.
+	initialEmailWant *string
+	initialEmailDone string
 	// pollMu makes the daemon send one /api/healthcheck/config poll at a time (pollCentralized
 	// holds it across the request and its resends). The relay provisions under a per-server
 	// lock it does not wait on: a second poll that arrives while the first is provisioning
@@ -158,6 +163,9 @@ type daemon struct {
 	pollMu sync.Mutex
 	// notifyRefreshWaitOverride replaces notifyPolicyRefreshWait in tests.
 	notifyRefreshWaitOverride time.Duration
+	// beforeRunPollFinished, when set (tests), is called once a before-run poll's goroutine
+	// has closed its done channel (refreshNotifyPolicy).
+	beforeRunPollFinished func()
 	// confirmedCadence is the seam the relay negotiation of SCHEDULER_FREQUENCY plugs into
 	// (todo points 17-22 and 39-40): in centralized mode it returns the cadence in effect for
 	// the configured one, i.e. the one the ProxSave HC Server has confirmed. nil means nothing
@@ -780,7 +788,7 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 
 	// Before the start ping, so its bounded wait is not counted in the run duration the remote
 	// monitor measures, and before getReporter, so a renegotiated channel set is the one pinged.
-	d.refreshNotifyPolicy(parentCtx)
+	lateEmail := d.refreshNotifyPolicy(parentCtx)
 	r := d.getReporter()
 	rid := health.NewRunID()
 	d.reportBestEffort("start", false, func() error { return d.startPing(parentCtx, r, rid) })
@@ -850,6 +858,9 @@ func (d *daemon) runOnce(parentCtx context.Context) bool {
 		return false
 	}
 	logging.Info("daemon: backup finished (rid=%s exit=%d)", rid, code)
+	// A portal initial email answer that missed the bounded wait before the run is shown here,
+	// in the same run, or not at all (it is sent again before the next run).
+	d.logLateInitialEmailOutcome(lateEmail)
 	// A run whose child actually RAN can lift an inherited abandon degrade: the daemon launched
 	// a child, it took the backup lock the orphan used to hold, and it was reaped. That is what
 	// the marker's claim is checked against -- not a skip (ExitBackupSkipped, handled above, is
@@ -2113,7 +2124,9 @@ func (d *daemon) buildReporter(ctx context.Context) *health.Reporter {
 	// centralized
 	p := d.pollCentralized(ctx, "", "")
 	d.afterFailedPoll(p)
-	return d.reporterFromPoll(p, false)
+	r := d.reporterFromPoll(p, false)
+	d.logInitialEmailOutcome(p)
+	return r
 }
 
 // afterFailedPoll clears the relay secret a poll was refused with. A DEFINITIVE rejection means
@@ -2200,6 +2213,10 @@ type configPoll struct {
 	secret    string         // the exact secret sent, the comparand of a rejected-secret clear
 	frequency cron.Frequency // the schedule frequency sent
 	notify    notifyPolicy   // the notify policy whose ack cfg carries
+	// initialEmail is the HEALTHCHECK_ACCOUNT_INITIAL_EMAIL the poll carried ("" when none); cfg
+	// then holds the relay's answer in AccountInitialEmail. It is kept only so that the answer is
+	// recorded once it is logged (logInitialEmailOutcome), and never logged.
+	initialEmail string
 }
 
 // relaySecret is the relay secret on disk or, when there is none yet, one from a THROTTLED,
@@ -2245,6 +2262,12 @@ func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, 
 	// checks back to daily on a poll with channels and no frequency.
 	want := d.wantedNotifyPolicy()
 	freq := d.wantedFrequency()
+	// The portal's initial email rides the start poll and the poll before each run, the two that
+	// report it (logInitialEmailOutcome); the schedule negotiation's polls do not carry it.
+	initialEmail := ""
+	if op != "schedule" {
+		initialEmail = d.wantedInitialEmail()
+	}
 	fetch := func(want notifyPolicy) (health.CentralizedConfig, int, error) {
 		plog := health.PollLog{}
 		if op != "" {
@@ -2252,10 +2275,11 @@ func (d *daemon) pollCentralizedTo(ctx context.Context, logger *logging.Logger, 
 				URLDetail: fmt.Sprintf("frequency=%s notify_on=%s channels=%s", freq, want.notifyOn, want.channelList())}
 		}
 		return health.FetchCentralizedConfigPoll(ctx, nil, d.cfg.ServerAPIHost, d.cfg.ServerID, secret,
-			want.channels, want.notifyOn, string(freq), plog)
+			want.channels, want.notifyOn, string(freq), initialEmail, plog)
 	}
 	cfg, status, err := fetch(want)
-	p := configPoll{sent: true, status: status, cfg: cfg, err: err, secret: secret, frequency: freq, notify: want}
+	p := configPoll{sent: true, status: status, cfg: cfg, err: err, secret: secret, frequency: freq, notify: want,
+		initialEmail: initialEmail}
 	if err != nil {
 		return p
 	}
