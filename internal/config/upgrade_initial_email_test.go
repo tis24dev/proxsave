@@ -11,7 +11,7 @@ import (
 // empty, with its template comment, under HEALTHCHECK_MODE, and keeps every value the operator set.
 func TestUpgradeAddsTheInitialEmailVariableEmpty(t *testing.T) {
 	var kept []string
-	for _, line := range strings.Split(DefaultEnvTemplate(), "\n") {
+	for line := range strings.SplitSeq(DefaultEnvTemplate(), "\n") {
 		if strings.HasPrefix(line, "HEALTHCHECK_ACCOUNT_INITIAL_EMAIL=") {
 			continue
 		}

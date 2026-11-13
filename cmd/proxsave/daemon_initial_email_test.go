@@ -101,7 +101,7 @@ const emailEnv = "HEALTHCHECK_ENABLED=true\nHEALTHCHECK_MODE=centralized\nNOTIFY
 // the level column ("INFO     ", "WARNING  "), indentation kept.
 func infoLines(buf string) []string {
 	var out []string
-	for _, line := range strings.Split(buf, "\n") {
+	for line := range strings.SplitSeq(buf, "\n") {
 		i := strings.Index(line, "] ")
 		if i < 0 || len(line) < i+2+9 {
 			continue

@@ -579,7 +579,7 @@ func installEmailDeliveryMethodOrDefault(method string) string {
 func ValidateHealthcheckInitialEmail(value string) error {
 	v := strings.TrimSpace(value)
 	if v == "" {
-		return errors.New("Required with ProxSave HC Server")
+		return wizardMessage("Required with ProxSave HC Server")
 	}
 	local, domain, ok := strings.Cut(v, "@")
 	usable := ok && local != "" && !strings.Contains(domain, "@") && strings.Contains(domain, ".") &&
@@ -591,7 +591,14 @@ func ValidateHealthcheckInitialEmail(value string) error {
 		}
 	}
 	if !usable {
-		return errors.New("Not a usable email address")
+		return wizardMessage("Not a usable email address")
 	}
 	return nil
 }
+
+// wizardMessage is a validation answer the install wizard shows to the operator as it is (the TUI under
+// the field, --install --cli before asking again): an approved sentence, capitalized, never wrapped into
+// another error.
+type wizardMessage string
+
+func (m wizardMessage) Error() string { return string(m) }
