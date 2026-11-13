@@ -304,3 +304,46 @@ func TestBeforeARunAChangedAddressIsSentAfterTheNotifyBlock(t *testing.T) {
 		t.Fatalf("order:\n%s", strings.Join(lines, "\n"))
 	}
 }
+
+// At daemon start the schedule negotiation does the polling; the address rides its own poll after
+// the start blocks (found live on pve1: the start path never used the poll that carried it).
+func TestAtStartTheAddressGoesOutAfterTheStartBlocks(t *testing.T) {
+	var mu sync.Mutex
+	var headers []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Get("X-Proxsave-Account-Initial-Email")
+		mu.Lock()
+		headers = append(headers, h)
+		mu.Unlock()
+		body := relayBody(r.URL.Query(), true, true)
+		if h != "" {
+			body["account_initial_email"] = map[string]string{"state": "pending"}
+		}
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(server.Close)
+	d := negotiationDaemon(t, server.URL, "weekly", "mon", "1", "02:00")
+	d.cfg.HealthcheckAccountInitialEmail = testInitialEmail
+	got := strings.Join(startLines(t, d), "\n")
+	block := "INFO Applying monitoring portal email...\nINFO   Waiting for the confirmation link sent by mail\n" +
+		"INFO ⚠ Monitoring portal email: not applied"
+	i, j := strings.Index(got, "INFO ✓ Notify level: applied"), strings.Index(got, block)
+	if i < 0 || j < i {
+		t.Fatalf("block missing or before the notify level block:\n%s", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(headers) != 2 || headers[0] != "" || headers[1] != testInitialEmail {
+		t.Fatalf("headers = %q: want the schedule attempt without it, then its own poll", headers)
+	}
+}
+
+// Without an address due the start sends nothing more than before.
+func TestAtStartNoExtraPollWithoutAnAddress(t *testing.T) {
+	relay := newScheduleRelay(t, nil)
+	d := negotiationDaemon(t, relay.server.URL, "weekly", "mon", "1", "02:00")
+	startLines(t, d)
+	if polls := relay.sent(); len(polls) != 1 {
+		t.Fatalf("polls = %d, want 1", len(polls))
+	}
+}

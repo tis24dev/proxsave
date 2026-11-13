@@ -376,6 +376,14 @@ func (d *daemon) startScheduleNegotiation(ctx context.Context, reading scheduleR
 	if !haveGood {
 		d.logPingURLsNotRefreshed(last, why)
 	}
+
+	// The portal's initial email (issue 347) rides its own poll, after the start blocks, only while
+	// one is due: the schedule attempts above never carry it.
+	if d.wantedInitialEmail() != "" {
+		p := d.pollCentralized(ctx, "", "")
+		d.afterFailedPoll(p)
+		d.logInitialEmailOutcome(p)
+	}
 	return sent
 }
 
