@@ -948,11 +948,12 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 			return err
 		}
 		// DELIBERATELY NOT safeexec.ApplyWaitDelay, unlike readCron above. See the note on
-		// crontabWriteLines in daemon_setup.go for the measurements; the stakes are highest
-		// here. This writer's error is DISCARDED (applyCronMode's seam drops the result), and
-		// applyCronMode calls it to establish the cron fallback and then removes the daemon
-		// unit unconditionally. A bound that killed a working descendant here would leave
-		// the host with no cron line AND no daemon, silently.
+		// crontabWriteLines in daemon_setup.go for the measurements. This writer establishes
+		// the cron fallback that replaces the daemon on install and on --daemon-remove. Both
+		// callers read the written line back and keep the daemon when it is not there, so a
+		// bound that killed a working descendant here would no longer strand the host
+		// unscheduled, but it would abandon a revert or an install whose write may well have
+		// landed.
 		cmd.Stdin = strings.NewReader(content)
 		output, err := cmd.CombinedOutput()
 		if err != nil {

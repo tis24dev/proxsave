@@ -74,13 +74,9 @@ func runDaemonRemove(rt *appRuntime) int {
 			logging.Error("daemon-remove aborted: the configuration could not be read; the daemon was NOT removed.")
 			return types.ExitGenericError.Int()
 		}
+		// errCronRevertCronNotWritten lands here too, after applyCronMode's WARNING saying the
+		// daemon was left in place: the revert was abandoned before anything changed.
 		logging.Error("daemon-remove failed: %v", err)
-		return types.ExitGenericError.Int()
-	}
-	if !revert.CronScheduled {
-		// Short on purpose: the reason is already on screen, as the WARNING
-		// migrateLegacyCronEntries emits at the point it gave up.
-		logging.Error("Cron write failed.")
 		return types.ExitGenericError.Int()
 	}
 	logging.Info("Daemon removed: reverted to the cron scheduler. %s", cronModeRecordClause(revert))
@@ -355,11 +351,10 @@ func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetup
 // migrated at all - without touching the real crontab or the systemd unit.
 var (
 	removeDaemonServiceFn = removeDaemonService
-	// applyCronMode reads the crontab back itself (canonicalCronLinePresent), so this seam
-	// drops the entry migrateLegacyCronEntries reports.
-	migrateLegacyCronEntriesFn = func(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
-		migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule, configPath)
-	}
+	// It returns the line migrateLegacyCronEntries wrote and whether it believes the write
+	// landed: applyCronMode reads that exact line back (cronLineReadBack) and removes the daemon
+	// only when both agree, the same gate the install path applies.
+	migrateLegacyCronEntriesFn = migrateLegacyCronEntries
 	// crontabReadLinesFn lets a test feed a synthetic crontab to the SCHEDULER_TIME
 	// seeding (seedSchedulerTimeFromCrontab), to the cron removal
 	// (removeCanonicalCronEntry) and to the wrapper detection
@@ -418,6 +413,11 @@ var (
 	// real backup lock path) could not be read; fail-closed so a backup on a custom LOCK_PATH is
 	// never killed blindly.
 	errDaemonTeardownConfigUnreadable = errors.New("the configuration could not be read; the daemon was not removed")
+	// errCronRevertCronNotWritten abandons a daemon revert because the cron entry that has to
+	// replace the daemon could not be written or read back. Nothing was changed: the daemon
+	// keeps scheduling the backup and the configuration still records the daemon engine. The
+	// dashboard keys on it to tell this outcome from a teardown that failed half-way.
+	errCronRevertCronNotWritten = errors.New("the cron entry could not be written")
 )
 
 // existingWrapperCronFallback returns the crontab lines that ALREADY schedule ProxSave
@@ -478,14 +478,21 @@ type cronRevertReport struct {
 	// CronScheduled is not a measurement, and a caller must not turn it into one in either
 	// direction.
 	CronVerified bool
-	// CronScheduled is true only when a canonical proxsave cron line is READ BACK from the
-	// crontab after the write. migrateLegacyCronEntries is void and has four early returns that
-	// write nothing - unknown exec path, no binary to point at, `crontab -l` failing, `crontab
-	// -` failing - and none of them is visible to this function, which then removes the daemon
-	// unit anyway. A host with a broken or absent cron ended with no unit and no cron line at
-	// exit 0, and the run that would have noticed is the backup that was never scheduled.
+	// CronWritten is migrateLegacyCronEntries' own verdict on its write. It has four early
+	// returns that write nothing - unknown exec path, no binary to point at, `crontab -l`
+	// failing, `crontab -` failing - and each of them reports false here.
+	CronWritten bool
+	// CronScheduled is true only when the very line migrateLegacyCronEntries wrote is READ BACK
+	// from the crontab. An older proxsave line left by a failed write, with another schedule or
+	// another --config, does not count.
 	//
-	// Read back rather than returned, for the reason cronRemovalOutcome.Verified exists: what
+	// applyCronMode removes the daemon only when CronWritten, CronVerified and CronScheduled are
+	// all true; otherwise it returns errCronRevertCronNotWritten with the daemon and the
+	// configuration untouched. So on every report that comes back with a nil error, or with a
+	// teardown error, the three are true. Removing the unit over a write that did not land used
+	// to leave a host with a broken or absent cron with no scheduler at all, at exit 0.
+	//
+	// Read back rather than trusted, for the reason cronRemovalOutcome.Verified exists: what
 	// matters is whether the line is there, not whether the writer believed it wrote one.
 	CronScheduled bool
 	// ModeRecorded is true only when SCHEDULER_MODE=cron actually reached the config file.
@@ -505,7 +512,9 @@ type cronRevertReport struct {
 // --upgrade from re-migrating a host that had just chosen cron. That key is gone: the retrofit
 // now honours SCHEDULER_MODE because it is PRESENT, so the mode written here is itself the
 // record, and nothing has to contradict it. The cron fallback is established first so a teardown
-// failure never leaves the host unscheduled with a stale mode=daemon (F09-06).
+// failure never leaves the host unscheduled with a stale mode=daemon (F09-06). When that cron
+// entry cannot be written and read back, the revert stops there with errCronRevertCronNotWritten:
+// no advisory, no config write, no teardown, and the daemon keeps scheduling the backup.
 //
 // "Make sure a cron schedule exists" is not always "append one": on a host already
 // scheduled through an operator wrapper, appending would produce a SECOND nightly backup.
@@ -565,8 +574,28 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	// host's only schedule on that is the wrong side of the project's own ranking, stated at
 	// cron_indirect_refs.go and again for the /etc habitat below: a double schedule is a
 	// recoverable annoyance the operator can see, an unscheduled host is silent data loss.
-	migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, configCronSchedule(cfg), cfg.ConfigPath)
-	cronScheduled, cronVerified := canonicalCronLinePresent(ctx)
+	written, cronWritten := migrateLegacyCronEntriesFn(ctx, cfg.BaseDir, execToken, bootstrap, configCronSchedule(cfg), cfg.ConfigPath)
+	// The writer reports its failures only as WARNINGs, so the crontab is read back, and the line
+	// read back must be the one just written: an older proxsave line left by a failed write
+	// (another schedule or --config) does not schedule what the configuration says. This is the
+	// gate the install path applies (installRuntimePreparation.configureCron), and it sits before
+	// anything else changes: before the advisories, before SCHEDULER_MODE=cron is recorded and
+	// before the daemon unit is removed. Removing the daemon over a cron line that is not there
+	// left the host with no scheduler at all, and the backup that would have noticed is the one
+	// that was never scheduled.
+	cronScheduled, cronVerified := cronLineReadBack(ctx, written)
+	logging.Debug("daemon-remove: cron entry after the write: written=%v present=%v verified=%v line=%q", cronWritten, cronScheduled, cronVerified, written)
+	if !cronWritten || !cronScheduled || !cronVerified {
+		// Nothing has been changed yet, so the honest outcome is "nothing changed": the daemon
+		// keeps scheduling the backup and the configuration keeps saying so. The /etc advisory
+		// is not emitted either: its title says the host is reverting to cron, and it is not.
+		logBootstrapWarning(bootstrap, "daemon: the cron entry could not be written, so the daemon service was left in place and keeps scheduling the backup.")
+		return cronRevertReport{
+			CronWritten:   cronWritten,
+			CronScheduled: cronScheduled,
+			CronVerified:  cronVerified,
+		}, errCronRevertCronNotWritten
+	}
 	var unmanagedAdvisory []string
 	if wrappers := existingWrapperCronFallback(ctx); len(wrappers) > 0 {
 		unmanagedAdvisory = append(unmanagedAdvisory, fmt.Sprintf("Reverting to cron: %d unmanaged crontab line(s) also appear to schedule ProxSave:", len(wrappers)))
@@ -579,14 +608,9 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 		// The count lives in the WARNING itself: DEBUG_LEVEL=warning hides the lines above it,
 		// and what has to survive is that this host may now run the backup more than once.
 		//
-		// It states the crontab as it was READ BACK, not the write it hoped for. cronScheduled
-		// above already established whether the line is there, and claiming a write that did not
-		// land is the defect this whole area keeps producing.
-		if cronScheduled {
-			logBootstrapWarning(bootstrap, "The cron entry is in the crontab and %d unmanaged cron line(s) were left untouched, so this host may run the backup more than once.", len(wrappers))
-		} else {
-			logBootstrapWarning(bootstrap, "%d unmanaged cron line(s) were left untouched and no proxsave cron entry could be written, so tonight the host runs whatever those lines do.", len(wrappers))
-		}
+		// "The cron entry is in the crontab" is a fact here, not a hope: the gate above has
+		// read the line back, and a revert whose line did not land never reaches this branch.
+		logBootstrapWarning(bootstrap, "The cron entry is in the crontab and %d unmanaged cron line(s) were left untouched, so this host may run the backup more than once.", len(wrappers))
 	}
 
 	// HEALTHCHECK_ENABLED=false is the exact MIRROR of the write applyDaemonMode makes on
@@ -649,6 +673,7 @@ func applyCronMode(ctx context.Context, cfg *config.Config, configPath, execToke
 	return cronRevertReport{
 		SystemCronAdvisory: systemCronScheduleAdvisory(refs),
 		UnmanagedAdvisory:  unmanagedAdvisory,
+		CronWritten:        cronWritten,
 		CronScheduled:      cronScheduled,
 		CronVerified:       cronVerified,
 		ModeRecorded:       modeRecorded,

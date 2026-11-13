@@ -718,10 +718,12 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 				"DEFERRED - BACKUP RUNNING", "Daemon service: NOT removed, a backup is in progress.\nTry again once the backup finishes.")
 			return
 		}
-		// A failed TEARDOWN is the only revert failure that arrives with a populated report, and
-		// the generic screen below discards it: the duplicate-schedule finding, the /etc advisory
-		// and the config-write fact were all lost on the one path whose logger is muted for the
-		// whole operation and never flushed.
+		// A failed TEARDOWN arrives with a populated report, and the generic screen below
+		// discards it: the duplicate-schedule finding, the /etc advisory and the config-write
+		// fact were all lost on the one path whose logger is muted for the whole operation and
+		// never flushed. A revert abandoned because the cron entry could not be written
+		// (errCronRevertCronNotWritten) arrives with the read-back facts and goes to the same
+		// renderer, which tells the two apart by the sentinel.
 		//
 		// The guard keys on the SENTINEL rather than on the report looking empty, because
 		// applyCronMode's two sentinels abort before anything is written and hand back a ZERO
@@ -792,6 +794,8 @@ func runDashboardDaemonAdmin(ctx context.Context, session *shell.Session, instal
 // teardownErr is nil on every path that got as far as removing the daemon service. When it is
 // set, everything the report established BEFORE the teardown is still true and is stated;
 // everything the failed teardown killed is dropped. See the arm itself for which is which.
+// When it is errCronRevertCronNotWritten there was no teardown at all: the revert stopped at the
+// cron write, and the screen says the daemon was left in place.
 func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestrator.HealthcheckSetupLevel, string, string) {
 	// One fact per LINE, each behind the label that names what it is about, in the same order on
 	// every screen. The daemon-status screen already reads this way ("Scheduler mode:", "Daemon
@@ -811,6 +815,23 @@ func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestr
 		config = "Configuration: NOT updated, it still records the daemon engine."
 	}
 	found := len(revert.UnmanagedAdvisory) > 0 || len(revert.SystemCronAdvisory) > 0
+
+	// THE REVERT WAS ABANDONED before anything changed: the cron entry that has to replace the
+	// daemon was not written, or was not read back. applyCronMode returned before the advisories,
+	// the config write and the teardown, so the daemon keeps scheduling the backup and the
+	// configuration still records the daemon engine (ModeRecorded is false).
+	//
+	// The cron line states what is known. A write the writer itself reported as failed is "NOT
+	// written" whatever the read-back says; a write it believed landed but that the crontab could
+	// not confirm is "could not be checked"; a readable crontab without the line is "NOT written".
+	if errors.Is(teardownErr, errCronRevertCronNotWritten) {
+		cron = "Cron entry: NOT written."
+		if revert.CronWritten && !revert.CronVerified {
+			cron = "Cron entry: could not be checked, the crontab was unreadable."
+		}
+		lines = append(lines, "Daemon service: left in place, it keeps scheduling the backup.", cron, config)
+		return orchestrator.HealthcheckSetupLevelError, "DAEMON NOT REMOVED", appendCronRevertAdvisories(strings.Join(lines, "\n"), revert)
+	}
 
 	// A FAILED TEARDOWN. removeDaemonServiceFn is the last thing applyCronMode does, so
 	// everything the report carries was established before it and none of it is invalidated by
@@ -866,30 +887,9 @@ func buildCronRevertScreen(revert cronRevertReport, teardownErr error) (orchestr
 		level = orchestrator.HealthcheckSetupLevelWarn
 		keyword = "REVERTED - DUPLICATE SCHEDULE"
 	}
-	// Nothing scheduling the backup outranks everything else, so it is decided last.
-	//
-	// CronScheduled is an assertion about the ROOT crontab alone: canonicalCronLinePresent reads
-	// crontabReadLinesFn and nothing else, and the unmanaged entries it does not match are not
-	// proxsave-named. So with anything listed below, the host may well still be scheduled - and
-	// it is the same host where ProxSave could neither write its own line nor remove the other
-	// ones. The denial is stated only when there is nothing underneath to contradict it.
-	if !revert.CronScheduled {
-		level = orchestrator.HealthcheckSetupLevelError
-		keyword = "NO SCHEDULE"
-		cron = "Cron entry: NOT written, nothing is scheduling the backup."
-		if found {
-			keyword = "CRON ENTRY NOT WRITTEN"
-			cron = "Cron entry: NOT written."
-		}
-		// An unreadable crontab reaches here with CronScheduled false, and the denial above is
-		// then a measurement nobody took: the write may well have landed. The level stays Error
-		// because a host that cannot be checked may equally be a host with nothing scheduled,
-		// and that is the expensive one.
-		if !revert.CronVerified {
-			keyword = "CRON ENTRY NOT CHECKED"
-			cron = "Cron entry: could not be checked, the crontab was unreadable."
-		}
-	}
+	// There is no "nothing scheduled" arm here any more: applyCronMode reaches the teardown only
+	// after reading its own cron line back, so a revert that comes back without an error always
+	// left that line in the crontab.
 	lines = append(lines, daemon, cron, config)
 	if len(revert.UnmanagedAdvisory) > 0 {
 		lines = append(lines, "Check your crons to remove duplication.")
