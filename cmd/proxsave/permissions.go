@@ -181,6 +181,9 @@ func resolveUserGroupIDs(userName, groupName string) (int, int, error) {
 // by FS_IO_TIMEOUT (filepath.WalkDir's internal readdir/lstat would otherwise
 // block forever in an uninterruptible syscall on a dead/stale mount). In dry-run
 // it mutates nothing, matching the read-only dry-run security preflight.
+//
+// An entry whose chown or chmod failed does not stop the walk; when the walk itself
+// succeeded, the count of such entries is returned as the error.
 func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, timeout time.Duration, dryRun bool, logger *logging.Logger) error {
 	if dryRun {
 		logger.Info("DRY RUN: would recursively set ownership %d:%d, 0750 directory perms and 0640 backup file perms on %s", uid, gid, root)
@@ -189,9 +192,16 @@ func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, 
 
 	logger.Debug("Walking directory tree for permissions: %s (uid=%d,gid=%d)", root, uid, gid)
 
-	return safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
-		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger)
-	})
+	failed := 0
+	if err := safefs.WalkBounded(ctx, root, timeout, func(path string, d fs.DirEntry, walkErr error) error {
+		return applyOwnershipWalkEntry(ctx, path, d, walkErr, uid, gid, timeout, logger, &failed)
+	}); err != nil {
+		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d entries could not be changed", failed)
+	}
+	return nil
 }
 
 // applyOwnershipWalkEntry applies bounded ownership/permissions to a single walked
@@ -199,19 +209,26 @@ func applyDirOwnershipRecursive(ctx context.Context, root string, uid, gid int, 
 // bounded walk) is logged and SKIPPED (return nil) rather than propagated:
 // returning it would abort the walk, leaving every not-yet-visited entry with its
 // old ownership. One unreadable/stale subtree must not block fixing the rest of
-// the backup tree.
-func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, walkErr error, uid, gid int, timeout time.Duration, logger *logging.Logger) error {
+// the backup tree. An entry whose chown or chmod failed is counted in failed, once.
+func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, walkErr error, uid, gid int, timeout time.Duration, logger *logging.Logger, failed *int) error {
 	if walkErr != nil {
 		logger.Debug("permission walk: skipping %s: %v", path, walkErr)
 		return nil
 	}
+	entryFailed := false
+	defer func() {
+		if entryFailed {
+			*failed++
+		}
+	}()
 
 	// Lchown (not Chown): bounded, and never follows a symlink to chown a target
 	// outside the backup tree (the walk itself never descends symlinks). For
 	// regular files and directories it is identical to chown.
 	if err := safefs.Lchown(ctx, path, uid, gid, timeout); err != nil {
-		// Do not stop on chown errors (including timeouts); just log at debug level.
+		// Do not stop on chown errors (including timeouts); log at debug level and count.
 		logger.Debug("chown failed on %s: %v", path, err)
+		entryFailed = true
 	}
 
 	if d != nil && d.IsDir() {
@@ -225,6 +242,7 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 		// mode) both bounds the call and structurally avoids the G302 finding.
 		if err := safefs.Lchmod(ctx, path, 0o750, timeout); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
+			entryFailed = true
 		}
 		return nil
 	}
@@ -236,6 +254,7 @@ func applyOwnershipWalkEntry(ctx context.Context, path string, d fs.DirEntry, wa
 	if d != nil && d.Type().IsRegular() && storage.IsBackupSetFile(d.Name()) {
 		if err := safefs.Lchmod(ctx, path, backup.SharedArtifactFilePerm, timeout); err != nil {
 			logger.Debug("chmod failed on %s: %v", path, err)
+			entryFailed = true
 		}
 	}
 	return nil
