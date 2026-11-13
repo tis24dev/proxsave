@@ -901,11 +901,14 @@ func removeLegacyEntrypoint(dest string, bootstrap *logging.BootstrapLogger) {
 	logBootstrapInfo(bootstrap, "Removed legacy 'proxmox-backup' entrypoint: %s", dest)
 }
 
-func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
+// migrateLegacyCronEntries rewrites the root crontab with a single proxsave entry at cronSchedule
+// and returns that entry with ok=true once crontab accepted the table; "" and false when it gave
+// up (each early return logs its WARNING) or the write failed.
+func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) (written string, ok bool) {
 	execPath = strings.TrimSpace(execPath)
 	if execPath == "" {
 		logBootstrapWarning(bootstrap, "Unable to update cron entry: executable path is unknown")
-		return
+		return "", false
 	}
 
 	newCommandToken := "/usr/local/bin/proxsave"
@@ -916,7 +919,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		fallback := strings.TrimSpace(execPath)
 		if fallback == "" {
 			logBootstrapWarning(bootstrap, "Unable to locate Go binary for cron migration")
-			return
+			return "", false
 		}
 		logBootstrapInfo(bootstrap, "proxsave symlink not found; falling back to %s for cron entries", fallback)
 		newCommandToken = fallback
@@ -946,7 +949,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 		}
 		// DELIBERATELY NOT safeexec.ApplyWaitDelay, unlike readCron above. See the note on
 		// crontabWriteLines in daemon_setup.go for the measurements; the stakes are highest
-		// here. This writer's error is DISCARDED (migrateLegacyCronEntries is void), and
+		// here. This writer's error is DISCARDED (applyCronMode's seam drops the result), and
 		// applyCronMode calls it to establish the cron fallback and then removes the daemon
 		// unit unconditionally. A bound that killed a working descendant here would leave
 		// the host with no cron line AND no daemon, silently.
@@ -961,7 +964,7 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	current, err := readCron()
 	if err != nil {
 		logBootstrapWarning(bootstrap, "Unable to inspect existing cron entries: %v", err)
-		return
+		return "", false
 	}
 
 	normalized := strings.ReplaceAll(current, "\r\n", "\n")
@@ -991,10 +994,11 @@ func migrateLegacyCronEntries(ctx context.Context, baseDir, execPath string, boo
 	newCron := strings.Join(updatedLines, "\n") + "\n"
 	if err := writeCron(newCron); err != nil {
 		logBootstrapWarning(bootstrap, "Failed to update cron entries: %v", err)
-		return
+		return "", false
 	}
 
 	logBootstrapDebug(bootstrap, "Reinstalled proxsave cron entry at schedule %s: %s", schedule, newCommandToken)
+	return updatedLines[len(updatedLines)-1], true
 }
 
 // dropLegacyBashCronLines removes crontab lines whose command is the old Bash

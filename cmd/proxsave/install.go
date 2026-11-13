@@ -783,12 +783,14 @@ func runEncryptionSetupIfNeeded(ctx context.Context, configPath string, enableEn
 	return nil
 }
 
-func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
+// runPostInstallSymlinksAndCron returns the cron entry written and ok=true once crontab accepted
+// it (migrateLegacyCronEntries).
+func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo ExecInfo, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) (written string, ok bool) {
 	done := logging.DebugStartBootstrap(bootstrap, "post-install setup", "base=%s", baseDir)
 	defer func() { done(nil) }()
 
 	if err := runPostInstallEntrypoints(ctx, execInfo, bootstrap); err != nil {
-		return
+		return "", false
 	}
 
 	// Ensure a cron entry for the Go binary: preserve an entry that already
@@ -798,7 +800,7 @@ func runPostInstallSymlinksAndCron(ctx context.Context, baseDir string, execInfo
 		cronSchedule = resolveCronScheduleFromEnv()
 	}
 	logging.DebugStepBootstrap(bootstrap, "post-install setup", "migrating cron entries")
-	migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule, configPath)
+	return migrateLegacyCronEntries(ctx, baseDir, execInfo.ExecPath, bootstrap, cronSchedule, configPath)
 }
 
 // runPostInstallEntrypoints is shared by the early daemon and late cron paths.

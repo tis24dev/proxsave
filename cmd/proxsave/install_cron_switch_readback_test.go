@@ -16,8 +16,12 @@ import (
 // back, and the cron write reports its failures only as WARNINGs: with a crontab that
 // refused the new table the host ended with no scheduler under "Installation
 // completed". The crontab is now read back: without the line the daemon is kept and
-// the install fails; a first cron install without the line fails too.
+// the install fails; a first cron install without the line fails too. The line read back
+// must be the one written: an older proxsave line left by a refused write, or a line with
+// another --config, does not count.
 func TestInstallCronSwitchReadsTheCrontabBack(t *testing.T) {
+	const olderLine = "0 5 * * * /usr/local/bin/proxsave --backup\n"
+	const otherConfig = "0 2 * * * /usr/local/bin/proxsave --backup --config /etc/other/backup.env\n"
 	for _, tc := range []struct {
 		name     string
 		daemon   bool
@@ -25,10 +29,14 @@ func TestInstallCronSwitchReadsTheCrontabBack(t *testing.T) {
 		wantErr  string
 		wantUnit bool
 		wantWarn bool
+		before   string // proxsave lines already in the crontab
+		readBack string // when set, the table crontab installs whatever it was given
 	}{
-		{"daemon host, cron refused", true, false, "the cron entry could not be written", true, true},
-		{"first cron install, cron refused", false, false, "the cron entry could not be written, so no scheduler is installed", false, false},
-		{"daemon host, cron written", true, true, "", false, false},
+		{"daemon host, cron refused", true, false, "the cron entry could not be written", true, true, "", ""},
+		{"first cron install, cron refused", false, false, "the cron entry could not be written, so no scheduler is installed", false, false, "", ""},
+		{"daemon host, cron written", true, true, "", false, false, "", ""},
+		{"daemon host, cron refused, an older proxsave line left", true, false, "the cron entry could not be written", true, true, olderLine, ""},
+		{"daemon host, another --config read back", true, true, "the cron entry could not be written", true, true, "", otherConfig},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -37,12 +45,15 @@ func TestInstallCronSwitchReadsTheCrontabBack(t *testing.T) {
 				t.Fatal(err)
 			}
 			table := filepath.Join(dir, "crontab-table")
-			if err := os.WriteFile(table, []byte("0 4 * * * /root/scripts/other.sh\n"), 0o600); err != nil {
+			if err := os.WriteFile(table, []byte("0 4 * * * /root/scripts/other.sh\n"+tc.before), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			write := "cat > /dev/null\necho \"errors in crontab file, can't install.\" >&2\nexit 1\n"
 			if tc.writeOK {
 				write = "cat > \"" + table + "\"\nexit 0\n"
+			}
+			if tc.readBack != "" {
+				write = "cat > /dev/null\nprintf '%s' '" + tc.readBack + "' > \"" + table + "\"\nexit 0\n"
 			}
 			crontab := "#!/bin/sh\nif [ \"$1\" = \"-l\" ]; then cat \"" + table + "\"; exit 0; fi\n" + write
 			sysLog := filepath.Join(dir, "systemctl.log")

@@ -108,6 +108,22 @@ func canonicalCronLinePresent(ctx context.Context) (present, verified bool) {
 	return false, true
 }
 
+// cronLineReadBack reads the root crontab and reports whether it holds line (spaces around it
+// aside), and SEPARATELY whether it could look at all, as canonicalCronLinePresent does.
+func cronLineReadBack(ctx context.Context, line string) (present, verified bool) {
+	lines, err := crontabReadLinesFn(ctx)
+	if err != nil {
+		return false, false
+	}
+	want := strings.TrimSpace(line)
+	for _, got := range lines {
+		if want != "" && strings.TrimSpace(got) == want {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 // cronModeRecordClause renders whether the revert's config write landed, as one standalone
 // sentence both front-ends use.
 //
@@ -338,8 +354,12 @@ func installVerifyVerdict(rv RestartVerifyResult) (orchestrator.HealthcheckSetup
 // ordering, what the cron removal reports, and whether the --upgrade retrofit
 // migrated at all - without touching the real crontab or the systemd unit.
 var (
-	removeDaemonServiceFn      = removeDaemonService
-	migrateLegacyCronEntriesFn = migrateLegacyCronEntries
+	removeDaemonServiceFn = removeDaemonService
+	// applyCronMode reads the crontab back itself (canonicalCronLinePresent), so this seam
+	// drops the entry migrateLegacyCronEntries reports.
+	migrateLegacyCronEntriesFn = func(ctx context.Context, baseDir, execPath string, bootstrap *logging.BootstrapLogger, cronSchedule, configPath string) {
+		migrateLegacyCronEntries(ctx, baseDir, execPath, bootstrap, cronSchedule, configPath)
+	}
 	// crontabReadLinesFn lets a test feed a synthetic crontab to the SCHEDULER_TIME
 	// seeding (seedSchedulerTimeFromCrontab), to the cron removal
 	// (removeCanonicalCronEntry) and to the wrapper detection
