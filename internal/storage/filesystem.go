@@ -427,7 +427,9 @@ func parseFilesystemType(fsTypeStr string) FilesystemType {
 		return FilesystemTmpfs
 	case "vfat", "fat32":
 		return FilesystemFAT32
-	case "fat", "fat16":
+	case "fat", "fat16", "msdos":
+		// msdos is the kernel's FAT driver without long names: the same FAT family,
+		// with no Unix permissions for a chmod to set.
 		return FilesystemFAT
 	case "exfat":
 		return FilesystemExFAT

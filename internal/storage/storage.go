@@ -331,7 +331,7 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 	}
 }
 
-// hasNoUnixModes reports a FAT-family filesystem (vfat, fat, exfat): it has no Unix
+// hasNoUnixModes reports a FAT-family filesystem (vfat, fat, msdos, exfat): it has no Unix
 // permissions, the mount options give every file its mode, so there is no mode for a
 // chmod to set on a copy.
 func (f FilesystemType) hasNoUnixModes() bool {

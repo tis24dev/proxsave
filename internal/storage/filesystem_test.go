@@ -54,6 +54,8 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 		{"fat32", FilesystemFAT32},
 		{"fat", FilesystemFAT},
 		{"fat16", FilesystemFAT},
+		{"msdos", FilesystemFAT},
+		{"MSDOS", FilesystemFAT},
 		{"exfat", FilesystemExFAT},
 		{"ntfs", FilesystemNTFS},
 		{"ntfs-3g", FilesystemNTFS},
@@ -73,6 +75,21 @@ func TestParseFilesystemType_CoversKnownAndUnknownTypes(t *testing.T) {
 		if got := parseFilesystemType(tc.in); got != tc.want {
 			t.Fatalf("parseFilesystemType(%q)=%q want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// An msdos mount is FAT-family for every user of the type: no ownership, excluded
+// from chown/chmod, and no mode set on the Cloud and Secondary copies.
+func TestMsdosIsFATFamily(t *testing.T) {
+	fs := parseFilesystemType("msdos")
+	if !fs.hasNoUnixModes() {
+		t.Fatalf("msdos (%q) hasNoUnixModes() = false, want true", fs)
+	}
+	if !fs.ShouldAutoExclude() {
+		t.Fatalf("msdos (%q) ShouldAutoExclude() = false, want true", fs)
+	}
+	if fs.SupportsUnixOwnership() || fs.IsNetworkFilesystem() {
+		t.Fatalf("msdos (%q): ownership=%v network=%v, want false false", fs, fs.SupportsUnixOwnership(), fs.IsNetworkFilesystem())
 	}
 }
 
