@@ -9,19 +9,21 @@ import (
 
 func TestValidateHealthcheckInitialEmail(t *testing.T) {
 	for v, want := range map[string]string{
-		"ops@example.org":   "",
-		" ops@example.org ": "",
-		"":                  "Required with ProxSave HC Server",
-		"   ":               "Required with ProxSave HC Server",
-		"ops":               "Not a usable email address",
-		"@example.org":      "Not a usable email address",
-		"a@b@example.org":   "Not a usable email address",
-		"a@localhost":       "Not a usable email address",
-		"a@.example.org":    "Not a usable email address",
-		"a@example.org.":    "Not a usable email address",
-		"a@example..org":    "Not a usable email address",
-		"a b@example.org":   "Not a usable email address",
-		"à@example.org":     "Not a usable email address",
+		"ops@example.org":      "",
+		" ops@example.org ":    "",
+		"":                     "Required with ProxSave HC Server",
+		"   ":                  "Required with ProxSave HC Server",
+		"ops":                  "Not a usable email address",
+		"@example.org":         "Not a usable email address",
+		"a@b@example.org":      "Not a usable email address",
+		"a@localhost":          "Not a usable email address",
+		"a@.example.org":       "Not a usable email address",
+		"a@example.org.":       "Not a usable email address",
+		"a@example..org":       "Not a usable email address",
+		"a b@example.org":      "Not a usable email address",
+		"à@example.org":        "Not a usable email address",
+		"ops$TEAM@example.org": "Not a usable email address",
+		"ops@exa$mple.org":     "Not a usable email address",
 	} {
 		err := ValidateHealthcheckInitialEmail(v)
 		got := ""

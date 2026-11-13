@@ -575,7 +575,8 @@ func installEmailDeliveryMethodOrDefault(method string) string {
 
 // ValidateHealthcheckInitialEmail checks the address the install wizard asks with the centralized
 // Healthchecks mode (issue 347): required, then a minimal form check (one "@", a dotted domain,
-// printable characters without spaces). The ProxSave HC Server checks it again.
+// printable characters without spaces or "$": loading backup.env expands $NAME and ${NAME}, so an
+// address with "$" would not be the one saved). The ProxSave HC Server checks it again.
 func ValidateHealthcheckInitialEmail(value string) error {
 	v := strings.TrimSpace(value)
 	if v == "" {
@@ -586,7 +587,7 @@ func ValidateHealthcheckInitialEmail(value string) error {
 		!strings.HasPrefix(domain, ".") && !strings.HasSuffix(domain, ".") && !strings.Contains(domain, "..") &&
 		len(v) <= 254
 	for _, r := range v {
-		if r <= ' ' || r > '~' {
+		if r <= ' ' || r > '~' || r == '$' {
 			usable = false
 		}
 	}
