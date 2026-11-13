@@ -27,7 +27,16 @@ type emailRelay struct {
 	queries []string
 	ack     map[string]string
 	applied bool          // the notify policy ack
-	release chan struct{} // when set, every answer waits until it is closed
+	release chan struct{} // when set, every answer waits until it is closed (releaseAnswers)
+	once    sync.Once
+}
+
+// releaseAnswers closes release once, however many times it is called: by a test that lets a held
+// answer through, and by the cleanup emailDaemon registers.
+func (e *emailRelay) releaseAnswers() {
+	if e.release != nil {
+		e.once.Do(func() { close(e.release) })
+	}
 }
 
 func (e *emailRelay) handler(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +93,10 @@ func emailDaemon(t *testing.T, relay *emailRelay, start, body string) *daemon {
 	}
 	server := httptest.NewServer(http.HandlerFunc(relay.handler))
 	t.Cleanup(server.Close)
+	// Registered after server.Close, so it runs before it (cleanups run last in, first out): a test
+	// that fails while a request is held on release ends at once instead of waiting for the held
+	// handler, and leaves no poll still running into a later -count run.
+	t.Cleanup(relay.releaseAnswers)
 	return &daemon{
 		cfg: &config.Config{
 			ConfigPath:                     path,
@@ -352,7 +365,7 @@ func TestALateBeforeRunAnswerIsLoggedAfterTheBackupFinished(t *testing.T) {
 	logs := captureDaemonLog(t) // a locked sink: the late poll writes to it after the wait
 	d.newBackupCmd = childAfter(func() {
 		waitForRequests(t, relay, 1)
-		close(relay.release) // the late answer arrives during the backup
+		relay.releaseAnswers() // the late answer arrives during the backup
 		waitForSignal(t, finished, "the before-run poll")
 	})
 	d.runOnce(context.Background())
@@ -378,7 +391,7 @@ func TestALateBeforeRunAnswerAlreadyLoggedIsNotLoggedAgain(t *testing.T) {
 	logs := captureDaemonLog(t)
 	d.newBackupCmd = childAfter(func() {
 		waitForRequests(t, relay, 1)
-		close(relay.release)
+		relay.releaseAnswers()
 		waitForSignal(t, finished, "the before-run poll")
 		startPoll(d) // another poll carrying the address, answered and logged
 	})
@@ -407,7 +420,7 @@ func TestABeforeRunAnswerMissingAfterTheBackupIsSentAgainNextRun(t *testing.T) {
 		t.Fatalf("first run lines:\n%s", strings.Join(runLines(logs), "\n"))
 	}
 
-	close(relay.release) // its request is in flight (recorded above): the answer comes after the run
+	relay.releaseAnswers() // its request is in flight (recorded above): the answer comes after the run
 	waitForSignal(t, finished, "the first before-run poll")
 	d.notifyRefreshWaitOverride = 5 * time.Second
 	d.newBackupCmd = childAfter(func() {})
@@ -433,7 +446,7 @@ func TestALateBeforeRunAnswerIsNotShownOnShutdown(t *testing.T) {
 	defer cancel()
 	d.newBackupCmd = childAfter(func() {
 		waitForRequests(t, relay, 1)
-		close(relay.release)
+		relay.releaseAnswers()
 		waitForSignal(t, finished, "the before-run poll")
 		cancel()
 	})
