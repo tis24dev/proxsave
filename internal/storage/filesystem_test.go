@@ -440,8 +440,8 @@ func TestFilesystemDetectorOwnershipFindingsAreDebug(t *testing.T) {
 		probeOK  bool
 		wantLine string
 	}{
-		{FilesystemNFS, true, "DEBUG    Network filesystem nfs supports Unix ownership\n"},
-		{FilesystemNFS4, false, "DEBUG    Network filesystem nfs4 does NOT support Unix ownership\n"},
+		{FilesystemNFS, true, "DEBUG    Ownership probe: filesystem nfs supports Unix ownership\n"},
+		{FilesystemNFS4, false, "DEBUG    Ownership probe: filesystem nfs4 does NOT support Unix ownership\n"},
 		{FilesystemCIFS, false, "DEBUG    Filesystem cifs is incompatible with Unix ownership - will skip chown/chmod\n"},
 	} {
 		logger := logging.New(types.LogLevelDebug, false)

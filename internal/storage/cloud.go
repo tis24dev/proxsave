@@ -194,7 +194,7 @@ func (c *CloudStorage) remotePathFor(name string) string {
 func (c *CloudStorage) localFilesystemInfo(ctx context.Context) *FilesystemInfo {
 	detector := c.fsDetector
 	if detector == nil {
-		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun))
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun), BackupOwnerProbe(c.config))
 	}
 	c.detectErr = nil
 	info, err := detector.DetectFilesystem(ctx, c.localDir)
@@ -332,7 +332,7 @@ func (c *CloudStorage) setLocalPermissions(ctx context.Context, sourceFile, dest
 	}
 	detector := c.fsDetector
 	if detector == nil {
-		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun))
+		detector = NewFilesystemDetector(c.logger, WithIOTimeout(c.fsIoTimeout()), WithDryRun(c.config != nil && c.config.DryRun), BackupOwnerProbe(c.config))
 	}
 	setBackupSetPermissions(ctx, c.config, c.logger, detector, c.localFS, destFile, func(path string, err error) {
 		c.logger.Debug("Cloud Storage: permissions - failed to set them on %s: %v", filepath.Base(path), err)
@@ -518,7 +518,7 @@ func NewCloudStorage(cfg *config.Config, logger *logging.Logger, writtenHostname
 		}
 		localRoot = root
 		localDir, _ = LocalCloudRemoteDir(rawRemote, cfg.CloudRemotePath)
-		fsDetector = NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun))
+		fsDetector = NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun), BackupOwnerProbe(cfg))
 	} else {
 		var basePath string
 		remoteName, basePath = splitRemoteRef(rawRemote)

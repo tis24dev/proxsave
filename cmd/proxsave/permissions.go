@@ -87,10 +87,11 @@ func applyBackupPermissionsOutcome(ctx context.Context, cfg *config.Config, logg
 
 	// Bounded + dry-run-aware detector (parity with the security preflight): a
 	// dead/stale mount must not wedge detection, and a dry run must not write the
-	// network-FS ownership probe file.
+	// ownership probe file. The probe proves the owner this pass applies.
 	fsDetector := storage.NewFilesystemDetector(logger,
 		storage.WithIOTimeout(timeout),
 		storage.WithDryRun(dryRun),
+		storage.WithProbeOwner(uid, gid),
 	)
 
 	for _, dir := range dirs {

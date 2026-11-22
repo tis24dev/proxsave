@@ -20,15 +20,21 @@ type FilesystemDetector struct {
 	logger *logging.Logger
 
 	// ioTimeout bounds each raw filesystem syscall the detector performs (the
-	// initial existence stat, the statfs on the mount point, and the network-FS
-	// ownership probe). Zero means unbounded (legacy behaviour); callers that may
+	// initial existence stat, the statfs on the mount point, and the ownership
+	// probe). Zero means unbounded (legacy behaviour); callers that may
 	// touch dead/stale network mounts should opt in via WithIOTimeout.
 	ioTimeout time.Duration
 
-	// dryRun, when true, suppresses the network-FS ownership write-probe
-	// (testOwnershipSupport creates/chowns/chmods a temp file). A dry run must not
-	// mutate the filesystem, so detection falls back to the type-based default.
+	// dryRun, when true, suppresses the ownership write-probe (testOwnershipSupport
+	// creates/chowns/chmods a temp file). A dry run must not mutate the filesystem,
+	// so detection falls back to the type-based default.
 	dryRun bool
+
+	// probeUID/probeGID are the owner the ownership probe chowns its file to, when
+	// probeOwnerSet: the owner the run gives the backup files (BackupOwnerProbe).
+	// Unset, the probe chowns to the user running ProxSave.
+	probeOwnerSet      bool
+	probeUID, probeGID int
 
 	// Test hooks (nil in production).
 	mountPointLookup     func(path string) (string, error)
@@ -53,12 +59,22 @@ func WithIOTimeout(timeout time.Duration) DetectorOption {
 	}
 }
 
-// WithDryRun suppresses the detector's network-FS ownership write-probe so a dry
-// run performs no filesystem mutations; SupportsOwnership then falls back to the
-// filesystem type's default.
+// WithDryRun suppresses the detector's ownership write-probe so a dry run performs
+// no filesystem mutations; SupportsOwnership then falls back to the filesystem
+// type's default.
 func WithDryRun(dryRun bool) DetectorOption {
 	return func(d *FilesystemDetector) {
 		d.dryRun = dryRun
+	}
+}
+
+// WithProbeOwner makes the ownership probe chown its file to uid:gid and read that
+// owner back, instead of the user running ProxSave. A chown to oneself is a no-op
+// most filesystems accept; the owner the backup files get is the one to prove.
+func WithProbeOwner(uid, gid int) DetectorOption {
+	return func(d *FilesystemDetector) {
+		d.probeOwnerSet = true
+		d.probeUID, d.probeGID = uid, gid
 	}
 }
 
@@ -119,12 +135,13 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 	// Log the detected filesystem in real-time (live output)
 	d.logFilesystemInfo(info)
 
-	// Check if we need to test ownership support for network filesystems. The
-	// probe writes a temp file, so it is skipped in dry-run (which must not mutate
-	// the filesystem); SupportsOwnership keeps the type-based default.
-	if info.IsNetworkFS {
+	// Network filesystems and FUSE take ownership or not depending on the server or
+	// the daemon, so a write-probe decides. The probe writes a temp file, so it is
+	// skipped in dry-run (which must not mutate the filesystem); SupportsOwnership
+	// keeps the type-based default.
+	if fsType.NeedsOwnershipProbe() {
 		if d.dryRun {
-			d.logger.Debug("DRY RUN: skipping network-FS ownership write-probe for %s; assuming type default (%v)", path, info.SupportsOwnership)
+			d.logger.Debug("DRY RUN: skipping ownership write-probe for %s (%s); assuming type default (%v)", path, fsType, info.SupportsOwnership)
 		} else {
 			testFn := d.testOwnershipSupport
 			if d.ownershipSupportTest != nil {
@@ -133,9 +150,9 @@ func (d *FilesystemDetector) DetectFilesystem(ctx context.Context, path string) 
 			supportsOwnership := testFn(ctx, path)
 			info.SupportsOwnership = supportsOwnership
 			if supportsOwnership {
-				d.logger.Debug("Network filesystem %s supports Unix ownership", fsType)
+				d.logger.Debug("Ownership probe: filesystem %s supports Unix ownership", fsType)
 			} else {
-				d.logger.Debug("Network filesystem %s does NOT support Unix ownership", fsType)
+				d.logger.Debug("Ownership probe: filesystem %s does NOT support Unix ownership", fsType)
 			}
 		}
 	}
@@ -320,8 +337,10 @@ func lastMountEntryFor(lines []string, mountPoint string) (fsTypeStr, device str
 	return fsTypeStr, device, ok
 }
 
-// testOwnershipSupport tests if a filesystem actually supports Unix ownership
-// This is necessary for network filesystems (NFS/CIFS) which may or may not support it
+// testOwnershipSupport tests if a filesystem actually supports Unix ownership.
+// This is necessary for network filesystems (NFS/CIFS/Ceph) and FUSE, which may or
+// may not support it. The probe file is chowned to the owner the backup files get
+// (WithProbeOwner, else the running user), chmodded 0600, and both are read back.
 func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path string) bool {
 	// The probe creates a temp file and exercises chown/chmod/stat on it. On a
 	// dead/stale network mount any of these can block in an uninterruptible
@@ -354,9 +373,11 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 			return false, nil
 		}
 
-		// Try to change ownership to current user (should be safe)
-		uid := os.Getuid()
-		gid := os.Getgid()
+		uid, gid := os.Getuid(), os.Getgid()
+		if d.probeOwnerSet {
+			uid, gid = d.probeUID, d.probeGID
+		}
+		d.logger.Debug("Ownership probe on %s: chown %d:%d, chmod 0600", path, uid, gid)
 
 		if cerr := root.Chown(name, uid, gid); cerr != nil {
 			d.logger.Debug("Chown test failed: %v", cerr)
@@ -375,19 +396,34 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 			return false, nil
 		}
 
-		// Check if permissions were actually set
-		if stat.Mode().Perm() != 0600 {
-			d.logger.Debug("Permissions not set correctly: expected 0600, got %o", stat.Mode().Perm())
-			return false, nil
+		ok, why := probeTookEffect(stat, uid, gid)
+		if !ok {
+			d.logger.Debug("Ownership probe on %s: %s", path, why)
 		}
-
-		return true, nil
+		return ok, nil
 	})
 	if err != nil {
 		d.logger.Debug("Ownership probe on %s did not complete: %v", path, err)
 		return false
 	}
 	return ok
+}
+
+// probeTookEffect reports whether the probe file reads back with the owner it was
+// chowned to and mode 0600, and what differs when it does not. A filesystem that
+// accepts chown or chmod and ignores it (the call succeeds, nothing changes) fails.
+func probeTookEffect(stat os.FileInfo, uid, gid int) (bool, string) {
+	if perm := stat.Mode().Perm(); perm != 0o600 {
+		return false, fmt.Sprintf("mode not applied: expected 0600, got %04o", perm)
+	}
+	st, ok := stat.Sys().(*syscall.Stat_t)
+	if !ok || st == nil {
+		return false, "owner cannot be read back"
+	}
+	if int64(st.Uid) != int64(uid) || int64(st.Gid) != int64(gid) {
+		return false, fmt.Sprintf("owner not applied: expected %d:%d, got %d:%d", uid, gid, st.Uid, st.Gid)
+	}
+	return true, ""
 }
 
 // parseFilesystemType converts a filesystem type string to FilesystemType

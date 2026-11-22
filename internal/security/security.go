@@ -1068,14 +1068,16 @@ func (c *Checker) detectFilesystemInfo(ctx context.Context, path string) (*stora
 	logger := (*logging.Logger)(nil)
 	timeout := time.Duration(0)
 	dryRun := false
+	var cfg *config.Config
 	if c != nil {
 		logger = c.logger
 		timeout = c.fsTimeout
+		cfg = c.cfg
 		if c.cfg != nil {
 			dryRun = c.cfg.DryRun
 		}
 	}
-	return storage.NewFilesystemDetector(logger, storage.WithIOTimeout(timeout), storage.WithDryRun(dryRun)).DetectFilesystem(ctx, path)
+	return storage.NewFilesystemDetector(logger, storage.WithIOTimeout(timeout), storage.WithDryRun(dryRun), storage.BackupOwnerProbe(cfg)).DetectFilesystem(ctx, path)
 }
 
 type ssEntry struct {
