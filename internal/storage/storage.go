@@ -372,11 +372,10 @@ func (f FilesystemType) IsNetworkFilesystem() bool {
 }
 
 // ShouldAutoExclude returns true if this filesystem should be automatically excluded
-// from ownership operations (incompatible filesystems like FAT32/CIFS). FUSE is not:
-// the ownership probe decides it (issue 355, mergerfs).
+// from ownership operations (incompatible filesystems like FAT32/CIFS).
 func (f FilesystemType) ShouldAutoExclude() bool {
 	switch f {
-	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT, FilesystemNTFS, FilesystemCIFS, FilesystemSMB:
+	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT, FilesystemNTFS, FilesystemCIFS, FilesystemSMB: // not FUSE: the ownership probe decides it (issue 355)
 		return true
 	default:
 		return false

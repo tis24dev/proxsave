@@ -332,10 +332,11 @@ stored `root:root` `0600`: only root can read a backup. Group read is opt-in: it
 and then those files are `0640` owned by `BACKUP_USER:BACKUP_GROUP`. Turning
 `SET_BACKUP_PERMISSIONS` off later does not narrow the files already at `0640`: they stay
 as they are until retention removes them, while new backups are `0600` `root:root` again.
-On a filesystem without Unix ownership (CIFS/SMB, NTFS, FAT, FUSE) no owner or mode is
-applied after creation, so the mount options decide. The preflight never checks the files
-inside these directories, so neither mode raises a warning or an `AUTO_FIX_PERMISSIONS`
-change. Cloud copies are outside all of this: their mode is whatever the rclone backend
+On a filesystem without Unix ownership (CIFS/SMB, NTFS, FAT) no owner or mode is
+applied after creation, so the mount options decide. NFS, CephFS and FUSE are
+probed at runtime: owner and mode are applied only where the probe succeeds. The
+preflight never checks the files inside these directories, so neither mode raises a
+warning or an `AUTO_FIX_PERMISSIONS` change. Cloud copies are outside all of this: their mode is whatever the rclone backend
 gives them.
 
 Ownership is applied with `lchown`, so a symlink is never followed out of the backup tree,
