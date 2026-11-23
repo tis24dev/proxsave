@@ -313,6 +313,12 @@ var notes = []Note{
 			"You can now set an email for your monitoring portal, so you can sign in and set a password there.",
 		},
 	},
+	{
+		Version: "0.47.1",
+		Lines: []string{
+			"This release includes a collection of fixes and corrections.",
+		},
+	},
 }
 
 // LookupNotes returns the notes for versions in the half-open range (from, to], ascending by
