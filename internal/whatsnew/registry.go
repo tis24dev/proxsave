@@ -318,6 +318,9 @@ var notes = []Note{
 		Lines: []string{
 			"This release includes a collection of fixes and corrections.",
 		},
+		Actions: []string{
+			"With SET_BACKUP_PERMISSIONS=true on NFS, check the Permissions line: shares with broken ID mapping are now skipped",
+		},
 	},
 }
 
