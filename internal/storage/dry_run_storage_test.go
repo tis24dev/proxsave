@@ -68,7 +68,7 @@ func TestDryRunSkipsTheOwnershipProbe(t *testing.T) {
 			t.Fatalf("DetectFilesystem(dryRun=%v): %v", dryRun, err)
 		}
 		if dryRun {
-			if probes != 0 || !strings.Contains(buf.String(), "DRY RUN: skipping network-FS ownership write-probe") {
+			if probes != 0 || !strings.Contains(buf.String(), "DRY RUN: skipping ownership write-probe") {
 				t.Fatalf("dry run: probes=%d, want 0 and the DEBUG line:\n%s", probes, buf.String())
 			}
 		} else if probes != 1 {

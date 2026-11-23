@@ -24,7 +24,7 @@ func TestDetectFilesystemTimeout(t *testing.T) {
 }
 
 // TestDetectFilesystemDryRunSkipsOwnershipProbe verifies that a dry-run detector
-// does not run the network-FS ownership write-probe (which mutates the FS).
+// does not run the ownership write-probe (which mutates the FS).
 func TestDetectFilesystemDryRunSkipsOwnershipProbe(t *testing.T) {
 	detector := NewFilesystemDetector(newTestLogger(), WithDryRun(true))
 	dir := t.TempDir()

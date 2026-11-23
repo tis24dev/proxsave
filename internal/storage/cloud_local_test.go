@@ -454,7 +454,7 @@ func TestCloudLocalFormDetectsTheRealFilesystem(t *testing.T) {
 	if got, want := strings.Join(visibleOf(buf.String()), "\n"), "INFO     Checking cloud remote accessibility...\nINFO       Accessible"; got != want {
 		t.Fatalf("visible lines =\n%s\nwant\n%s", got, want)
 	}
-	if !strings.Contains(stripTimes(buf.String()), "DEBUG    Network filesystem nfs4 supports Unix ownership\n") {
+	if !strings.Contains(stripTimes(buf.String()), "DEBUG    Ownership probe: filesystem nfs4 supports Unix ownership\n") {
 		t.Fatalf("the ownership probe result belongs at DEBUG:\n%s", buf.String())
 	}
 

@@ -1161,7 +1161,7 @@ func TestFilesystemTypeHelpers(t *testing.T) {
 		{FilesystemNFS4, false, true, false},
 		{FilesystemCIFS, false, true, true},
 		{FilesystemSMB, false, true, true},
-		{FilesystemFUSE, false, false, true},
+		{FilesystemFUSE, false, false, false},
 		{FilesystemUnknown, false, false, false},
 	}
 

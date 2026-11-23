@@ -33,7 +33,9 @@ const (
 	FilesystemMSDOS FilesystemType = "msdos"
 	FilesystemExFAT FilesystemType = "exfat"
 	FilesystemNTFS  FilesystemType = "ntfs"
-	FilesystemFUSE  FilesystemType = "fuse"
+	// FilesystemFUSE is any fuse.* type: ownership depends on the daemon, so the
+	// ownership probe decides it (NeedsOwnershipProbe).
+	FilesystemFUSE FilesystemType = "fuse"
 
 	// Network filesystems (need testing)
 	FilesystemNFS  FilesystemType = "nfs"
@@ -324,10 +326,10 @@ func (f FilesystemType) SupportsUnixOwnership() bool {
 		FilesystemJFS, FilesystemReiserFS, FilesystemOverlay, FilesystemTmpfs:
 		return true
 	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT,
-		FilesystemNTFS, FilesystemFUSE:
+		FilesystemNTFS:
 		return false
-	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph:
-		// Network filesystems need runtime testing
+	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph, FilesystemFUSE:
+		// Decided at runtime by the ownership probe (NeedsOwnershipProbe)
 		return false
 	default:
 		return false
@@ -346,6 +348,19 @@ func (f FilesystemType) hasNoUnixModes() bool {
 	}
 }
 
+// NeedsOwnershipProbe reports a filesystem whose ownership support the type cannot
+// tell: the network filesystems (root_squash, Unix extensions) and FUSE, where it
+// depends on the daemon (mergerfs passes chown/chmod to POSIX branches, sshfs to the
+// remote user, rclone ignores them). The write-probe in DetectFilesystem decides.
+func (f FilesystemType) NeedsOwnershipProbe() bool {
+	switch f {
+	case FilesystemNFS, FilesystemNFS4, FilesystemCIFS, FilesystemSMB, FilesystemCeph, FilesystemFUSE:
+		return true
+	default:
+		return false
+	}
+}
+
 // IsNetworkFilesystem returns true if the filesystem is network-based
 func (f FilesystemType) IsNetworkFilesystem() bool {
 	switch f {
@@ -357,10 +372,10 @@ func (f FilesystemType) IsNetworkFilesystem() bool {
 }
 
 // ShouldAutoExclude returns true if this filesystem should be automatically excluded
-// from ownership operations (incompatible filesystems like FAT32/CIFS)
+// from ownership operations (incompatible filesystems like FAT32/CIFS).
 func (f FilesystemType) ShouldAutoExclude() bool {
 	switch f {
-	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT, FilesystemNTFS, FilesystemFUSE, FilesystemCIFS, FilesystemSMB:
+	case FilesystemFAT32, FilesystemFAT, FilesystemMSDOS, FilesystemExFAT, FilesystemNTFS, FilesystemCIFS, FilesystemSMB: // not FUSE: the ownership probe decides it (issue 355)
 		return true
 	default:
 		return false

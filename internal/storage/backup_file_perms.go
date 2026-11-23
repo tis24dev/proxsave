@@ -63,6 +63,28 @@ func ResolveBackupOwner(userName, groupName string) (int, int, error) {
 	return uid, gid, nil
 }
 
+// BackupOwnerProbe is the detector option that makes the ownership probe prove the
+// owner and mode the backup files of this run get: BACKUP_USER and BACKUP_GROUP with
+// backup.SharedArtifactFilePerm when SET_BACKUP_PERMISSIONS=true resolves them (the
+// conditions of backupFileOwnership). In every other case the files stay root:root
+// backup.ArtifactFilePerm, and that is what the probe proves, whoever runs ProxSave.
+func BackupOwnerProbe(cfg *config.Config) DetectorOption {
+	rootOnly := WithProbeOwner(0, 0, backup.ArtifactFilePerm)
+	if cfg == nil || !cfg.SetBackupPermissions {
+		return rootOnly
+	}
+	backupUser := strings.TrimSpace(cfg.BackupUser)
+	backupGroup := strings.TrimSpace(cfg.BackupGroup)
+	if backupUser == "" || backupGroup == "" {
+		return rootOnly
+	}
+	uid, gid, err := ResolveBackupOwner(backupUser, backupGroup)
+	if err != nil {
+		return rootOnly
+	}
+	return WithProbeOwner(uid, gid, backup.SharedArtifactFilePerm)
+}
+
 // backupFileOwnership returns the owner and mode the files of a backup set get on a
 // local or secondary destination. Default: root:root and backup.ArtifactFilePerm.
 // With SET_BACKUP_PERMISSIONS=true and both BACKUP_USER and BACKUP_GROUP set and

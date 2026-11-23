@@ -78,7 +78,7 @@ func NewSecondaryStorage(cfg *config.Config, logger *logging.Logger, writtenHost
 		hostAliases: retentionHostAliases(host, []string{writtenHostname}),
 		serverID:    serverID,
 		basePath:    cfg.SecondaryPath,
-		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun)),
+		fsDetector:  NewFilesystemDetector(logger, WithIOTimeout(fsIoTimeout(cfg)), WithDryRun(cfg.DryRun), BackupOwnerProbe(cfg)),
 	}, nil
 }
 

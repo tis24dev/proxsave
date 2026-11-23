@@ -592,7 +592,7 @@ When `SET_BACKUP_PERMISSIONS=true`, the system applies Bash-compatible ownership
 - Non-fatal: All failures logged as warnings
 - Backup continues even if permission changes fail
 - User/group not found: logs warning and skips operation
-- Backup/log paths on non-POSIX filesystems such as CIFS/SMB, NTFS, FAT/exFAT, FUSE, or network filesystems without Unix ownership support are detected and skipped for `chown`/`chmod` and security permission warnings. Windows-backed CIFS shares are expected to manage permissions on the Windows side.
+- Backup/log paths on non-POSIX filesystems such as CIFS/SMB, NTFS or FAT/exFAT are detected and skipped for `chown`/`chmod` and security permission warnings. NFS, CephFS and FUSE filesystems (for example mergerfs) are tested at runtime with a probe file: ownership and modes are applied only where the probe can set the configured owner and mode and read them back. Windows-backed CIFS shares are expected to manage permissions on the Windows side.
 
 **Use cases**:
 - Migration from legacy Bash version
