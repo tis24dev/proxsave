@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tis24dev/proxsave/internal/backup"
 	"github.com/tis24dev/proxsave/internal/logging"
 	"github.com/tis24dev/proxsave/internal/safefs"
 	"github.com/tis24dev/proxsave/pkg/utils"
@@ -32,9 +33,12 @@ type FilesystemDetector struct {
 
 	// probeUID/probeGID are the owner the ownership probe chowns its file to, when
 	// probeOwnerSet: the owner the run gives the backup files (BackupOwnerProbe).
-	// Unset, the probe chowns to the user running ProxSave.
+	// Unset, the probe chowns to the user running ProxSave. probeMode is the mode it
+	// chmods the file to and reads back: the mode the backup files get, 0600
+	// (backup.ArtifactFilePerm) unless WithProbeOwner sets another.
 	probeOwnerSet      bool
 	probeUID, probeGID int
+	probeMode          os.FileMode
 
 	// Test hooks (nil in production).
 	mountPointLookup     func(path string) (string, error)
@@ -68,13 +72,15 @@ func WithDryRun(dryRun bool) DetectorOption {
 	}
 }
 
-// WithProbeOwner makes the ownership probe chown its file to uid:gid and read that
-// owner back, instead of the user running ProxSave. A chown to oneself is a no-op
-// most filesystems accept; the owner the backup files get is the one to prove.
-func WithProbeOwner(uid, gid int) DetectorOption {
+// WithProbeOwner makes the ownership probe chown its file to uid:gid and chmod it to
+// mode, and read both back, instead of the user running ProxSave and 0600. A chown to
+// oneself is a no-op most filesystems accept, and a mount can force one mode on every
+// file; the owner and mode the backup files get are the ones to prove.
+func WithProbeOwner(uid, gid int, mode os.FileMode) DetectorOption {
 	return func(d *FilesystemDetector) {
 		d.probeOwnerSet = true
 		d.probeUID, d.probeGID = uid, gid
+		d.probeMode = mode.Perm()
 	}
 }
 
@@ -82,7 +88,8 @@ func WithProbeOwner(uid, gid int) DetectorOption {
 // detector is unbounded (legacy behaviour); pass WithIOTimeout to bound syscalls.
 func NewFilesystemDetector(logger *logging.Logger, opts ...DetectorOption) *FilesystemDetector {
 	d := &FilesystemDetector{
-		logger: logger,
+		logger:    logger,
+		probeMode: backup.ArtifactFilePerm,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -377,7 +384,8 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 		if d.probeOwnerSet {
 			uid, gid = d.probeUID, d.probeGID
 		}
-		d.logger.Debug("Ownership probe on %s: chown %d:%d, chmod 0600", path, uid, gid)
+		mode := d.probeMode
+		d.logger.Debug("Ownership probe on %s: chown %d:%d, chmod %04o", path, uid, gid, mode)
 
 		if cerr := root.Chown(name, uid, gid); cerr != nil {
 			d.logger.Debug("Chown test failed: %v", cerr)
@@ -385,7 +393,7 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 		}
 
 		// Try to change permissions
-		if cerr := root.Chmod(name, 0600); cerr != nil {
+		if cerr := root.Chmod(name, mode); cerr != nil {
 			d.logger.Debug("Chmod test failed: %v", cerr)
 			return false, nil
 		}
@@ -396,7 +404,7 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 			return false, nil
 		}
 
-		ok, why := probeTookEffect(stat, uid, gid)
+		ok, why := probeTookEffect(stat, uid, gid, mode)
 		if !ok {
 			d.logger.Debug("Ownership probe on %s: %s", path, why)
 		}
@@ -410,11 +418,12 @@ func (d *FilesystemDetector) testOwnershipSupport(ctx context.Context, path stri
 }
 
 // probeTookEffect reports whether the probe file reads back with the owner it was
-// chowned to and mode 0600, and what differs when it does not. A filesystem that
-// accepts chown or chmod and ignores it (the call succeeds, nothing changes) fails.
-func probeTookEffect(stat os.FileInfo, uid, gid int) (bool, string) {
-	if perm := stat.Mode().Perm(); perm != 0o600 {
-		return false, fmt.Sprintf("mode not applied: expected 0600, got %04o", perm)
+// chowned to and the mode it was chmodded to, and what differs when it does not. A
+// filesystem that accepts chown or chmod and ignores it (the call succeeds, nothing
+// changes), or a mount that forces another mode, fails.
+func probeTookEffect(stat os.FileInfo, uid, gid int, mode os.FileMode) (bool, string) {
+	if perm := stat.Mode().Perm(); perm != mode.Perm() {
+		return false, fmt.Sprintf("mode not applied: expected %04o, got %04o", mode.Perm(), perm)
 	}
 	st, ok := stat.Sys().(*syscall.Stat_t)
 	if !ok || st == nil {

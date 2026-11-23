@@ -64,9 +64,10 @@ func ResolveBackupOwner(userName, groupName string) (int, int, error) {
 }
 
 // BackupOwnerProbe is the detector option that makes the ownership probe prove the
-// owner the backup files of this run get: BACKUP_USER and BACKUP_GROUP when
-// SET_BACKUP_PERMISSIONS=true resolves them (the conditions of backupFileOwnership).
-// In every other case the files stay root:root and the probe keeps the running user.
+// owner and mode the backup files of this run get: BACKUP_USER and BACKUP_GROUP with
+// backup.SharedArtifactFilePerm when SET_BACKUP_PERMISSIONS=true resolves them (the
+// conditions of backupFileOwnership). In every other case the files stay root:root
+// 0600 and the probe keeps the running user and 0600.
 func BackupOwnerProbe(cfg *config.Config) DetectorOption {
 	keep := func(*FilesystemDetector) {}
 	if cfg == nil || !cfg.SetBackupPermissions {
@@ -81,7 +82,7 @@ func BackupOwnerProbe(cfg *config.Config) DetectorOption {
 	if err != nil {
 		return keep
 	}
-	return WithProbeOwner(uid, gid)
+	return WithProbeOwner(uid, gid, backup.SharedArtifactFilePerm)
 }
 
 // backupFileOwnership returns the owner and mode the files of a backup set get on a

@@ -101,13 +101,28 @@ func TestOwnershipProbeChownsToTheConfiguredOwner(t *testing.T) {
 		t.Skip("root can chown to any uid; the refusal case needs an unprivileged user")
 	}
 	dir := t.TempDir()
-	ok := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid(), os.Getgid())).testOwnershipSupport(context.Background(), dir)
+	ok := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid(), os.Getgid(), 0o600)).testOwnershipSupport(context.Background(), dir)
 	if !ok {
 		t.Fatal("probe to the current owner failed on a local directory")
 	}
-	refused := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid()+1, os.Getgid())).testOwnershipSupport(context.Background(), dir)
+	refused := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid()+1, os.Getgid(), 0o600)).testOwnershipSupport(context.Background(), dir)
 	if refused {
 		t.Fatal("probe to an owner the process cannot set passed")
+	}
+}
+
+// The probe chmods its file to the mode the run applies and reads that mode back:
+// with SET_BACKUP_PERMISSIONS the files get 0640, so 0640 is what must hold.
+func TestOwnershipProbeAppliesTheConfiguredMode(t *testing.T) {
+	dir := t.TempDir()
+	for _, mode := range []os.FileMode{0o600, 0o640} {
+		d := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid(), os.Getgid(), mode))
+		if !d.testOwnershipSupport(context.Background(), dir) {
+			t.Fatalf("probe with mode %04o failed on a local directory", mode)
+		}
+	}
+	if got := NewFilesystemDetector(newTestLogger()).probeMode; got != 0o600 {
+		t.Fatalf("default probe mode = %04o, want 0600 (the root-only backup files)", got)
 	}
 }
 
@@ -124,30 +139,36 @@ func (p probeFileInfo) IsDir() bool        { return false }
 func (p probeFileInfo) Sys() any           { return p.sys }
 
 // A filesystem that accepts chown and ignores it (the owner reads back unchanged)
-// fails the probe; so does one that ignores chmod.
+// fails the probe; so does one that ignores chmod, or keeps a mode other than the
+// one the run applies (a mount forcing 0600 when SET_BACKUP_PERMISSIONS asks 0640).
 func TestProbeResultChecksOwnerAndMode(t *testing.T) {
 	cases := []struct {
 		name string
+		mode os.FileMode
 		info probeFileInfo
 		want bool
 	}{
-		{"owner and mode applied", probeFileInfo{0o600, &syscall.Stat_t{Uid: 34, Gid: 34}}, true},
-		{"uid ignored", probeFileInfo{0o600, &syscall.Stat_t{Uid: 0, Gid: 34}}, false},
-		{"gid ignored", probeFileInfo{0o600, &syscall.Stat_t{Uid: 34, Gid: 0}}, false},
-		{"mode ignored", probeFileInfo{0o644, &syscall.Stat_t{Uid: 34, Gid: 34}}, false},
-		{"no stat data", probeFileInfo{0o600, nil}, false},
+		{"owner and mode applied", 0o600, probeFileInfo{0o600, &syscall.Stat_t{Uid: 34, Gid: 34}}, true},
+		{"owner and shared mode applied", 0o640, probeFileInfo{0o640, &syscall.Stat_t{Uid: 34, Gid: 34}}, true},
+		{"uid ignored", 0o600, probeFileInfo{0o600, &syscall.Stat_t{Uid: 0, Gid: 34}}, false},
+		{"gid ignored", 0o600, probeFileInfo{0o600, &syscall.Stat_t{Uid: 34, Gid: 0}}, false},
+		{"mode ignored", 0o600, probeFileInfo{0o644, &syscall.Stat_t{Uid: 34, Gid: 34}}, false},
+		{"mount forces 0600, run applies 0640", 0o640, probeFileInfo{0o600, &syscall.Stat_t{Uid: 34, Gid: 34}}, false},
+		{"mount forces 0640, run applies 0600", 0o600, probeFileInfo{0o640, &syscall.Stat_t{Uid: 34, Gid: 34}}, false},
+		{"no stat data", 0o600, probeFileInfo{0o600, nil}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got, _ := probeTookEffect(tc.info, 34, 34); got != tc.want {
+			if got, _ := probeTookEffect(tc.info, 34, 34, tc.mode); got != tc.want {
 				t.Fatalf("probeTookEffect = %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
-// BackupOwnerProbe gives the probe BACKUP_USER/BACKUP_GROUP only when
-// SET_BACKUP_PERMISSIONS resolves them; otherwise the probe keeps the current user.
+// BackupOwnerProbe gives the probe BACKUP_USER/BACKUP_GROUP and mode 0640 only when
+// SET_BACKUP_PERMISSIONS resolves them; otherwise the probe keeps the current user
+// and mode 0600, the owner and mode the backup files get.
 func TestBackupOwnerProbe(t *testing.T) {
 	cur, err := user.Current()
 	if err != nil {
@@ -159,6 +180,13 @@ func TestBackupOwnerProbe(t *testing.T) {
 	}
 	probeOwner := func(cfg *config.Config) (bool, int, int) {
 		d := NewFilesystemDetector(newTestLogger(), BackupOwnerProbe(cfg))
+		wantMode := os.FileMode(0o600)
+		if d.probeOwnerSet {
+			wantMode = 0o640
+		}
+		if d.probeMode != wantMode {
+			t.Fatalf("probe mode = %04o with owner set=%v, want %04o", d.probeMode, d.probeOwnerSet, wantMode)
+		}
 		return d.probeOwnerSet, d.probeUID, d.probeGID
 	}
 	for name, cfg := range map[string]*config.Config{
@@ -172,8 +200,36 @@ func TestBackupOwnerProbe(t *testing.T) {
 			t.Fatalf("%s: probe owner set, want the current user", name)
 		}
 	}
-	set, uid, gid := probeOwner(&config.Config{SetBackupPermissions: true, BackupUser: cur.Username, BackupGroup: grp.Name})
-	if !set || uid != os.Getuid() || gid != os.Getgid() {
-		t.Fatalf("resolved owner: set=%v uid=%d gid=%d, want true %d %d", set, uid, gid, os.Getuid(), os.Getgid())
+	// The configured owner must differ from the running identity, or a probe that
+	// took the running user instead of resolving the names would pass too.
+	other, otherGroup := otherUserAndGroup(t)
+	set, uid, gid := probeOwner(&config.Config{SetBackupPermissions: true, BackupUser: other.Username, BackupGroup: otherGroup.Name})
+	if !set || strconv.Itoa(uid) != other.Uid || strconv.Itoa(gid) != otherGroup.Gid {
+		t.Fatalf("resolved owner: set=%v uid=%d gid=%d, want true %s %s", set, uid, gid, other.Uid, otherGroup.Gid)
 	}
+}
+
+// otherUserAndGroup returns a user and a group that exist on the host and are not the
+// running uid and gid, looked up by id (root, nobody/nogroup, daemon), so the test does
+// not depend on how a distribution names them.
+func otherUserAndGroup(t *testing.T) (*user.User, *user.Group) {
+	t.Helper()
+	var u *user.User
+	var g *user.Group
+	for _, id := range []string{"0", "65534", "1"} {
+		if u == nil && id != strconv.Itoa(os.Getuid()) {
+			if found, err := user.LookupId(id); err == nil {
+				u = found
+			}
+		}
+		if g == nil && id != strconv.Itoa(os.Getgid()) {
+			if found, err := user.LookupGroupId(id); err == nil {
+				g = found
+			}
+		}
+	}
+	if u == nil || g == nil {
+		t.Skip("no user and group other than the running ones can be resolved")
+	}
+	return u, g
 }
