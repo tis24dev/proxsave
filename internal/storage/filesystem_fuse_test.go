@@ -94,8 +94,9 @@ func TestFUSEProbeSkippedInDryRun(t *testing.T) {
 	}
 }
 
-// The probe chowns to the owner the run will apply. An owner the process cannot
-// give a file makes the probe fail; the current user passes.
+// The probe chowns to the owner the run will apply. The current user passes; for
+// another uid the probe must agree with a plain chown+chmod on a file in the same
+// directory: refused unprivileged, accepted with CAP_CHOWN and CAP_FOWNER.
 func TestOwnershipProbeChownsToTheConfiguredOwner(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can chown to any uid; the refusal case needs an unprivileged user")
@@ -105,10 +106,24 @@ func TestOwnershipProbeChownsToTheConfiguredOwner(t *testing.T) {
 	if !ok {
 		t.Fatal("probe to the current owner failed on a local directory")
 	}
-	refused := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid()+1, os.Getgid(), 0o600)).testOwnershipSupport(context.Background(), dir)
-	if refused {
-		t.Fatal("probe to an owner the process cannot set passed")
+	foreign := NewFilesystemDetector(newTestLogger(), WithProbeOwner(os.Getuid()+1, os.Getgid(), 0o600)).testOwnershipSupport(context.Background(), dir)
+	if want := canSetForeignOwner(t, dir, os.Getuid()+1, os.Getgid()); foreign != want {
+		t.Fatalf("probe to uid %d = %v, a plain chown+chmod there = %v", os.Getuid()+1, foreign, want)
 	}
+}
+
+// canSetForeignOwner reports whether this process can give a file in dir the owner
+// uid:gid and then chmod it, the two calls the probe makes.
+func canSetForeignOwner(t *testing.T, dir string, uid, gid int) bool {
+	t.Helper()
+	f, err := os.CreateTemp(dir, "foreign-owner-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(name) }()
+	return os.Chown(name, uid, gid) == nil && os.Chmod(name, 0o600) == nil
 }
 
 // The probe chmods its file to the mode the run applies and reads that mode back:
@@ -166,9 +181,9 @@ func TestProbeResultChecksOwnerAndMode(t *testing.T) {
 	}
 }
 
-// BackupOwnerProbe gives the probe BACKUP_USER/BACKUP_GROUP and mode 0640 only when
-// SET_BACKUP_PERMISSIONS resolves them; otherwise the probe keeps the current user
-// and mode 0600, the owner and mode the backup files get.
+// BackupOwnerProbe gives the probe BACKUP_USER/BACKUP_GROUP and mode 0640 when
+// SET_BACKUP_PERMISSIONS resolves them, and root:root 0600 in every other case: the
+// owner and mode the backup files get.
 func TestBackupOwnerProbe(t *testing.T) {
 	cur, err := user.Current()
 	if err != nil {
@@ -178,16 +193,9 @@ func TestBackupOwnerProbe(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	probeOwner := func(cfg *config.Config) (bool, int, int) {
+	probeOwner := func(cfg *config.Config) (bool, int, int, os.FileMode) {
 		d := NewFilesystemDetector(newTestLogger(), BackupOwnerProbe(cfg))
-		wantMode := os.FileMode(0o600)
-		if d.probeOwnerSet {
-			wantMode = 0o640
-		}
-		if d.probeMode != wantMode {
-			t.Fatalf("probe mode = %04o with owner set=%v, want %04o", d.probeMode, d.probeOwnerSet, wantMode)
-		}
-		return d.probeOwnerSet, d.probeUID, d.probeGID
+		return d.probeOwnerSet, d.probeUID, d.probeGID, d.probeMode
 	}
 	for name, cfg := range map[string]*config.Config{
 		"nil config":    nil,
@@ -196,16 +204,16 @@ func TestBackupOwnerProbe(t *testing.T) {
 		"unknown user":  {SetBackupPermissions: true, BackupUser: "proxsave-no-such-user-355", BackupGroup: grp.Name},
 		"unknown group": {SetBackupPermissions: true, BackupUser: cur.Username, BackupGroup: "proxsave-no-such-group-355"},
 	} {
-		if set, _, _ := probeOwner(cfg); set {
-			t.Fatalf("%s: probe owner set, want the current user", name)
+		if set, uid, gid, mode := probeOwner(cfg); !set || uid != 0 || gid != 0 || mode != 0o600 {
+			t.Fatalf("%s: probe owner set=%v %d:%d %04o, want true 0:0 0600", name, set, uid, gid, mode)
 		}
 	}
 	// The configured owner must differ from the running identity, or a probe that
 	// took the running user instead of resolving the names would pass too.
 	other, otherGroup := otherUserAndGroup(t)
-	set, uid, gid := probeOwner(&config.Config{SetBackupPermissions: true, BackupUser: other.Username, BackupGroup: otherGroup.Name})
-	if !set || strconv.Itoa(uid) != other.Uid || strconv.Itoa(gid) != otherGroup.Gid {
-		t.Fatalf("resolved owner: set=%v uid=%d gid=%d, want true %s %s", set, uid, gid, other.Uid, otherGroup.Gid)
+	set, uid, gid, mode := probeOwner(&config.Config{SetBackupPermissions: true, BackupUser: other.Username, BackupGroup: otherGroup.Name})
+	if !set || strconv.Itoa(uid) != other.Uid || strconv.Itoa(gid) != otherGroup.Gid || mode != 0o640 {
+		t.Fatalf("resolved owner: set=%v uid=%d gid=%d mode=%04o, want true %s %s 0640", set, uid, gid, mode, other.Uid, otherGroup.Gid)
 	}
 }
 
